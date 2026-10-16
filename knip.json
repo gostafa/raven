@@ -1,5 +1,14 @@
 {
-  "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["eslint.config.mjs"],
-  "project": ["**/*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}!", "!tooling/eslint/**!"]
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"],
+      "project": ["scripts/*.mjs"]
+    },
+    "frontend": {
+      "entry": ["tests/*.test.mjs"],
+      "project": ["src/**/*.{ts,svelte}", "tooling/**/*.mjs", "tests/*.mjs"]
+    }
+  },
+  "ignoreBinaries": ["task"]
 }

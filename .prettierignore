@@ -1,2 +1,6 @@
 **/*.yml
 **/*.yaml
+
+taskotter/**
+frontend/bindings/**
+frontend/dist/**

@@ -12,17 +12,13 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as storage$0 from "./internal/storage/models.js";
-
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
-export function CreateCard(input: storage$0.CreateCardInput): $CancellablePromise<storage$0.Card> {
+export function CreateCard(input: $models.CreateCardInput): $CancellablePromise<$models.Card> {
     return $Call.ByID(2101102601, input);
 }
 
-export function CreateFolder(input: storage$0.CreateFolderInput): $CancellablePromise<storage$0.Folder> {
+export function CreateFolder(input: $models.CreateFolderInput): $CancellablePromise<$models.Folder> {
     return $Call.ByID(1359139579, input);
 }
 
@@ -34,9 +30,6 @@ export function DeleteFolder(folderID: string): $CancellablePromise<void> {
     return $Call.ByID(1949794656, folderID);
 }
 
-/**
- * HideFloatingReview is called after the review UI has stopped media playback.
- */
 export function HideFloatingReview(): $CancellablePromise<void> {
     return $Call.ByID(1531632193);
 }
@@ -45,17 +38,14 @@ export function HideMain(): $CancellablePromise<void> {
     return $Call.ByID(3974471318);
 }
 
-export function ListCards(): $CancellablePromise<storage$0.Card[] | null> {
+export function ListCards(): $CancellablePromise<$models.Card[] | null> {
     return $Call.ByID(1147556462);
 }
 
-export function ListFolders(): $CancellablePromise<storage$0.Folder[] | null> {
+export function ListFolders(): $CancellablePromise<$models.Folder[] | null> {
     return $Call.ByID(3506033272);
 }
 
-/**
- * Quit is intentionally separate from closing the main window.
- */
 export function Quit(): $CancellablePromise<void> {
     return $Call.ByID(2686306656);
 }
@@ -68,7 +58,7 @@ export function ResetWidget(): $CancellablePromise<void> {
     return $Call.ByID(1531588570);
 }
 
-export function ReviewItem(folderID: string, cardID: string, itemID: string, rating: number): $CancellablePromise<storage$0.Card> {
+export function ReviewItem(folderID: string, cardID: string, itemID: string, rating: number): $CancellablePromise<$models.Card> {
     return $Call.ByID(3012119832, folderID, cardID, itemID, rating);
 }
 
@@ -80,20 +70,14 @@ export function ShowMain(): $CancellablePromise<void> {
     return $Call.ByID(4016756691);
 }
 
-/**
- * ShowReviews opens the main window and requests a review session.
- */
 export function ShowReviews(): $CancellablePromise<void> {
     return $Call.ByID(2349323267);
 }
 
-/**
- * ToggleFloatingReview opens the companion card without showing the library.
- */
 export function ToggleFloatingReview(): $CancellablePromise<void> {
     return $Call.ByID(3616707221);
 }
 
-export function UpdateCard(input: storage$0.UpdateCardInput): $CancellablePromise<storage$0.Card> {
+export function UpdateCard(input: $models.UpdateCardInput): $CancellablePromise<$models.Card> {
     return $Call.ByID(3646724196, input);
 }

@@ -679,6 +679,9 @@ linters:
   exclusions:
     paths:
       - .*_test.go
+      - ^node_modules/
+      - ^frontend/node_modules/
+      - ^taskotter/
     generated: disable
     warn-unused: false
 
@@ -721,6 +724,20 @@ severity:
   rules: []
 
 formatters:
+  exclusions:
+    paths:
+      - ^node_modules/
+      - ^frontend/node_modules/
+      - ^taskotter/
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(raven)
+    goimports:
+      local-prefixes:
+        - raven
   enable:
     - gci
     - gofmt

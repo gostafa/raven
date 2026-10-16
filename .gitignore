@@ -4,6 +4,7 @@
 bin
 frontend/dist
 frontend/node_modules
+node_modules
 build/linux/appimage/build
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 # Mobile generated (per-machine; overlays hold absolute paths)
@@ -12,3 +13,7 @@ build/ios/xcode/gen/
 build/android/overlay.json
 build/android/gen/
 coverage.out
+.lint
+custom-golangci-lint
+test-result.txt
+junit.xml

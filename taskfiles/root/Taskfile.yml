@@ -17,6 +17,7 @@ includes:
     vars:
       GO_JUNIT_REPORT_IN: '{{.GO_JUNIT_REPORT_IN | default "test-result.txt"}}'
       GO_JUNIT_REPORT_OUT: '{{.GO_JUNIT_REPORT_OUT | default "junit.xml"}}'
+      ESLINT_TARGETS: 'frontend/src frontend/tests frontend/tooling frontend/test.config.mjs scripts eslint.config.mjs'
       YAMLFIX_EXTRA_ARGS: '{{.YAMLFIX_EXTRA_ARGS | default `--exclude "taskotter/**/*"`}}'
     dir: .
   common:
@@ -24,6 +25,9 @@ includes:
     dir: .
   ci:
     taskfile: ./taskfiles/ci/Taskfile.yml
+    dir: .
+  conventions:
+    taskfile: ./taskfiles/conventions/Taskfile.yml
     dir: .
   windows:
     taskfile: ./taskfiles/windows/Taskfile.yml

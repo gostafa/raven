@@ -12,6 +12,7 @@ tasks:
     cmds:
       - task: prepare
       - task: :taskotter:ci
+      - task: :conventions:check
 
   fix:
     desc: Build embedded frontend assets and run TaskOtter CI fixes

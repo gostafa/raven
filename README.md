@@ -72,11 +72,11 @@ npm run build -- GOOS=windows GOARCH=amd64
 
 Platform prerequisites:
 
-| Platform | Requirements |
-| --- | --- |
-| macOS | macOS 13+, Xcode Command Line Tools (`xcode-select --install`) |
-| Windows | Windows 10/11 with Microsoft Edge WebView2 Runtime |
-| Linux | GTK4 and WebKitGTK 6.0; Ubuntu 24.04 is the baseline |
+| Platform | Requirements                                                   |
+| -------- | -------------------------------------------------------------- |
+| macOS    | macOS 13+, Xcode Command Line Tools (`xcode-select --install`) |
+| Windows  | Windows 10/11 with Microsoft Edge WebView2 Runtime             |
+| Linux    | GTK4 and WebKitGTK 6.0; Ubuntu 24.04 is the baseline           |
 
 Ubuntu build dependencies:
 
@@ -88,40 +88,47 @@ The widget uses native clipping on macOS and Windows, and transparent GTK stylin
 
 ## Versions
 
-Verified against live registries on **15 October 2026**. Direct dependencies are pinned and `frontend/package-lock.json` and `go.sum` are included.
+Verified against live registries on **15 October 2026**. Direct dependencies are pinned; root and frontend npm lockfiles and `go.sum` are included.
 
-| Tool / package | Version |
-| --- | --- |
-| Go | 1.27.2 |
-| Node / npm | 26.12.0 / 11.20.0 |
-| Wails / JS runtime | 3.0.0-beta.29 |
-| bbolt | 1.5.0 |
-| go-fsrs | 4.0.0 |
-| Svelte | 5.57.2 |
-| Vite / Svelte plugin | 8.3.4 / 7.3.1 |
-| svelte-check | 4.7.6 |
-| TypeScript | 6.0.3 |
+| Tool / package       | Version           |
+| -------------------- | ----------------- |
+| Go                   | 1.27.2            |
+| Node / npm           | 26.12.0 / 11.20.0 |
+| Wails / JS runtime   | 3.0.0-beta.29     |
+| bbolt                | 1.5.0             |
+| go-fsrs              | 4.0.0             |
+| Svelte               | 5.57.2            |
+| Vite / Svelte plugin | 8.3.4 / 7.3.1     |
+| svelte-check         | 4.7.6             |
+| TypeScript           | 6.0.3             |
 
 Wails 3 is currently beta. TypeScript 7.0.2 is the latest release, but svelte-check 4.7.6 supports only TypeScript 5 and 6, so Raven uses the latest supported TypeScript 6 release.
 
 ## Project
 
-- `main.go`: native windows, close hooks, menus, tray, and app lifecycle.
-- `ravenservice.go`: window actions, folder/card/review APIs, and database startup/shutdown lifecycle.
-- `internal/storage`: bbolt folder and card persistence, review scheduling, validation, and storage tests.
-- `frontend/src/App.svelte`: daily dashboard, card library, creation and review dialogs, and reminder widget.
-- `frontend/src/folders.ts`: generated folder types, tag parsing, and local navigation preferences.
+- `funcs.go`: startup composition, native menus, lifecycle wiring, and the Wails facade.
+- `types.go`: facade-owned transport contracts and private application state.
+- `internal/`: library, reminders, autostart, and companion features with owned ports and concrete adapters.
+- `frontend/src/main.ts` and `App.svelte`: adapter composition and selection of the workspace, widget, or floating review.
+- `frontend/src/features/`: folders, cards, reviews, workspace, companion, and shared UI, with explicit public entry points and frontend-owned contracts.
+- `internal/conventions/` and `frontend/tests/conventions.test.mjs`: filename and dependency-boundary checks, including public Go API types.
 - `frontend/public/style.css`: shared workspace theme tokens.
 - `raven.svg`: original supplied logo; copied to `frontend/public/raven.svg`.
 - `build/appicon.png`, `build/darwin/icons.icns`, `build/windows/icon.ico`: icons rendered from the supplied SVG.
 
-After editing Go services, regenerate bindings before checking the UI:
+Install development tooling with `npm ci` and UI dependencies with `npm --prefix frontend ci`. After editing Go services, regenerate bindings with the pinned Wails CLI. Build frontend assets once before loading Go packages on a fresh checkout.
+
+After changes, run the required checks in order:
 
 ```sh
 wails3 generate bindings -ts -i -clean
-npm run check
+task taskotter:ci:fix
+task taskotter:ci
+npm --prefix frontend run check
 npm --prefix frontend test
+npm --prefix frontend run build
 go test -race ./...
-npm run build
+npm run lint
+npm run unused
 go vet ./...
 ```

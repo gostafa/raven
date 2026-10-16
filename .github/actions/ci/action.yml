@@ -10,6 +10,19 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      with:
+        node-version-file: .node-version
+        cache: npm
+        cache-dependency-path: |
+          package-lock.json
+          frontend/package-lock.json
+    - name: Install project tooling
+      shell: bash
+      run: |
+        npm install --global npm@11.20.0
+        npm ci --ignore-scripts
     - name: Run CI
       shell: bash
       run: YAMLFIX_EXTRA_ARGS='--exclude ".github/workflows/**/*" --exclude "taskotter/**/*"' task ci:fix

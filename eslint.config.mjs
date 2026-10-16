@@ -1,38 +1,26 @@
-import { defineConfig, globalIgnores } from 'eslint/config';
-import nextVitals from 'eslint-config-next/core-web-vitals';
-import nextTs from 'eslint-config-next/typescript';
+import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
+import svelte from 'eslint-plugin-svelte';
 import security from 'eslint-plugin-security';
-import tailwind from 'eslint-plugin-better-tailwindcss';
-import { featureBoundaries } from './tooling/eslint/feature-boundaries.mjs';
+import globals from 'globals';
 
-const eslintConfig = defineConfig([
-  ...nextVitals,
-  ...nextTs,
+export default tseslint.config(
   {
-    name: 'strict/type-checked',
-    files: ['**/*.{ts,tsx,mts,cts}'],
-    extends: [tseslint.configs.strictTypeChecked, tseslint.configs.stylisticTypeChecked],
-    languageOptions: {
-      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
-    },
-    rules: {
-      '@typescript-eslint/strict-boolean-expressions': 'error',
-      '@typescript-eslint/no-floating-promises': ['error', { ignoreVoid: false }],
-      '@typescript-eslint/no-misused-promises': 'error',
-      '@typescript-eslint/switch-exhaustiveness-check': 'error',
-      '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
-      '@typescript-eslint/no-unused-vars': ['error', { args: 'all', caughtErrors: 'all' }],
-    },
+    ignores: [
+      'taskotter/**',
+      'frontend/bindings/**',
+      'frontend/dist/**',
+      '**/node_modules/**',
+      'build/**',
+      '.cache/**',
+    ],
   },
+  js.configs.recommended,
   {
-    name: 'security/source',
-    files: ['**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}'],
+    files: ['**/*.{js,mjs,cjs,ts,svelte}'],
+    languageOptions: { globals: { ...globals.browser, ...globals.node } },
     plugins: { security },
-    linterOptions: {
-      reportUnusedDisableDirectives: 'error',
-      reportUnusedInlineConfigs: 'error',
-    },
+    linterOptions: { reportUnusedDisableDirectives: 'error', reportUnusedInlineConfigs: 'error' },
     rules: {
       ...Object.fromEntries(Object.keys(security.configs.recommended.rules).map((rule) => [rule, 'error'])),
       'no-eval': 'error',
@@ -44,83 +32,29 @@ const eslintConfig = defineConfig([
       'no-debugger': 'error',
       'no-console': ['error', { allow: ['warn', 'error'] }],
       eqeqeq: ['error', 'always'],
-      'react/no-danger': 'error',
-      'react/jsx-no-target-blank': ['error', { enforceDynamicLinks: 'always' }],
     },
   },
   {
-    name: 'tailwind/v4-shadcn',
-    files: ['src/**/*.{js,jsx,ts,tsx}'],
-    plugins: { 'better-tailwindcss': tailwind },
-    settings: {
-      'better-tailwindcss': {
-        cwd: import.meta.dirname,
-        entryPoint: 'src/app/globals.css',
-        tsconfig: 'tsconfig.json',
-        // Recognize the project's CSS components as well as shadcn's cn/cva helpers.
-        detectComponentClasses: true,
-      },
-    },
+    files: ['frontend/src/**/*.ts'],
+    extends: [...tseslint.configs.strictTypeChecked, ...tseslint.configs.stylisticTypeChecked],
+    languageOptions: { parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname } },
     rules: {
-      ...tailwind.configs['correctness'].rules,
-      'better-tailwindcss/no-duplicate-classes': 'error',
-      'better-tailwindcss/no-deprecated-classes': 'error',
-      'better-tailwindcss/enforce-consistent-class-order': 'error',
+      '@typescript-eslint/strict-boolean-expressions': 'error',
+      '@typescript-eslint/no-floating-promises': ['error', { ignoreVoid: false }],
+      '@typescript-eslint/no-misused-promises': 'error',
+      '@typescript-eslint/switch-exhaustiveness-check': 'error',
+      '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+      '@typescript-eslint/no-unused-vars': ['error', { args: 'all', caughtErrors: 'all' }],
     },
   },
+  ...svelte.configs['flat/recommended'],
   {
-    files: ['src/**/*.{ts,tsx}'],
-    plugins: { architecture: { rules: { 'feature-boundaries': featureBoundaries } } },
-    rules: { 'architecture/feature-boundaries': 'error' },
-  },
-  {
-    files: ['src/shared/**/*.{ts,tsx}'],
+    files: ['frontend/src/**/*.svelte'],
+    languageOptions: { parserOptions: { parser: tseslint.parser, extraFileExtensions: ['.svelte'] } },
     rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            {
-              group: ['@/features/**', '@/app/**', '**/features/**', '**/app/**'],
-              message: 'Shared foundations must not depend on features or routes.',
-            },
-          ],
-        },
-      ],
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', { args: 'all', caughtErrors: 'all' }],
     },
+    plugins: { '@typescript-eslint': tseslint.plugin },
   },
-  {
-    files: ['src/features/**/*.{ts,tsx}'],
-    rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            {
-              group: [
-                '@/app/**',
-                '**/app/**',
-                '@/features/*/components/**',
-                '@/features/*/hooks/**',
-                '@/features/*/lib/**',
-              ],
-              message: 'Use feature public entry points and keep route dependencies in app.',
-            },
-          ],
-        },
-      ],
-    },
-  },
-  // Override default ignores of eslint-config-next.
-  globalIgnores([
-    // Default ignores of eslint-config-next:
-    '.next/**',
-    'out/**',
-    'build/**',
-    'next-env.d.ts',
-    'coverage/**',
-    'dist/**',
-  ]),
-]);
-
-export default eslintConfig;
+);

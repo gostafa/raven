@@ -1,0 +1,11 @@
+---
+version: '3.5'
+
+tasks:
+  check:
+    desc: Check Raven source conventions and feature behavior
+    cmds:
+      - go test ./internal/conventions
+      - npm --prefix frontend run check
+      - npm --prefix frontend test
+      - npm --prefix frontend run build

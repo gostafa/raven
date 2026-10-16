@@ -30,6 +30,7 @@ jobs:
 
   ci:
     name: CI (${{ matrix.os }})
+    needs: taskotter
     strategy:
       fail-fast: false
       matrix:

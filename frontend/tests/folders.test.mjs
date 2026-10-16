@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { emptyWorkspace, loadPreferences, parseTags, reconcileFolders, savePreferences, preferencesStorageKey } from '../src/folders.ts';
+import {
+  emptyWorkspace,
+  loadPreferences,
+  parseTags,
+  reconcileFolders,
+  savePreferences,
+} from '../src/features/folders/index.ts';
+
+import { preferencesStorageKey } from '../src/features/folders/index.ts';
 
 function memoryStorage(initial = null) {
   const values = new Map(initial === null ? [] : [[preferencesStorageKey, initial]]);
@@ -13,23 +21,32 @@ function memoryStorage(initial = null) {
 const folder = { id: 'first', title: 'Ideas', description: 'Things to explore', tags: ['Personal'] };
 
 test('a first launch starts with an open sidebar and no folders', () => {
-  assert.deepEqual({ ...emptyWorkspace(), ...loadPreferences(memoryStorage()) }, {
-    folders: [], selectedFolderId: null, sidebarOpen: true,
-  });
+  assert.deepEqual(
+    { ...emptyWorkspace(), ...loadPreferences(memoryStorage()) },
+    {
+      folders: [],
+      selectedFolderId: null,
+      sidebarOpen: true,
+    },
+  );
 });
 
 test('only selection and sidebar preference are saved in localStorage', () => {
   const storage = memoryStorage();
   const workspace = {
     folders: [folder, { id: 'second', title: 'Untitled ideas', description: '', tags: [] }],
-    selectedFolderId: 'second', sidebarOpen: false,
+    selectedFolderId: 'second',
+    sidebarOpen: false,
   };
   savePreferences(storage, workspace);
   const preferences = { selectedFolderId: 'second', sidebarOpen: false };
   assert.deepEqual(loadPreferences(storage), preferences);
   assert.equal(storage.getItem(preferencesStorageKey), JSON.stringify(preferences));
   assert.equal(storage.getItem('raven.workspace.v1'), null);
-  assert.deepEqual(reconcileFolders({ ...emptyWorkspace(), ...loadPreferences(storage) }, workspace.folders), workspace);
+  assert.deepEqual(
+    reconcileFolders({ ...emptyWorkspace(), ...loadPreferences(storage) }, workspace.folders),
+    workspace,
+  );
 });
 
 test('comma-separated tags ignore whitespace, empty entries and case-insensitive duplicates', () => {
@@ -55,7 +72,10 @@ test('an outdated selection falls back to Home after folders are loaded', () => 
 
 test('malformed or invalid preferences are rejected without overwriting them', () => {
   const corruptValues = [
-    '{invalid', 'null', '[]', '{}',
+    '{invalid',
+    'null',
+    '[]',
+    '{}',
     JSON.stringify({ selectedFolderId: 123, sidebarOpen: true }),
     JSON.stringify({ selectedFolderId: null, sidebarOpen: 'false' }),
   ];
@@ -67,8 +87,27 @@ test('malformed or invalid preferences are rejected without overwriting them', (
 });
 
 test('read and write failures reach the caller so the UI can report them', () => {
-  assert.throws(() => loadPreferences({ getItem() { throw new Error('Storage unavailable'); } }), /Storage unavailable/);
-  assert.throws(() => savePreferences({ setItem() { throw new Error('Quota exceeded'); } }, emptyWorkspace()), /Quota exceeded/);
+  assert.throws(
+    () =>
+      loadPreferences({
+        getItem() {
+          throw new Error('Storage unavailable');
+        },
+      }),
+    /Storage unavailable/,
+  );
+  assert.throws(
+    () =>
+      savePreferences(
+        {
+          setItem() {
+            throw new Error('Quota exceeded');
+          },
+        },
+        emptyWorkspace(),
+      ),
+    /Quota exceeded/,
+  );
 });
 
 test('legacy workspace folders and preferences are ignored and left untouched', () => {
