@@ -45,9 +45,13 @@ type (
 
 	// ReviewInput identifies an owned content item and its user rating.
 	ReviewInput struct {
+		// FolderID identifies the owning folder.
 		FolderID string `json:"folder_id"`
-		CardID   string `json:"card_id"`
-		ItemID   string `json:"item_id"`
-		Rating   int    `json:"rating"`
+		// CardID identifies the owning card.
+		CardID string `json:"card_id"`
+		// ItemID identifies the content to review.
+		ItemID string `json:"item_id"`
+		// Rating records the user's review grade from one through four.
+		Rating int `json:"rating"`
 	}
 )

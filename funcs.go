@@ -23,10 +23,10 @@ import (
 	autostart "raven/internal/features/autostart/application"
 	widgetnative "raven/internal/features/companion/adapters/native"
 	companionwails "raven/internal/features/companion/adapters/wails"
-	"raven/internal/features/library/adapters/boltstore"
-	"raven/internal/features/library/adapters/desktopmedia"
-	"raven/internal/features/library/adapters/scheduling"
-	"raven/internal/features/library/ports"
+	storage "raven/internal/features/library/adapters/boltstore"
+	mediapicker "raven/internal/features/library/adapters/desktopmedia"
+	scheduleradapter "raven/internal/features/library/adapters/scheduling"
+	libraryports "raven/internal/features/library/ports"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
 	reminders "raven/internal/features/reminders/application"
 )
@@ -67,8 +67,8 @@ func (service *RavenService) reportReminderFailure(message string, err error) {
 func (service *RavenService) configureWidget() { service.windows.ConfigureWidget() }
 
 func (lifecycle *lifecycleAdapter) ServiceStartup(
-	context.Context,
-	application.ServiceOptions,
+	ctx context.Context,
+	_ application.ServiceOptions,
 ) error {
 	session, err := lifecycle.openStore()
 	if err != nil {
@@ -77,18 +77,18 @@ func (lifecycle *lifecycleAdapter) ServiceStartup(
 
 	lifecycle.service.store = session.repository
 	lifecycle.service.mediaHandler = session.media
-	lifecycle.service.startNotifications()
+	lifecycle.service.startNotifications(ctx)
 
 	return nil
 }
 
 func openServiceStore() (storageSession, error) {
-	path, err := boltstore.DefaultPath()
+	path, err := storage.DefaultPath()
 	if err != nil {
 		return storageSession{}, fmt.Errorf("locate library: %w", err)
 	}
 
-	store, err := boltstore.Open(path, scheduling.New())
+	store, err := storage.Open(path, scheduleradapter.New())
 	if err != nil {
 		return storageSession{}, fmt.Errorf("open library: %w", err)
 	}
@@ -96,14 +96,12 @@ func openServiceStore() (storageSession, error) {
 	return storageSession{repository: store, media: store.MediaHandler()}, nil
 }
 
-func (service *RavenService) startNotifications() {
+func (service *RavenService) startNotifications(ctx context.Context) {
 	if service.notifier == nil {
 		return
 	}
 
 	var options application.ServiceOptions
-
-	ctx := context.Background()
 
 	err := service.notifier.ServiceStartup(ctx, options)
 	if err != nil {
@@ -165,11 +163,13 @@ func (service *RavenService) closeResources() error {
 
 // ListFolders returns folders in creation order.
 func (service *RavenService) ListFolders() ([]folderapi.Folder, error) {
-	if service.store == nil {
-		return nil, &ServiceError{Message: folderStorageIsUnavailable}
-	}
+	result := readLibrary(
+		service.store,
+		folderStorageIsUnavailable,
+		libraryports.Repository.ListFolders,
+	)
 
-	return publicResult(service.store.ListFolders())
+	return result.value, result.failure
 }
 
 // CreateFolder creates a folder from editable metadata.
@@ -178,16 +178,20 @@ func (service *RavenService) CreateFolder(input *folderapi.CreateInput) (foldera
 		return folderapi.Folder{}, &ServiceError{Message: folderStorageIsUnavailable}
 	}
 
-	return publicResult(service.store.CreateFolder(nonNilInput(input)))
+	result := publicResult(service.store.CreateFolder(nonNilInput(input)))
+
+	return result.value, result.failure
 }
 
 // ListCards returns the persisted library cards.
 func (service *RavenService) ListCards() ([]cardapi.Card, error) {
-	if service.store == nil {
-		return nil, &ServiceError{Message: cardStorageIsUnavailable}
-	}
+	result := readLibrary(
+		service.store,
+		cardStorageIsUnavailable,
+		libraryports.Repository.ListCards,
+	)
 
-	return publicResult(service.store.ListCards())
+	return result.value, result.failure
 }
 
 // DeleteFolder deletes a folder and its content.
@@ -228,17 +232,23 @@ func (service *RavenService) DeleteCard(folderID, cardID string) error {
 
 // CreateCard creates a card and initializes its item schedules.
 func (service *RavenService) CreateCard(input *cardapi.CreateInput) (cardapi.Card, error) {
-	return changeCard(service, input, ports.Cards.CreateCard)
+	result := changeCard(service, input, libraryports.Cards.CreateCard)
+
+	return result.value, result.failure
 }
 
 // UpdateCard updates card content while preserving retained item schedules.
 func (service *RavenService) UpdateCard(input *cardapi.UpdateInput) (cardapi.Card, error) {
-	return changeCard(service, input, ports.Cards.UpdateCard)
+	result := changeCard(service, input, libraryports.Cards.UpdateCard)
+
+	return result.value, result.failure
 }
 
 // ReviewItem records a rating and advances an item schedule.
 func (service *RavenService) ReviewItem(input *cardapi.ReviewInput) (cardapi.Card, error) {
-	return changeCard(service, input, ports.Cards.ReviewItem)
+	result := changeCard(service, input, libraryports.Cards.ReviewItem)
+
+	return result.value, result.failure
 }
 
 // ShowMain shows and focuses the main library window.
@@ -319,7 +329,7 @@ func (desktop *desktopComposition) prepareLoginDetection() {
 	loginnative.New().PrepareLoginDetection(func(nativeAutomatic bool) {
 		// Cocoa callbacks must not wait for the UI thread.
 		go desktop.visibility.Classify(
-			nativeAutomatic || autostart.IsAutostartLaunch(os.Args[firstLaunchArgument:]),
+			nativeAutomatic || autostart.IsAutostartLaunch(os.Args[1:]),
 		)
 	})
 }
@@ -328,12 +338,19 @@ func (desktop *desktopComposition) createApplication() {
 	service := desktop.service
 	app := application.New(desktop.applicationOptions())
 
-	service.notifier.OnNotificationResponse(func(result notifications.NotificationResult) {
-		desktop.notificationResponse(&result)
-	})
+	desktop.configureNotificationResponse()
 
 	service.app = app
 	desktop.startup = autostart.New(startupwails.New(app.Autostart), app.Env.Info().Debug, nil)
+}
+
+func (desktop *desktopComposition) configureNotificationResponse() {
+	notifier, ok := desktop.service.notifier.(notificationResponses)
+	if ok {
+		notifier.OnNotificationResponse(func(result notifications.NotificationResult) {
+			desktop.notificationResponse(&result)
+		})
+	}
 }
 
 func (desktop *desktopComposition) notificationResponse(result *notifications.NotificationResult) {
@@ -377,7 +394,9 @@ func (desktop *desktopComposition) assetOptions() application.AssetOptions {
 	var options application.AssetOptions
 
 	options.Handler = application.AssetFileServerFS(assets)
-	options.Middleware = desktop.service.mediaMiddleware
+	options.Middleware = func(next http.Handler) http.Handler {
+		return desktop.service.mediaMiddleware(next)
+	}
 
 	return options
 }
@@ -407,7 +426,7 @@ func mainWindowBounds() application.WebviewWindowOptions {
 	options.Width = mainWindowWidth
 	options.Height = mainWindowHeight
 	options.MinWidth = mainWindowMinWidth
-	options.MinHeight = mainWindowMinHeight
+	options.MinHeight = reviewHeight
 
 	return options
 }
@@ -544,7 +563,7 @@ func (desktop *desktopComposition) configureServices() {
 		},
 		widgetnative.New(service.widget),
 	)
-	service.media = desktopmedia.New(
+	service.media = mediapicker.New(
 		service.app,
 		service.mainWindow,
 		func() http.Handler { return service.mediaHandler },
@@ -692,21 +711,39 @@ func (desktop *desktopComposition) run() error {
 // Error returns the public service error message.
 func (failure *ServiceError) Error() string { return failure.Message }
 
-func publicResult[Value any](value Value, err error) (Value, error) {
+func publicResult[Value any](value Value, err error) serviceResult[Value] {
+	result := serviceResult[Value]{value: value, failure: nil}
+
 	if err != nil {
-		return value, &ServiceError{Message: err.Error()}
+		result.failure = &ServiceError{Message: err.Error()}
 	}
 
-	return value, nil
+	return result
+}
+
+func readLibrary[Value any](
+	repository libraryports.Repository,
+	unavailable string,
+	read func(libraryports.Repository) (Value, error),
+) serviceResult[Value] {
+	if repository == nil {
+		var empty Value
+
+		return publicResult(empty, &ServiceError{Message: unavailable})
+	}
+
+	return publicResult(read(repository))
 }
 
 func changeCard[Input any](
 	service *RavenService,
 	input *Input,
-	change func(ports.Cards, *Input) (cardapi.Card, error),
-) (cardapi.Card, error) {
+	change func(libraryports.Cards, *Input) (cardapi.Card, error),
+) serviceResult[cardapi.Card] {
+	var card cardapi.Card
+
 	if service.store == nil {
-		return cardapi.Card{}, &ServiceError{Message: cardStorageIsUnavailable}
+		return publicResult(card, &ServiceError{Message: cardStorageIsUnavailable})
 	}
 
 	card, err := change(service.store, nonNilInput(input))
@@ -723,15 +760,17 @@ func (service *RavenService) SelectMediaFiles(kind string) ([]mediaapi.Selection
 		return nil, &ServiceError{Message: "file selection is unavailable"}
 	}
 
-	return publicResult(service.media.Select(kind))
+	result := publicResult(service.media.Select(kind))
+
+	return result.value, result.failure
 }
 
-func (service *RavenService) mediaMiddleware(next http.Handler) http.Handler {
+func (service *RavenService) mediaMiddleware(next http.Handler) http.HandlerFunc {
 	return http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
 		// Composition initializes the picker before Run; tests can omit native windows.
 		media := service.media
 		if media == nil {
-			media = desktopmedia.New(nil, nil, func() http.Handler { return service.mediaHandler })
+			media = mediapicker.New(nil, nil, func() http.Handler { return service.mediaHandler })
 		}
 
 		media.Middleware(next).ServeHTTP(writer, req)

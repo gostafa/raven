@@ -26,14 +26,13 @@ const (
 
 	schemaV1 = "1"
 
-	privateFileMode   = 0o600
-	logErrorKey       = "error"
-	mediaHeaderSize   = 512
-	mediaItemPart     = 2
-	mediaRouteParts   = 3
-	isoHeaderSize     = 12
-	isoSignatureStart = 4
-	isoSignatureEnd   = 8
+	privateFileMode = 0o600
+	logErrorKey     = "error"
+	mediaHeaderSize = 512
+	mediaItemPart   = 2
+	mediaRouteParts = 3
+	isoHeaderSize   = 12
+	isoSignatureEnd = 8
 
 	migrateFolderRecordsErrorFormat         = "migrate folder records: %w"
 	claimAutostartInitializationErrorFormat = "claim autostart initialization: %w"
@@ -44,6 +43,8 @@ const (
 	four                                    = 4
 	importMediaErrorFormat                  = "import media: %w"
 	loadCardErrorFormat                     = "load card: %w"
+	loadMediaErrorFormat                    = "load media: %w"
+	loadCardForWriteErrorFormat             = "load card for write: %w"
 	markNotifiedErrorFormat                 = "mark notified: %w"
 	mergeLegacyItemsErrorFormat             = "merge legacy items: %w"
 	normalizeRecordErrorFormat              = "normalize record: %w"

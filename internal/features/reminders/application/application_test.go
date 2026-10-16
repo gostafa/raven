@@ -42,9 +42,9 @@ func (notifier *testNotifier) Send(count int) error {
 	return notifier.sendErr
 }
 
-func (notifier *testNotifier) RequestAuthorization() error {
+func (notifier *testNotifier) RequestAuthorization() (bool, error) {
 	notifier.requested++
-	return notifier.authorizeErr
+	return notifier.allowed, notifier.authorizeErr
 }
 
 func TestDeliveryFailuresAreReportedWithoutFalseAcknowledgments(t *testing.T) {
@@ -116,6 +116,28 @@ func TestAuthorizationFailureWakesReconciliationAndDoesNotRepeatPrompt(t *testin
 	}
 	coordinator.notifier = nil
 	coordinator.requestAuthorization()
+}
+
+func TestAuthorizationOutcomeOnlyWakesForGrantedPermission(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		notifier := &testNotifier{allowed: allowed}
+		coordinator := Coordinator{
+			changed:  make(chan struct{}, 1),
+			notifier: notifier,
+			callbacks: Callbacks{
+				Warn: func(message string, err error) { t.Errorf("%s: %v", message, err) },
+			},
+		}
+		coordinator.authorize()
+		if (len(coordinator.changed) != 0) != allowed || notifier.requested != 1 {
+			t.Fatalf(
+				"permission=%v wake=%d requests=%d",
+				allowed,
+				len(coordinator.changed),
+				notifier.requested,
+			)
+		}
+	}
 }
 
 func TestReconciliationReadFailureAndTimerSignals(t *testing.T) {

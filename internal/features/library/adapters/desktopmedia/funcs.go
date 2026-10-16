@@ -18,7 +18,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	mediaapi "raven/api/media"
-	"raven/internal/shared/filesystem"
+	localfiles "raven/internal/shared/filesystem"
 )
 
 // New creates a native picker and an isolated preview registry.
@@ -198,7 +198,7 @@ func (picker *Picker) servePreviewPath(
 	request *http.Request,
 	path string,
 ) {
-	file, err := filesystem.OpenSelected(path)
+	file, err := localfiles.OpenSelected(path)
 	if err != nil {
 		http.NotFound(writer, request)
 

@@ -4,16 +4,38 @@ package native
 
 import (
 	"reflect"
+	"runtime/cgo"
 	"testing"
 )
 
 func TestDetectorForwardsNativeLoginClassification(t *testing.T) {
 	var detected []bool
-	New().PrepareLoginDetection(func(automatic bool) { detected = append(detected, automatic) })
-	t.Cleanup(func() { nativeLoginDetected = func(bool) {} })
-	ravenLoginLaunchDetected(0)
-	ravenLoginLaunchDetected(1)
+	for _, automatic := range []bool{false, true} {
+		handle := cgo.NewHandle(func(value bool) { detected = append(detected, value) })
+		if automatic {
+			ravenLoginLaunchDetected(uintptr(handle), 1)
+		} else {
+			ravenLoginLaunchDetected(uintptr(handle), 0)
+		}
+		assertHandleReleased(t, handle)
+	}
 	if !reflect.DeepEqual(detected, []bool{false, true}) {
 		t.Fatalf("unexpected native launch classifications: %v", detected)
 	}
+}
+
+func TestInvalidNativeCallbackValueStillReleasesItsHandle(t *testing.T) {
+	handle := cgo.NewHandle("invalid callback")
+	ravenLoginLaunchDetected(uintptr(handle), 0)
+	assertHandleReleased(t, handle)
+}
+
+func assertHandleReleased(t *testing.T, handle cgo.Handle) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Error("native callback retained its Go handle")
+		}
+	}()
+	handle.Value()
 }

@@ -9,10 +9,12 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	bolt "go.etcd.io/bbolt"
 
 	cardapi "raven/api/cards"
@@ -22,6 +24,120 @@ import (
 	"raven/internal/features/library/adapters/scheduling"
 	"raven/internal/features/library/ports"
 )
+
+type lifecycleNotifications struct {
+	startup  func(context.Context) error
+	shutdown func() error
+	response func(notifications.NotificationResult)
+}
+
+func (native *lifecycleNotifications) ServiceStartup(
+	ctx context.Context,
+	_ application.ServiceOptions,
+) error {
+	return native.startup(ctx)
+}
+
+func (native *lifecycleNotifications) ServiceShutdown() error { return native.shutdown() }
+
+func (*lifecycleNotifications) CheckNotificationAuthorization() (bool, error) { return false, nil }
+
+func (*lifecycleNotifications) RequestNotificationAuthorization() (bool, error) { return false, nil }
+
+func (*lifecycleNotifications) SendNotification(
+	notifications.NotificationOptions,
+) error {
+	return nil
+}
+
+func (native *lifecycleNotifications) OnNotificationResponse(
+	callback func(notifications.NotificationResult),
+) {
+	native.response = callback
+}
+
+type closingRepository struct {
+	ports.Repository
+	close func() error
+}
+
+func (repository closingRepository) Close() error { return repository.close() }
+
+func TestNotificationStartupReceivesTheServiceContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var received context.Context
+	service := &RavenService{notifier: &lifecycleNotifications{
+		startup:  func(value context.Context) error { received = value; return nil },
+		shutdown: func() error { return nil },
+	}}
+	lifecycle := &lifecycleAdapter{
+		service:   service,
+		openStore: func() (storageSession, error) { return storageSession{}, nil },
+	}
+	if err := lifecycle.ServiceStartup(ctx, application.ServiceOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if received != ctx {
+		t.Fatal("notification startup did not receive the service context")
+	}
+	cancel()
+	if !errors.Is(received.Err(), context.Canceled) {
+		t.Fatal("notification context outlived the service context")
+	}
+}
+
+func TestUnavailableNotificationsDoNotAbortStorageStartup(t *testing.T) {
+	failure := errors.New("notifications unavailable")
+	repository := failingRepository{failure: failure}
+	service := &RavenService{notifier: &lifecycleNotifications{
+		startup:  func(context.Context) error { return failure },
+		shutdown: func() error { t.Error("failed notification startup must not receive shutdown"); return nil },
+	}}
+	lifecycle := &lifecycleAdapter{service: service, openStore: func() (storageSession, error) {
+		return storageSession{repository: repository}, nil
+	}}
+	if err := lifecycle.ServiceStartup(t.Context(), application.ServiceOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if service.notifier != nil || service.store != repository {
+		t.Fatal("notification failure changed storage availability")
+	}
+}
+
+func TestShutdownClosesEveryResourceAndIsolatesFailureChains(t *testing.T) {
+	nativeFailure := errors.New("notification shutdown failed")
+	storageFailure := errors.New("database shutdown failed")
+	closed := 0
+	service := &RavenService{
+		notifier: &lifecycleNotifications{
+			shutdown: func() error { closed++; return nativeFailure },
+		},
+		store: closingRepository{close: func() error { closed++; return storageFailure }},
+	}
+	err := (&lifecycleAdapter{service: service}).ServiceShutdown()
+	if closed != 2 || err == nil || !strings.Contains(err.Error(), nativeFailure.Error()) ||
+		!strings.Contains(err.Error(), storageFailure.Error()) {
+		t.Fatalf("closed=%d error=%v", closed, err)
+	}
+	if errors.Is(err, nativeFailure) || errors.Is(err, storageFailure) ||
+		errors.Unwrap(err) != nil {
+		t.Fatal("shutdown retained an implementation error chain")
+	}
+}
+
+func TestNotificationResponseRegistrationIgnoresFailuresAndOtherActions(t *testing.T) {
+	native := &lifecycleNotifications{}
+	desktop := &desktopComposition{service: &RavenService{notifier: native}}
+	desktop.configureNotificationResponse()
+	if native.response == nil {
+		t.Fatal("notification response callback was not registered")
+	}
+	native.response(notifications.NotificationResult{Error: errors.New("response failed")})
+	native.response(notifications.NotificationResult{})
+	desktop.service.notifier = nil
+	desktop.configureNotificationResponse()
+}
 
 type failingRepository struct {
 	ports.Repository
@@ -144,7 +260,8 @@ func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 func facadeValue[Value any](t *testing.T, value Value) Value {
 	t.Helper()
 	cause := errors.New("storage failure")
-	result, err := publicResult(value, cause)
+	response := publicResult(value, cause)
+	result, err := response.value, response.failure
 	var failure *ServiceError
 	if !errors.As(err, &failure) || failure.Message != cause.Error() || errors.Is(err, cause) {
 		t.Fatalf("public result leaked its implementation error: %v", err)

@@ -10,14 +10,14 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	companion "raven/internal/features/companion/domain"
-	"raven/internal/features/companion/ports"
+	companionports "raven/internal/features/companion/ports"
 )
 
 // New constructs the adapter with its required runtime dependencies.
 func New(
 	app *application.App,
 	handles WindowSet,
-	configuration ports.WidgetConfiguration,
+	configuration companionports.WidgetConfiguration,
 ) *Windows {
 	windows := &Windows{
 		mainWindow:      handles.Main,

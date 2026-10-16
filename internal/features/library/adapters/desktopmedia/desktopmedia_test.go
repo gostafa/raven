@@ -1,7 +1,9 @@
 package desktopmedia
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,45 @@ import (
 	"runtime"
 	"testing"
 )
+
+func TestUnavailablePickerAndSavedMediaReturnAvailabilityErrors(t *testing.T) {
+	picker := New(nil, nil, nil)
+	if _, err := picker.Select("image"); !errors.Is(err, errFileSelectionIsUnavailable) {
+		t.Fatalf("missing native window: %v", err)
+	}
+	response := httptest.NewRecorder()
+	picker.Middleware(http.NotFoundHandler()).
+		ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/media/folder/card/item", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing media store returned %d", response.Code)
+	}
+}
+
+func TestClosedPreviewFilesAreRejectedAndCleanupFailuresAreLogged(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "preview-*.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	picker := New(nil, nil, nil)
+	picker.logger = slog.New(slog.NewTextHandler(&output, nil))
+	picker.closePreview(t.Context(), file)
+	if !bytes.Contains(output.Bytes(), []byte("could not close media preview")) {
+		t.Fatal("preview cleanup failure was not logged")
+	}
+	response := httptest.NewRecorder()
+	servePreviewFile(
+		response,
+		httptest.NewRequest(http.MethodGet, "/media-preview/closed", nil),
+		file,
+	)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("closed preview file returned %d", response.Code)
+	}
+}
 
 func TestSelectedMediaPreview(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "clip.mp4")

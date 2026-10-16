@@ -10,6 +10,7 @@ import (
 )
 
 var (
-	_                library.Scheduler = (*Scheduler)(nil)
-	errInvalidRating                   = errors.New("invalid review rating")
+	_                      library.Scheduler = (*Scheduler)(nil)
+	errInvalidRating                         = errors.New("invalid review rating")
+	errIncompleteSchedules                   = errors.New("incomplete review rating schedules")
 )

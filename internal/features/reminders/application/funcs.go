@@ -143,12 +143,14 @@ func (coordinator *Coordinator) requestAuthorization() {
 }
 
 func (coordinator *Coordinator) authorize() {
-	err := coordinator.notifier.RequestAuthorization()
+	allowed, err := coordinator.notifier.RequestAuthorization()
 	if err != nil {
 		coordinator.callbacks.Warn("Notification authorization unavailable", err)
 	}
 
-	coordinator.Wake()
+	if allowed || err != nil {
+		coordinator.Wake()
+	}
 }
 
 func (coordinator *Coordinator) reconcile() time.Duration {

@@ -8,14 +8,14 @@ import (
 	"regexp"
 
 	autostart "raven/internal/features/autostart/application"
-	"raven/internal/features/library/ports"
+	libraryports "raven/internal/features/library/ports"
 	reminders "raven/internal/features/reminders/application"
 )
 
 var (
-	_ ports.Repository   = (*Store)(nil)
-	_ autostart.Settings = (*Store)(nil)
-	_ reminders.Source   = (*Store)(nil)
+	_ libraryports.Repository = (*Store)(nil)
+	_ autostart.Settings      = (*Store)(nil)
+	_ reminders.Source        = (*Store)(nil)
 
 	// Deliberately exclude active formats such as SVG and HTML.
 

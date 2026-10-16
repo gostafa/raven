@@ -29,7 +29,7 @@ import (
 	folderapi "raven/api/folders"
 	reviewapi "raven/api/reviews"
 	library "raven/internal/features/library/domain"
-	"raven/internal/shared/filesystem"
+	localfiles "raven/internal/shared/filesystem"
 )
 
 // ClaimAutostartInitialization records the attempt before touching OS settings.
@@ -363,7 +363,7 @@ func (migration *schemaMigration) migrateFolders(root *bolt.Bucket) error {
 }
 
 func (migration *schemaMigration) migrateFolder(folder *bolt.Bucket, folderID, value []byte) error {
-	err := migration.prepareFolder(folder, value)
+	prepared, err := migration.prepareFolder(folder, value)
 	if err != nil {
 		return fmt.Errorf("prepare legacy folder: %w", err)
 	}
@@ -373,7 +373,7 @@ func (migration *schemaMigration) migrateFolder(folder *bolt.Bucket, folderID, v
 		return fmt.Errorf("read legacy card identifiers: %w", err)
 	}
 
-	err = migration.migrateCards(folder, folderID, ids)
+	err = migration.migrateCards(prepared, folderID, ids)
 	if err != nil {
 		return fmt.Errorf("migrate legacy cards: %w", err)
 	}
@@ -381,18 +381,21 @@ func (migration *schemaMigration) migrateFolder(folder *bolt.Bucket, folderID, v
 	return nil
 }
 
-func (migration *schemaMigration) prepareFolder(folder *bolt.Bucket, value []byte) error {
+func (migration *schemaMigration) prepareFolder(
+	folder *bolt.Bucket,
+	value []byte,
+) (*migrationFolder, error) {
 	err := migration.checkFolderLayout(folder, value)
 	if err != nil {
-		return fmt.Errorf("validate legacy folder: %w", err)
+		return nil, fmt.Errorf("validate legacy folder: %w", err)
 	}
 
-	_, err = folder.CreateBucketIfNotExists([]byte(itemsBucket))
+	items, err := folder.CreateBucketIfNotExists([]byte(itemsBucket))
 	if err != nil {
-		return fmt.Errorf("create legacy content root: %w", err)
+		return nil, fmt.Errorf("create legacy content root: %w", err)
 	}
 
-	return nil
+	return &migrationFolder{parent: folder, items: items}, nil
 }
 
 func (migration *schemaMigration) checkFolderLayout(folder *bolt.Bucket, value []byte) error {
@@ -429,7 +432,7 @@ func legacyCardIDs(bucket *bolt.Bucket) ([][]byte, error) {
 }
 
 func (migration *schemaMigration) migrateCards(
-	folder *bolt.Bucket,
+	folder *migrationFolder,
 	folderID []byte,
 	ids [][]byte,
 ) error {
@@ -443,13 +446,16 @@ func (migration *schemaMigration) migrateCards(
 	return nil
 }
 
-func (migration *schemaMigration) migrateCard(folder *bolt.Bucket, folderID, cardID []byte) error {
-	card, err := readLegacyCard(folder.Bucket([]byte(cardsBucket)), folderID, cardID)
+func (migration *schemaMigration) migrateCard(
+	folder *migrationFolder,
+	folderID, cardID []byte,
+) error {
+	card, err := readLegacyCard(folder.parent.Bucket([]byte(cardsBucket)), folderID, cardID)
 	if err != nil {
 		return fmt.Errorf("read legacy metadata: %w", err)
 	}
 
-	err = migration.prepareCardContent(folder, &card)
+	err = migration.prepareCardContent(folder.parent, &card)
 	if err != nil {
 		return fmt.Errorf("prepare legacy content: %w", err)
 	}
@@ -528,24 +534,58 @@ func (migration *schemaMigration) unscheduledItems(
 	folder *bolt.Bucket,
 	card *cardapi.Card,
 ) ([]contentapi.Item, error) {
+	load, err := migration.legacyLoader()
+	if err != nil {
+		return nil, fmt.Errorf("select legacy content reader: %w", err)
+	}
+
+	items, err := load(folder, card)
+	if err != nil {
+		return nil, fmt.Errorf("read unscheduled content: %w", err)
+	}
+
+	return items, nil
+}
+
+func (migration *schemaMigration) legacyLoader() (func(*bolt.Bucket, *cardapi.Card) ([]contentapi.Item, error), error) {
 	switch migration.state.version {
 	case schemaV1:
-		return legacyTextItems(folder.Bucket([]byte(cardsBucket)).Get([]byte(card.ID)))
+		return legacyTextContent, nil
 	case schemaV2:
-		return mergeLegacyItems(
-			folder.Bucket([]byte(itemsBucket)).Bucket([]byte(card.ID)),
-			card,
-		)
+		return legacyOrderedContent, nil
 	default:
 		return nil, errUnsupportedDatabaseSchema
 	}
+}
+
+func legacyTextContent(folder *bolt.Bucket, card *cardapi.Card) ([]contentapi.Item, error) {
+	items, err := legacyTextItems(folder.Bucket([]byte(cardsBucket)).Get([]byte(card.ID)))
+	if err != nil {
+		return nil, fmt.Errorf("read legacy text: %w", err)
+	}
+
+	return items, nil
+}
+
+func legacyOrderedContent(folder *bolt.Bucket, card *cardapi.Card) ([]contentapi.Item, error) {
+	items, err := mergeLegacyItems(folder.Bucket([]byte(itemsBucket)).Bucket([]byte(card.ID)), card)
+	if err != nil {
+		return nil, fmt.Errorf("read legacy ordered content: %w", err)
+	}
+
+	return items, nil
 }
 
 func (migration *schemaMigration) loadScheduledFolderContent(
 	folder *bolt.Bucket,
 	card *cardapi.Card,
 ) error {
-	return migration.loadScheduledContent(folder.Tx(), card)
+	err := migration.loadScheduledContent(folder.Tx(), card)
+	if err != nil {
+		return fmt.Errorf("load scheduled folder content: %w", err)
+	}
+
+	return nil
 }
 
 func (migration *schemaMigration) loadScheduledContent(
@@ -631,15 +671,15 @@ func (migration *schemaMigration) initializeSchedules(card *cardapi.Card) error 
 	return nil
 }
 
-func (migration *schemaMigration) persistCard(folder *bolt.Bucket, card *cardapi.Card) error {
+func (migration *schemaMigration) persistCard(folder *migrationFolder, card *cardapi.Card) error {
 	assignContentOwnership(card)
 
-	err := writeCardRecords(folder.Tx(), folder.Bucket([]byte(cardsBucket)), card)
+	err := writeCardBuckets(folder.parent.Bucket([]byte(cardsBucket)), folder.items, card)
 	if err != nil {
 		return fmt.Errorf("write migrated card: %w", err)
 	}
 
-	err = migration.verifyCard(folder.Tx(), card)
+	err = migration.verifyCard(folder.parent.Tx(), card)
 	if err != nil {
 		return fmt.Errorf("verify migrated card: %w", err)
 	}
@@ -858,7 +898,7 @@ func compatibleSignature(declared string, header []byte) bool {
 
 func isoMediaHeader(header []byte) bool {
 	return len(header) >= isoHeaderSize &&
-		string(header[isoSignatureStart:isoSignatureEnd]) == isoMediaSignature
+		string(header[four:isoSignatureEnd]) == isoMediaSignature
 }
 
 func avifHeader(header []byte) bool {
@@ -875,13 +915,18 @@ func (storage *Store) importMedia(
 	item *contentapi.Item,
 	source string,
 ) (contentapi.Item, string, error) {
-	file, err := filesystem.OpenSelected(source)
+	file, err := localfiles.OpenSelected(source)
 	if err != nil {
 		return *item, "", fmt.Errorf("open selected file: %w", err)
 	}
 	defer storage.closeMediaFile(context.Background(), file)
 
-	return storage.importOpenedMedia(file, item, source)
+	imported, path, err := storage.importOpenedMedia(file, item, source)
+	if err != nil {
+		return imported, path, fmt.Errorf("import selected media: %w", err)
+	}
+
+	return imported, path, nil
 }
 
 func (storage *Store) importOpenedMedia(
@@ -948,7 +993,12 @@ func (storage *Store) persistMedia(file *os.File, item *contentapi.Item) (string
 	}
 	defer storage.removeMediaFile(temp.Name())
 
-	return storage.stageAndCommitMedia(temp, file, item)
+	path, err := storage.stageAndCommitMedia(temp, file, item)
+	if err != nil {
+		return path, fmt.Errorf("persist staged media: %w", err)
+	}
+
+	return path, nil
 }
 
 func (storage *Store) stageAndCommitMedia(
@@ -1154,7 +1204,7 @@ func (storage *Store) openOwnedMedia(parts []string) (*os.File, contentapi.Item,
 
 	item, err := storage.readOwnedMedia(parts)
 	if err != nil {
-		return nil, item, fmt.Errorf("load media: %w", err)
+		return nil, item, fmt.Errorf(loadMediaErrorFormat, err)
 	}
 
 	file, err := os.OpenInRoot(storage.mediaDir, filepath.Base(item.RelativePath))
@@ -1179,7 +1229,7 @@ func (storage *Store) readOwnedMedia(parts []string) (contentapi.Item, error) {
 		return nil
 	})
 	if err != nil {
-		return item, fmt.Errorf("load media: %w", err)
+		return item, fmt.Errorf(loadMediaErrorFormat, err)
 	}
 
 	return item, nil
@@ -1420,14 +1470,28 @@ func persistNewFolder(transaction *bolt.Tx, folder *folderapi.Folder) error {
 		return errMissingFoldersBucket
 	}
 
-	id, err := nextFolderID(root)
+	err := assignFolderID(root, folder)
 	if err != nil {
 		return fmt.Errorf("allocate folder: %w", err)
 	}
 
+	err = createFolderBucket(root, folder)
+	if err != nil {
+		return fmt.Errorf("persist folder bucket: %w", err)
+	}
+
+	return nil
+}
+
+func assignFolderID(root *bolt.Bucket, folder *folderapi.Folder) error {
+	id, err := nextFolderID(root)
+	if err != nil {
+		return fmt.Errorf("assign folder identifier: %w", err)
+	}
+
 	folder.ID = id
 
-	return createFolderBucket(root, folder)
+	return nil
 }
 
 func createFolderBucket(root *bolt.Bucket, folder *folderapi.Folder) error {
@@ -1507,19 +1571,33 @@ func (storage *Store) DeleteCard(folderID, cardID string) error {
 }
 
 func (storage *Store) deleteCardRecords(transaction *bolt.Tx, folderID, cardID string) error {
-	_, err := storage.loadCard(transaction, folderID, cardID)
+	card, err := storage.loadCard(transaction, folderID, cardID)
 	if err != nil {
 		return fmt.Errorf(deleteCardErrorFormat, err)
 	}
 
 	folder := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(folderID))
 
-	err = folder.Bucket([]byte(itemsBucket)).DeleteBucket([]byte(cardID))
+	err = deleteOwnedCard(folder, card.ID)
+	if err != nil {
+		return fmt.Errorf("delete owned card records: %w", err)
+	}
+
+	return nil
+}
+
+func deleteOwnedCard(folder *bolt.Bucket, cardID string) error {
+	err := folder.Bucket([]byte(itemsBucket)).DeleteBucket([]byte(cardID))
 	if err != nil {
 		return fmt.Errorf(deleteCardErrorFormat, err)
 	}
 
-	return folder.Bucket([]byte(cardsBucket)).Delete([]byte(cardID))
+	err = folder.Bucket([]byte(cardsBucket)).Delete([]byte(cardID))
+	if err != nil {
+		return fmt.Errorf("delete card metadata: %w", err)
+	}
+
+	return nil
 }
 
 // DeleteFolder deletes a folder and reconciles its media files.
@@ -1547,26 +1625,24 @@ func (storage *Store) DeleteFolder(folderID string) error {
 func newItemID() (string, error) {
 	var id [16]byte
 
-	_, readErr := rand.Read(id[:])
+	count, readErr := rand.Read(id[:])
 	if readErr != nil {
 		return "", fmt.Errorf("new item i d: %w", readErr)
 	}
 
-	return hex.EncodeToString(id[:]), nil
+	return hex.EncodeToString(id[:count]), nil
 }
 
 func cardBucket(transaction *bolt.Tx, folderID string) (*bolt.Bucket, error) {
-	root := transaction.Bucket([]byte(foldersBucket))
-	if root == nil {
-		return nil, errMissingFoldersBucket
+	err := validateDestinationFolder(transaction, folderID)
+	if err != nil {
+		return nil, fmt.Errorf("open card bucket: %w", err)
 	}
 
-	folder := root.Bucket([]byte(folderID))
-	if !validFolderContent(folder) {
-		return nil, errFolderNotFoundOrInvalid
-	}
-
-	return folder.Bucket([]byte(cardsBucket)), nil
+	return transaction.Bucket([]byte(foldersBucket)).
+			Bucket([]byte(folderID)).
+			Bucket([]byte(cardsBucket)),
+		nil
 }
 
 func validFolderContent(folder *bolt.Bucket) bool {
@@ -1588,7 +1664,12 @@ func (storage *Store) loadCard(
 		return cardapi.Card{}, fmt.Errorf(loadCardErrorFormat, err)
 	}
 
-	return storage.hydrateStoredCard(transaction, &card)
+	hydrated, err := storage.hydrateStoredCard(transaction, &card)
+	if err != nil {
+		return hydrated, fmt.Errorf("hydrate stored card: %w", err)
+	}
+
+	return hydrated, nil
 }
 
 func (storage *Store) hydrateStoredCard(
@@ -1643,13 +1724,26 @@ func (storage *Store) loadCardItems(transaction *bolt.Tx, card *cardapi.Card) er
 
 	card.Items = []contentapi.Item{}
 
-	reader := cardContentReader{
+	reader := newCardContentReader(storage, transaction, card)
+
+	err := reader.readItems(items)
+	if err != nil {
+		return fmt.Errorf("read card content items: %w", err)
+	}
+
+	return nil
+}
+
+func newCardContentReader(
+	storage *Store,
+	transaction *bolt.Tx,
+	card *cardapi.Card,
+) *cardContentReader {
+	return &cardContentReader{
 		card:      card,
 		scheduler: storage.scheduler,
 		schema:    readSchemaVersion(transaction),
 	}
-
-	return reader.readItems(items)
 }
 
 func (reader *cardContentReader) readItems(items *bolt.Bucket) error {
@@ -1737,11 +1831,34 @@ func putCard(bucket *bolt.Bucket, card *cardapi.Card) error {
 	return nil
 }
 
+func writeCardBuckets(metadata, items *bolt.Bucket, card *cardapi.Card) error {
+	err := putItemsInRoot(items, card)
+	if err != nil {
+		return fmt.Errorf("write migrated content: %w", err)
+	}
+
+	err = putCard(metadata, card)
+	if err != nil {
+		return fmt.Errorf("write migrated metadata: %w", err)
+	}
+
+	return nil
+}
+
 func putItems(transaction *bolt.Tx, card *cardapi.Card) error {
 	root := transaction.Bucket([]byte(foldersBucket)).
 		Bucket([]byte(card.FolderID)).
 		Bucket([]byte(itemsBucket))
 
+	err := putItemsInRoot(root, card)
+	if err != nil {
+		return fmt.Errorf("write content root: %w", err)
+	}
+
+	return nil
+}
+
+func putItemsInRoot(root *bolt.Bucket, card *cardapi.Card) error {
 	bucket, err := replaceItemBucket(root, card.ID)
 	if err != nil {
 		return fmt.Errorf(putItemsErrorFormat, err)
@@ -1776,7 +1893,12 @@ func deleteExistingItemBucket(root *bolt.Bucket, cardID string) error {
 		return nil
 	}
 
-	return root.DeleteBucket([]byte(cardID))
+	err := root.DeleteBucket([]byte(cardID))
+	if err != nil {
+		return fmt.Errorf("delete old item bucket: %w", err)
+	}
+
+	return nil
 }
 
 func writeContentItem(bucket *bolt.Bucket, item *contentapi.Item) error {
@@ -1936,13 +2058,15 @@ func (write *cardWrite) prepare(drafts []contentapi.Draft) error {
 }
 
 func (write *cardWrite) loadPrevious(transaction *bolt.Tx) error {
-	if write.cardID == "" {
-		return validateDestinationFolder(transaction, write.folderID)
-	}
-
 	var err error
 
-	write.previous, err = write.storage.loadCard(transaction, write.folderID, write.cardID)
+	switch write.cardID {
+	case "":
+		err = validateDestinationFolder(transaction, write.folderID)
+	default:
+		write.previous, err = write.storage.loadCard(transaction, write.folderID, write.cardID)
+	}
+
 	if err != nil {
 		return fmt.Errorf("load previous card: %w", err)
 	}
@@ -1951,9 +2075,13 @@ func (write *cardWrite) loadPrevious(transaction *bolt.Tx) error {
 }
 
 func validateDestinationFolder(transaction *bolt.Tx, folderID string) error {
-	_, err := cardBucket(transaction, folderID)
-	if err != nil {
-		return fmt.Errorf("validate destination folder: %w", err)
+	root := transaction.Bucket([]byte(foldersBucket))
+	if root == nil {
+		return errMissingFoldersBucket
+	}
+
+	if !validFolderContent(root.Bucket([]byte(folderID))) {
+		return errFolderNotFoundOrInvalid
 	}
 
 	return nil
@@ -1980,7 +2108,12 @@ func (write *cardWrite) persist(transaction *bolt.Tx) error {
 		return fmt.Errorf("read current card: %w", err)
 	}
 
-	return write.persistPreparedCard(transaction, bucket)
+	err = write.persistPreparedCard(transaction, bucket)
+	if err != nil {
+		return fmt.Errorf("persist prepared card: %w", err)
+	}
+
+	return nil
 }
 
 func (write *cardWrite) persistPreparedCard(transaction *bolt.Tx, bucket *bolt.Bucket) error {
@@ -1998,16 +2131,18 @@ func (write *cardWrite) persistPreparedCard(transaction *bolt.Tx, bucket *bolt.B
 }
 
 func (write *cardWrite) loadFresh(transaction *bolt.Tx, bucket *bolt.Bucket) error {
-	if write.cardID == "" {
-		return write.allocate(bucket)
-	}
-
-	// Reload after file copying to preserve concurrent reviews and acknowledgments.
 	var err error
 
-	write.card, err = write.storage.loadCard(transaction, write.folderID, write.cardID)
+	switch write.cardID {
+	case "":
+		err = write.allocate(bucket)
+	default:
+		// Reload after copying media to preserve concurrent reviews and acknowledgments.
+		write.card, err = write.storage.loadCard(transaction, write.folderID, write.cardID)
+	}
+
 	if err != nil {
-		return fmt.Errorf("load card for write: %w", err)
+		return fmt.Errorf(loadCardForWriteErrorFormat, err)
 	}
 
 	return nil
@@ -2018,7 +2153,7 @@ func (write *cardWrite) allocate(bucket *bolt.Bucket) error {
 
 	write.card, err = allocateCard(bucket, write.folderID)
 	if err != nil {
-		return fmt.Errorf("load card for write: %w", err)
+		return fmt.Errorf(loadCardForWriteErrorFormat, err)
 	}
 
 	return nil

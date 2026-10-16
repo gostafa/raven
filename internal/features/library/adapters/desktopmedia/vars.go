@@ -6,11 +6,11 @@ package desktopmedia
 import (
 	"errors"
 
-	"raven/internal/features/library/ports"
+	libraryports "raven/internal/features/library/ports"
 )
 
 var (
-	_ ports.Media = (*Picker)(nil)
+	_ libraryports.Media = (*Picker)(nil)
 
 	errInvalidMediaType                 = errors.New("invalid media type")
 	errFileSelectionIsUnavailable       = errors.New("file selection is unavailable")

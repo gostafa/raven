@@ -33,6 +33,10 @@ type (
 
 		Side string `json:"side"`
 	}
+	migrationFolder struct {
+		parent *bolt.Bucket
+		items  *bolt.Bucket
+	}
 	schemaState struct {
 		version  string
 		existing bool

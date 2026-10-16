@@ -35,3 +35,10 @@ func TestEngineFailuresPreserveTheirCause(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestValidationRejectsAnIncompleteRatingSet(t *testing.T) {
+	scheduler := Scheduler{engine: failingEngine{}}
+	if err := scheduler.Validate(&reviewapi.Schedule{}); !errors.Is(err, errIncompleteSchedules) {
+		t.Fatalf("accepted missing rating schedules: %v", err)
+	}
+}

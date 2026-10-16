@@ -22,7 +22,7 @@ type (
 	Notifier interface {
 		CheckNotificationAuthorization() (bool, error)
 		Send(count int) error
-		RequestAuthorization() error
+		RequestAuthorization() (bool, error)
 	}
 
 	// Source provides persisted schedules and notification prompt state.

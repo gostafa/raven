@@ -47,11 +47,11 @@ func reminderOptions(count int) notifications.NotificationOptions {
 }
 
 // RequestAuthorization requests native notification authorization.
-func (notifier Notifier) RequestAuthorization() error {
-	_, err := notifier.native.RequestNotificationAuthorization()
+func (notifier Notifier) RequestAuthorization() (bool, error) {
+	allowed, err := notifier.native.RequestNotificationAuthorization()
 	if err != nil {
-		return fmt.Errorf("request authorization: %w", err)
+		return false, fmt.Errorf("request authorization: %w", err)
 	}
 
-	return nil
+	return allowed, nil
 }

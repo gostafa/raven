@@ -45,9 +45,13 @@ func (scheduler Scheduler) Next(
 
 // Validate checks that a persisted schedule is accepted by FSRS.
 func (scheduler Scheduler) Validate(card *reviewapi.Schedule) error {
-	_, err := scheduler.engine.Repeat(toCard(card), card.LastReview)
+	records, err := scheduler.engine.Repeat(toCard(card), card.LastReview)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
+	}
+
+	if len(records) != maximumRating {
+		return errIncompleteSchedules
 	}
 
 	return nil

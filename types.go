@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"sync"
 
@@ -13,22 +14,38 @@ import (
 
 	autostart "raven/internal/features/autostart/application"
 	companion "raven/internal/features/companion/domain"
-	"raven/internal/features/library/ports"
+	libraryports "raven/internal/features/library/ports"
+	reminderwails "raven/internal/features/reminders/adapters/wails"
 	reminders "raven/internal/features/reminders/application"
 )
 
 type (
+	notificationRuntime interface {
+		reminderwails.NativeNotifications
+		ServiceStartup(ctx context.Context, options application.ServiceOptions) error
+		ServiceShutdown() error
+	}
+
+	notificationResponses interface {
+		OnNotificationResponse(callback func(notifications.NotificationResult))
+	}
+
+	serviceResult[Value any] struct {
+		value   Value
+		failure error
+	}
+
 	// RavenService owns the windows and folder database for the lifetime of the app.
 	RavenService struct {
 		app          *application.App
 		mainWindow   *application.WebviewWindow
 		widget       *application.WebviewWindow
 		reviewWindow *application.WebviewWindow
-		store        ports.Repository
-		media        ports.Media
+		store        libraryports.Repository
+		media        libraryports.Media
 		windows      companion.Windows
 		mediaHandler http.Handler
-		notifier     *notifications.NotificationService
+		notifier     notificationRuntime
 		reminders    *reminders.Coordinator
 		reminderMu   sync.Mutex
 	}
@@ -38,7 +55,7 @@ type (
 		openStore func() (storageSession, error)
 	}
 	storageSession struct {
-		repository ports.Repository
+		repository libraryports.Repository
 		media      http.Handler
 	}
 

@@ -135,7 +135,7 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 	}
 }
 
-func (n *fakeReminderNotifier) RequestAuthorization() error { return nil }
+func (n *fakeReminderNotifier) RequestAuthorization() (bool, error) { return n.allowed, nil }
 
 type reminderSource struct{}
 
@@ -149,10 +149,10 @@ type blockingNotifier struct {
 	release chan struct{}
 }
 
-func (n *blockingNotifier) RequestAuthorization() error {
+func (n *blockingNotifier) RequestAuthorization() (bool, error) {
 	close(n.started)
 	<-n.release
-	return nil
+	return n.allowed, nil
 }
 
 func TestCoordinatorShutdownDoesNotWaitForAuthorization(t *testing.T) {

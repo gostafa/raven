@@ -9,7 +9,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"raven/internal/features/companion/ports"
+	companionports "raven/internal/features/companion/ports"
 )
 
 type (
@@ -19,7 +19,7 @@ type (
 		widget          widgetSurface
 		reviewWindow    reviewSurface
 		reviewPlacement windowFrame
-		configuration   ports.WidgetConfiguration
+		configuration   companionports.WidgetConfiguration
 		invoke          func(func())
 		primaryScreen   func() *application.Screen
 		quit            func()
