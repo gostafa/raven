@@ -1,7 +1,7 @@
 version: '3.5'
 
 includes:
-  common: ../Taskfile.yml
+  common: ../common/Taskfile.yml
 
 vars:
   # Docker image for cross-compilation (used when building on non-macOS)

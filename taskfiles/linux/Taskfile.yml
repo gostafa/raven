@@ -1,7 +1,7 @@
 version: '3.5'
 
 includes:
-  common: ../Taskfile.yml
+  common: ../common/Taskfile.yml
 
 vars:
   # Signing configuration - edit these values for your project

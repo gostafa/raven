@@ -1,5 +1,9 @@
 # Raven agent instructions
 
+## TaskOtter files
+
+Treat `taskotter/**` as read-only generated tooling. Never create, edit, delete, rename, format, regenerate, or update files under it, including through automated commands. Put project-specific tasks in `taskfiles/NAME/Taskfile.yml`, and call TaskOtter tasks without changing their implementation. Keep the root `Taskfile.yml` as a symlink to `taskfiles/root/Taskfile.yml` so existing Task and Wails commands work from the repository root.
+
 ## Preserve the colors
 
 Keep Raven's monochrome palette and dark sidebar during future design, content, refactoring, or feature work. New components must reuse this palette. Neutral grayscale shades are allowed for borders, dividers, muted text, focus indicators, and interaction states; do not introduce colored accents or themes.
