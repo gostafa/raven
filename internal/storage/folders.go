@@ -13,9 +13,11 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-var foldersBucket = []byte("folders")
-var metadataKey = []byte("metadata")
-var cardsBucket = []byte("cards")
+var (
+	foldersBucket = []byte("folders")
+	metadataKey   = []byte("metadata")
+	cardsBucket   = []byte("cards")
+)
 
 type Folder struct {
 	ID          string   `json:"id"`
@@ -45,10 +47,10 @@ func DefaultPath() (string, error) {
 }
 
 func Open(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create database directory for %q: %w", path, err)
 	}
-	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: time.Second})
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("open database %q: %w", path, err)
 	}

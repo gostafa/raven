@@ -13,8 +13,10 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-var metaBucket = []byte("meta")
-var schemaKey = []byte("schemaVersion")
+var (
+	metaBucket = []byte("meta")
+	schemaKey  = []byte("schemaVersion")
+)
 
 func (s *Store) initialize(path string) error {
 	version := "1"
@@ -82,7 +84,9 @@ func (s *Store) initialize(path string) error {
 			bucket := folder.Bucket(cardsBucket)
 			// Collect keys first; do not mutate a bucket while iterating its cursor.
 			ids := []string{}
-			if err := bucket.ForEach(func(id, _ []byte) error { ids = append(ids, string(id)); return nil }); err != nil {
+			if err := bucket.ForEach(
+				func(id, _ []byte) error { ids = append(ids, string(id)); return nil },
+			); err != nil {
 				return err
 			}
 			for _, id := range ids {
@@ -111,7 +115,17 @@ func (s *Store) initialize(path string) error {
 						if err != nil {
 							return err
 						}
-						card.Items = append(card.Items, ContentItem{ID: itemID, FolderID: card.FolderID, CardID: id, Position: position, Kind: "text", Text: text})
+						card.Items = append(
+							card.Items,
+							ContentItem{
+								ID:       itemID,
+								FolderID: card.FolderID,
+								CardID:   id,
+								Position: position,
+								Kind:     "text",
+								Text:     text,
+							},
+						)
 					}
 				} else if version == "3" {
 					legacy, err := loadCard(tx, card.FolderID, id)
@@ -120,7 +134,10 @@ func (s *Store) initialize(path string) error {
 					}
 					card.Items = legacy.Items
 				} else {
-					card.Items, err = mergeLegacyItems(folder.Bucket(itemsBucket).Bucket([]byte(id)), card)
+					card.Items, err = mergeLegacyItems(
+						folder.Bucket(itemsBucket).Bucket([]byte(id)),
+						card,
+					)
 					if err != nil {
 						return err
 					}
@@ -164,7 +181,8 @@ func mergeLegacyItems(bucket *bolt.Bucket, card Card) ([]ContentItem, error) {
 		if err := json.Unmarshal(data, &item); err != nil {
 			return err
 		}
-		if item.ID != string(id) || item.CardID != card.ID || item.FolderID != card.FolderID || (item.Side != "prompt" && item.Side != "answer") {
+		if item.ID != string(id) || item.CardID != card.ID || item.FolderID != card.FolderID ||
+			(item.Side != "prompt" && item.Side != "answer") {
 			return errors.New("invalid legacy content ownership or side")
 		}
 		if err := validateItem(item.ContentItem); err != nil {

@@ -43,7 +43,7 @@ func TestEmptyDatabaseAndPermissions(t *testing.T) {
 		t.Fatalf("expected JSON [], got %s, error=%v", data, err)
 	}
 	if runtime.GOOS != "windows" {
-		for name, want := range map[string]os.FileMode{filepath.Dir(path): 0700, path: 0600} {
+		for name, want := range map[string]os.FileMode{filepath.Dir(path): 0o700, path: 0o600} {
 			info, err := os.Stat(name)
 			if err != nil {
 				t.Fatal(err)
@@ -92,7 +92,8 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 		root := tx.Bucket(foldersBucket)
 		for _, folder := range want {
 			bucket := root.Bucket([]byte(folder.ID))
-			if bucket == nil || bucket.Get(metadataKey) == nil || bucket.Bucket(cardsBucket) == nil {
+			if bucket == nil || bucket.Get(metadataKey) == nil ||
+				bucket.Bucket(cardsBucket) == nil {
 				return fmt.Errorf("folder %s missing metadata or cards bucket", folder.ID)
 			}
 			if key, _ := bucket.Bucket(cardsBucket).Cursor().First(); key != nil {
@@ -132,7 +133,9 @@ func TestConcurrentFolderCreation(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 32 {
 		wg.Go(func() {
-			if _, err := store.CreateFolder(CreateFolderInput{Title: fmt.Sprintf("Folder %d", i)}); err != nil {
+			if _, err := store.CreateFolder(
+				CreateFolderInput{Title: fmt.Sprintf("Folder %d", i)},
+			); err != nil {
 				t.Error(err)
 			}
 		})
@@ -161,7 +164,12 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateFolder(CreateFolderInput{Title: "Must not overwrite"}); !errors.Is(err, bolt.ErrBucketExists) {
+	if _, err := store.CreateFolder(
+		CreateFolderInput{Title: "Must not overwrite"},
+	); !errors.Is(
+		err,
+		bolt.ErrBucketExists,
+	) {
 		t.Fatalf("expected bucket collision, got %v", err)
 	}
 	if err := store.db.View(func(tx *bolt.Tx) error {
@@ -196,7 +204,7 @@ func TestDatabaseLockTimesOut(t *testing.T) {
 func TestUnreadableDatabaseIsNotReplaced(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
 	original := bytes.Repeat([]byte("not a database"), 1024)
-	if err := os.WriteFile(path, original, 0600); err != nil {
+	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := Open(path)
@@ -220,7 +228,9 @@ func TestReadFailureDoesNotReturnPartialFolders(t *testing.T) {
 		}
 	}
 	if err := store.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(foldersBucket).Bucket([]byte("00000000000000000002")).Put(metadataKey, []byte("{broken"))
+		return tx.Bucket(foldersBucket).
+			Bucket([]byte("00000000000000000002")).
+			Put(metadataKey, []byte("{broken"))
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +247,12 @@ func TestClosedStoreReturnsErrors(t *testing.T) {
 	if _, err := store.ListFolders(); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
 		t.Fatalf("expected closed database error, got %v", err)
 	}
-	if _, err := store.CreateFolder(CreateFolderInput{Title: "Ideas"}); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+	if _, err := store.CreateFolder(
+		CreateFolderInput{Title: "Ideas"},
+	); !errors.Is(
+		err,
+		bolt.ErrDatabaseNotOpen,
+	) {
 		t.Fatalf("expected closed database error, got %v", err)
 	}
 }

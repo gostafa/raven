@@ -16,9 +16,23 @@ import (
 
 // Deliberately exclude active formats such as SVG and HTML.
 var mediaTypes = map[string]string{
-	".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif",
-	".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".flac": "audio/flac",
-	".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".ogv": "video/ogg", ".mov": "video/quicktime",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".png":  "image/png",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+	".avif": "image/avif",
+	".mp3":  "audio/mpeg",
+	".wav":  "audio/wav",
+	".m4a":  "audio/mp4",
+	".ogg":  "audio/ogg",
+	".oga":  "audio/ogg",
+	".flac": "audio/flac",
+	".mp4":  "video/mp4",
+	".m4v":  "video/mp4",
+	".webm": "video/webm",
+	".ogv":  "video/ogg",
+	".mov":  "video/quicktime",
 }
 var itemIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
@@ -37,7 +51,8 @@ func (s *Store) mediaPath(relative string) string {
 
 func inspectMedia(file *os.File, kind, source string) (string, error) {
 	declared := mediaTypes[strings.ToLower(filepath.Ext(source))]
-	if (kind != "audio" && kind != "image" && kind != "video") || !strings.HasPrefix(declared, kind+"/") {
+	if (kind != "audio" && kind != "image" && kind != "video") ||
+		!strings.HasPrefix(declared, kind+"/") {
 		return "", errors.New("choose a supported file for this media type")
 	}
 	var header [512]byte
@@ -134,7 +149,7 @@ func (s *Store) cleanupMedia() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(s.mediaDir, 0700); err != nil {
+	if err := os.MkdirAll(s.mediaDir, 0o700); err != nil {
 		return err
 	}
 	referenced := make(map[string]bool)
@@ -151,7 +166,8 @@ func (s *Store) cleanupMedia() error {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		managed := strings.HasPrefix(name, ".import-") || validMediaPath("media/"+name, strings.TrimSuffix(name, filepath.Ext(name)))
+		managed := strings.HasPrefix(name, ".import-") ||
+			validMediaPath("media/"+name, strings.TrimSuffix(name, filepath.Ext(name)))
 		if !entry.IsDir() && managed && !referenced[name] {
 			if err := os.Remove(filepath.Join(s.mediaDir, name)); err != nil {
 				return err
@@ -170,7 +186,8 @@ func (s *Store) MediaHandler() http.Handler {
 			return
 		}
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/media/"), "/")
-		if !strings.HasPrefix(r.URL.Path, "/media/") || len(parts) != 3 || !itemIDPattern.MatchString(parts[2]) {
+		if !strings.HasPrefix(r.URL.Path, "/media/") || len(parts) != 3 ||
+			!itemIDPattern.MatchString(parts[2]) {
 			http.NotFound(w, r)
 			return
 		}

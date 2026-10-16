@@ -21,16 +21,24 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.CreateCard(CreateCardInput{FolderID: folder.ID, Items: textItems("  See you tomorrow? ", " Hasta mañana. ")})
+	card, err := store.CreateCard(
+		CreateCardInput{
+			FolderID: folder.ID,
+			Items:    textItems("  See you tomorrow? ", " Hasta mañana. "),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if card.Items[0].Text != "See you tomorrow?" || card.Items[1].Text != "Hasta mañana." || card.LastReviewed != 0 {
+	if card.Items[0].Text != "See you tomorrow?" || card.Items[1].Text != "Hasta mañana." ||
+		card.LastReviewed != 0 {
 		t.Fatalf("unexpected new card: %+v", card)
 	}
 	initial := card.Items[0]
-	expected, err := fsrs.NewFSRS(fsrs.DefaultParam()).Next(fsrs.NewCard(initial.Schedule.LastReview), initial.Schedule.LastReview, fsrs.Again)
-	if err != nil || !reflect.DeepEqual(initial.Schedule, expected.Card) || !initial.Reviews[0].Automatic {
+	expected, err := fsrs.NewFSRS(fsrs.DefaultParam()).
+		Next(fsrs.NewCard(initial.Schedule.LastReview), initial.Schedule.LastReview, fsrs.Again)
+	if err != nil || !reflect.DeepEqual(initial.Schedule, expected.Card) ||
+		!initial.Reviews[0].Automatic {
 		t.Fatal("initialization differs from FSRS Again")
 	}
 	sibling := card.Items[1]
@@ -45,7 +53,9 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(card.Items[0].Schedule, expected.Card) || !reflect.DeepEqual(card.Items[1], sibling) || card.LastReviewed != now.UnixMilli() {
+		if !reflect.DeepEqual(card.Items[0].Schedule, expected.Card) ||
+			!reflect.DeepEqual(card.Items[1], sibling) ||
+			card.LastReviewed != now.UnixMilli() {
 			t.Fatal("rating differs from FSRS or changed sibling")
 		}
 		now = expected.Card.Due
@@ -61,7 +71,6 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(cards, []Card{card}) {
 		t.Fatalf("cards after reopen: %+v, %v", cards, err)
 	}
-
 }
 
 func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
@@ -81,7 +90,9 @@ func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 	if err != nil || cards == nil || len(cards) != 0 {
 		t.Fatalf("failed save wrote cards: %+v, %v", cards, err)
 	}
-	card, err := store.CreateCard(CreateCardInput{FolderID: first.ID, Items: textItems("Question", "Answer")})
+	card, err := store.CreateCard(
+		CreateCardInput{FolderID: first.ID, Items: textItems("Question", "Answer")},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,10 +112,23 @@ func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 	if _, err := store.ListCards(); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
 		t.Fatalf("closed list: %v", err)
 	}
-	if _, err := store.CreateCard(CreateCardInput{FolderID: first.ID, Items: textItems("Question", "Answer")}); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+	if _, err := store.CreateCard(
+		CreateCardInput{FolderID: first.ID, Items: textItems("Question", "Answer")},
+	); !errors.Is(
+		err,
+		bolt.ErrDatabaseNotOpen,
+	) {
 		t.Fatalf("closed create: %v", err)
 	}
-	if _, err := store.ReviewItem(first.ID, card.ID, card.Items[0].ID, 3); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+	if _, err := store.ReviewItem(
+		first.ID,
+		card.ID,
+		card.Items[0].ID,
+		3,
+	); !errors.Is(
+		err,
+		bolt.ErrDatabaseNotOpen,
+	) {
 		t.Fatalf("closed review: %v", err)
 	}
 }

@@ -26,6 +26,7 @@ func (f *fakeAutostart) EnableWithOptions(options application.AutostartOptions) 
 	}
 	return f.operationErr
 }
+
 func (f *fakeAutostart) Disable() error {
 	f.disables++
 	if f.operationErr == nil {
@@ -33,6 +34,7 @@ func (f *fakeAutostart) Disable() error {
 	}
 	return f.operationErr
 }
+
 func (f *fakeAutostart) IsEnabled() (bool, error) {
 	f.reads++
 	return f.enabled, f.statusErr
@@ -70,21 +72,34 @@ func TestAutostartDefaultsAndMenuState(t *testing.T) {
 			backend := &fakeAutostart{enabled: tc.enabled}
 			settings := &fakeAutostartSettings{claimed: tc.claimed}
 			checked, available := false, false
-			c := &autostartController{backend: backend, debug: tc.debug, publish: func(b, a bool) { checked, available = b, a }}
+			c := &autostartController{
+				backend: backend,
+				debug:   tc.debug,
+				publish: func(b, a bool) { checked, available = b, a },
+			}
 			if err := c.initialize(settings); err != nil {
 				t.Fatal(err)
 			}
-			if checked != tc.wantChecked || available != tc.wantAvailable || backend.enables != tc.wantEnables {
+			if checked != tc.wantChecked || available != tc.wantAvailable ||
+				backend.enables != tc.wantEnables {
 				t.Fatalf("checked=%v available=%v enables=%d", checked, available, backend.enables)
 			}
 			if tc.debug {
 				_ = c.toggle()
 				_ = c.refresh()
-				if settings.calls != 0 || backend.reads != 0 || backend.enables != 0 || backend.disables != 0 {
+				if settings.calls != 0 || backend.reads != 0 || backend.enables != 0 ||
+					backend.disables != 0 {
 					t.Fatal("development touched OS settings")
 				}
 			}
-			if tc.wantEnables > 0 && !reflect.DeepEqual(backend.options, application.AutostartOptions{Identifier: applicationID, Arguments: []string{autostartArgument}}) {
+			if tc.wantEnables > 0 &&
+				!reflect.DeepEqual(
+					backend.options,
+					application.AutostartOptions{
+						Identifier: applicationID,
+						Arguments:  []string{autostartArgument},
+					},
+				) {
 				t.Fatalf("registration: %+v", backend.options)
 			}
 		})
@@ -151,7 +166,10 @@ func TestAutostartRequiresDurableMarkerAndEffectiveRegistration(t *testing.T) {
 	failure := errors.New("database closed")
 	backend := &fakeAutostart{}
 	c := &autostartController{backend: backend}
-	if err := c.initialize(&fakeAutostartSettings{err: failure}); !errors.Is(err, failure) || c.ready || backend.reads != 0 {
+	if err := c.initialize(
+		&fakeAutostartSettings{err: failure},
+	); !errors.Is(err, failure) || c.ready ||
+		backend.reads != 0 {
 		t.Fatalf("marker failure: %v", err)
 	}
 	_ = c.toggle()

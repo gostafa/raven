@@ -36,7 +36,11 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.db.View(func(tx *bolt.Tx) error {
-		if tx.Bucket(foldersBucket).Bucket([]byte(first.ID)).Bucket(itemsBucket).Bucket([]byte(removed.ID)) != nil {
+		if tx.Bucket(foldersBucket).
+			Bucket([]byte(first.ID)).
+			Bucket(itemsBucket).
+			Bucket([]byte(removed.ID)) !=
+			nil {
 			t.Error("deleted card still has item records")
 		}
 		return nil
@@ -54,7 +58,8 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	cards, err = s.ListCards()
-	if err != nil || len(cards) != 1 || cards[0].FolderID != survivor.FolderID || cards[0].ID != survivor.ID {
+	if err != nil || len(cards) != 1 || cards[0].FolderID != survivor.FolderID ||
+		cards[0].ID != survivor.ID {
 		t.Fatalf("after folder deletion: %v, %v", cards, err)
 	}
 	folders, err := s.ListFolders()

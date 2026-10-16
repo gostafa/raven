@@ -17,11 +17,15 @@ func TestAutostartMarkerPersistsWithoutChangingContentOrSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	folder, err := s.CreateFolder(CreateFolderInput{Title: "Existing folder", Tags: []string{"retained"}})
+	folder, err := s.CreateFolder(
+		CreateFolderInput{Title: "Existing folder", Tags: []string{"retained"}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: textItems("Existing memory")})
+	card, err := s.CreateCard(
+		CreateCardInput{FolderID: folder.ID, Items: textItems("Existing memory")},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

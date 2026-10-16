@@ -106,7 +106,10 @@ func loadCard(tx *bolt.Tx, folderID, cardID string) (Card, error) {
 	if card.ID != cardID || card.FolderID != folderID || card.CreatedAt <= 0 {
 		return Card{}, errors.New("invalid card metadata")
 	}
-	items := tx.Bucket(foldersBucket).Bucket([]byte(folderID)).Bucket(itemsBucket).Bucket([]byte(cardID))
+	items := tx.Bucket(foldersBucket).
+		Bucket([]byte(folderID)).
+		Bucket(itemsBucket).
+		Bucket([]byte(cardID))
 	if items == nil {
 		return Card{}, errors.New("missing card content")
 	}
@@ -123,10 +126,12 @@ func loadCard(tx *bolt.Tx, folderID, cardID string) (Card, error) {
 			return err
 		}
 		if meta := tx.Bucket(metaBucket); meta != nil && string(meta.Get(schemaKey)) == "4" {
-			if item.Schedule.Due.IsZero() || item.Schedule.LastReview.IsZero() || len(item.Reviews) == 0 {
+			if item.Schedule.Due.IsZero() || item.Schedule.LastReview.IsZero() ||
+				len(item.Reviews) == 0 {
 				return errors.New("missing item schedule")
 			}
-			if _, err := fsrs.NewFSRS(fsrs.DefaultParam()).Repeat(item.Schedule, item.Schedule.LastReview); err != nil {
+			if _, err := fsrs.NewFSRS(fsrs.DefaultParam()).
+				Repeat(item.Schedule, item.Schedule.LastReview); err != nil {
 				return fmt.Errorf("invalid item schedule: %w", err)
 			}
 		}
@@ -168,7 +173,9 @@ func validateItem(item ContentItem) error {
 		return errors.New("invalid content item")
 	}
 	if item.Kind == "text" {
-		if strings.TrimSpace(item.Text) == "" || item.RelativePath != "" || item.MIMEType != "" || item.OriginalName != "" || item.ByteSize != 0 {
+		if strings.TrimSpace(item.Text) == "" || item.RelativePath != "" || item.MIMEType != "" ||
+			item.OriginalName != "" ||
+			item.ByteSize != 0 {
 			return errors.New("invalid text item")
 		}
 		return nil
@@ -176,7 +183,9 @@ func validateItem(item ContentItem) error {
 	if item.Kind != "audio" && item.Kind != "image" && item.Kind != "video" {
 		return errors.New("invalid content kind")
 	}
-	if item.Text != "" || item.OriginalName == "" || item.ByteSize <= 0 || !strings.HasPrefix(item.MIMEType, item.Kind+"/") || !validMediaPath(item.RelativePath, item.ID) {
+	if item.Text != "" || item.OriginalName == "" || item.ByteSize <= 0 ||
+		!strings.HasPrefix(item.MIMEType, item.Kind+"/") ||
+		!validMediaPath(item.RelativePath, item.ID) {
 		return errors.New("invalid media item")
 	}
 	return nil
@@ -295,7 +304,12 @@ func (s *Store) saveCard(folderID, cardID string, drafts []ItemDraft) (Card, err
 				return errors.New("card ID sequence exhausted")
 			}
 			now := time.Now().UnixMilli()
-			card = Card{ID: fmt.Sprintf("%020d", sequence), FolderID: folderID, CreatedAt: now, DueAt: now}
+			card = Card{
+				ID:        fmt.Sprintf("%020d", sequence),
+				FolderID:  folderID,
+				CreatedAt: now,
+				DueAt:     now,
+			}
 			if bucket.Get([]byte(card.ID)) != nil {
 				return errors.New("card ID already exists")
 			}
@@ -353,7 +367,10 @@ func (s *Store) saveCard(folderID, cardID string, drafts []ItemDraft) (Card, err
 	return card, nil
 }
 
-func (s *Store) prepareItems(drafts []ItemDraft, previous []ContentItem) ([]ContentItem, []string, error) {
+func (s *Store) prepareItems(
+	drafts []ItemDraft,
+	previous []ContentItem,
+) ([]ContentItem, []string, error) {
 	items := make([]ContentItem, 0, len(drafts))
 	imported := []string{}
 	old := make(map[string]ContentItem)
@@ -420,7 +437,11 @@ func (s *Store) ReviewItem(folderID, cardID, itemID string, rating int) (Card, e
 	return s.reviewItemAt(folderID, cardID, itemID, rating, time.Time{})
 }
 
-func (s *Store) reviewItemAt(folderID, cardID, itemID string, rating int, now time.Time) (Card, error) {
+func (s *Store) reviewItemAt(
+	folderID, cardID, itemID string,
+	rating int,
+	now time.Time,
+) (Card, error) {
 	if rating < int(fsrs.Again) || rating > int(fsrs.Easy) {
 		return Card{}, errors.New("invalid review rating")
 	}
@@ -440,7 +461,8 @@ func (s *Store) reviewItemAt(folderID, cardID, itemID string, rating int, now ti
 			if now.IsZero() {
 				now = time.Now()
 			}
-			result, err := fsrs.NewFSRS(fsrs.DefaultParam()).Next(item.Schedule, now, fsrs.Rating(rating))
+			result, err := fsrs.NewFSRS(fsrs.DefaultParam()).
+				Next(item.Schedule, now, fsrs.Rating(rating))
 			if err != nil {
 				return err
 			}

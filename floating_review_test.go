@@ -30,7 +30,9 @@ func TestFloatingReviewBounds(t *testing.T) {
 			if got != test.want {
 				t.Fatalf("got %+v, want %+v", got, test.want)
 			}
-			if got.X < test.area.X || got.Y < test.area.Y || got.X+got.Width > test.area.X+test.area.Width || got.Y+got.Height > test.area.Y+test.area.Height {
+			if got.X < test.area.X || got.Y < test.area.Y ||
+				got.X+got.Width > test.area.X+test.area.Width ||
+				got.Y+got.Height > test.area.Y+test.area.Height {
 				t.Fatalf("panel %+v escapes work area %+v", got, test.area)
 			}
 		})

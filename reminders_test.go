@@ -2,12 +2,13 @@ package main
 
 import (
 	"errors"
-	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
-	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"path/filepath"
-	"raven/internal/storage"
 	"testing"
 	"time"
+
+	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+	"raven/internal/storage"
 )
 
 func TestReminderSnapshotGroupsDueItemsAndFindsNextDeadline(t *testing.T) {
@@ -20,10 +21,18 @@ func TestReminderSnapshotGroupsDueItemsAndFindsNextDeadline(t *testing.T) {
 		return value
 	}
 	cards := []storage.Card{{ID: "card", FolderID: "folder", Items: []storage.ContentItem{
-		item("overdue", now.Add(-time.Hour), false), item("due", now, false), item("notified", now, true), item("future", now.Add(2*time.Second), false),
+		item(
+			"overdue",
+			now.Add(-time.Hour),
+			false,
+		),
+		item("due", now, false),
+		item("notified", now, true),
+		item("future", now.Add(2*time.Second), false),
 	}}}
 	pending, delay := reminderSnapshot(cards, now)
-	if len(pending) != 2 || delay != 2*time.Second || pending[0].ItemID != "overdue" || pending[1].ItemID != "due" {
+	if len(pending) != 2 || delay != 2*time.Second || pending[0].ItemID != "overdue" ||
+		pending[1].ItemID != "due" {
 		t.Fatalf("pending=%+v delay=%v", pending, delay)
 	}
 	// Simulate resume: future work is now overdue and gets reconciled immediately.
@@ -40,6 +49,7 @@ type fakeReminderNotifier struct {
 }
 
 func (n *fakeReminderNotifier) CheckNotificationAuthorization() (bool, error) { return n.allowed, nil }
+
 func (n *fakeReminderNotifier) SendNotification(options notifications.NotificationOptions) error {
 	if n.fail {
 		return errors.New("delivery failed")
@@ -56,7 +66,12 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 	}
 	defer func() { _ = store.Close() }()
 	folder, _ := store.CreateFolder(storage.CreateFolderInput{Title: "Due"})
-	card, err := store.CreateCard(storage.CreateCardInput{FolderID: folder.ID, Items: []storage.ItemDraft{{Kind: "text", Text: "one"}, {Kind: "text", Text: "two"}}})
+	card, err := store.CreateCard(
+		storage.CreateCardInput{
+			FolderID: folder.ID,
+			Items:    []storage.ItemDraft{{Kind: "text", Text: "one"}, {Kind: "text", Text: "two"}},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

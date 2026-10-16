@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"mime"
 	"net/http"
 	"os"
@@ -12,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
-	"raven/internal/storage"
-
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+	"raven/internal/storage"
 )
 
 const widgetSize = 48
@@ -40,7 +39,10 @@ type RavenService struct {
 	reminderMu   sync.Mutex
 }
 
-func (r *RavenService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
+func (r *RavenService) ServiceStartup(
+	ctx context.Context,
+	options application.ServiceOptions,
+) error {
 	path, err := storage.DefaultPath()
 	if err != nil {
 		return err
@@ -161,7 +163,13 @@ func (r *RavenService) SelectMediaFiles(kind string) ([]SelectedMedia, error) {
 	if r.app == nil || r.mainWindow == nil {
 		return nil, errors.New("file selection is unavailable")
 	}
-	paths, err := r.app.Dialog.OpenFile().AttachToWindow(r.mainWindow).CanChooseFiles(true).CanChooseDirectories(false).AllowsOtherFileTypes(false).AddFilter(kind+" files", filter).PromptForMultipleSelection()
+	paths, err := r.app.Dialog.OpenFile().
+		AttachToWindow(r.mainWindow).
+		CanChooseFiles(true).
+		CanChooseDirectories(false).
+		AllowsOtherFileTypes(false).
+		AddFilter(kind+" files", filter).
+		PromptForMultipleSelection()
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +188,15 @@ func (r *RavenService) SelectMediaFiles(kind string) ([]SelectedMedia, error) {
 		}
 		token := rand.Text()
 		r.previews.Store(token, path)
-		selected = append(selected, SelectedMedia{SourcePath: path, OriginalName: filepath.Base(path), ByteSize: info.Size(), PreviewURL: "/media-preview/" + token})
+		selected = append(
+			selected,
+			SelectedMedia{
+				SourcePath:   path,
+				OriginalName: filepath.Base(path),
+				ByteSize:     info.Size(),
+				PreviewURL:   "/media-preview/" + token,
+			},
+		)
 	}
 	return selected, nil
 }
@@ -208,7 +224,8 @@ func (r *RavenService) mediaMiddleware(next http.Handler) http.Handler {
 				http.NotFound(w, req)
 				return
 			}
-			w.Header().Set("Content-Type", mime.TypeByExtension(strings.ToLower(filepath.Ext(path.(string)))))
+			w.Header().
+				Set("Content-Type", mime.TypeByExtension(strings.ToLower(filepath.Ext(path.(string)))))
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Cache-Control", "no-store")
 			http.ServeContent(w, req, info.Name(), info.ModTime(), file)
@@ -226,7 +243,10 @@ func (r *RavenService) mediaMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (r *RavenService) ReviewItem(folderID, cardID, itemID string, rating int) (storage.Card, error) {
+func (r *RavenService) ReviewItem(
+	folderID, cardID, itemID string,
+	rating int,
+) (storage.Card, error) {
 	if r.store == nil {
 		return storage.Card{}, errors.New("card storage is unavailable")
 	}
@@ -251,7 +271,10 @@ func (r *RavenService) HideMain() {
 func (r *RavenService) ResetWidget() {
 	if screen := r.app.Screen.GetPrimary(); screen != nil {
 		area := screen.WorkArea
-		r.widget.SetPosition(area.X+max(0, area.Width-widgetSize-24), area.Y+max(0, area.Height-widgetSize-24))
+		r.widget.SetPosition(
+			area.X+max(0, area.Width-widgetSize-24),
+			area.Y+max(0, area.Height-widgetSize-24),
+		)
 	}
 	r.widget.Show()
 	r.positionFloatingReview()

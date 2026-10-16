@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+
 	bolt "go.etcd.io/bbolt"
 )
 

@@ -6,8 +6,10 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-var settingsBucket = []byte("settings")
-var autostartInitializedKey = []byte("autostartInitialized")
+var (
+	settingsBucket          = []byte("settings")
+	autostartInitializedKey = []byte("autostartInitialized")
+)
 
 // ClaimAutostartInitialization records the attempt before touching OS settings.
 // A missing bucket is normal for existing databases; no schema migration is needed.

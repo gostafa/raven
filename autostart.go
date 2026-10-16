@@ -9,8 +9,10 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-const autostartArgument = "--autostart"
-const applicationID = "app.raven.desktop"
+const (
+	autostartArgument = "--autostart"
+	applicationID     = "app.raven.desktop"
+)
 
 type autostartBackend interface {
 	EnableWithOptions(application.AutostartOptions) error
@@ -93,7 +95,9 @@ func (c *autostartController) setEnabled(enabled bool) error {
 		err = fmt.Errorf("change login startup registration: %w", err)
 	}
 	if err == nil && statusErr == nil && enabled != c.enabled {
-		err = errors.New("login startup was not changed; check your operating system's startup settings and any required approval")
+		err = errors.New(
+			"login startup was not changed; check your operating system's startup settings and any required approval",
+		)
 	}
 	return errors.Join(err, statusErr)
 }

@@ -60,7 +60,9 @@ func (r *RavenService) ToggleFloatingReview() {
 		}
 		r.placeFloatingReview()
 		r.reviewWindow.Show()
-		r.reviewWindow.DispatchWailsEvent(&application.CustomEvent{Name: "raven:open-floating-review"})
+		r.reviewWindow.DispatchWailsEvent(
+			&application.CustomEvent{Name: "raven:open-floating-review"},
+		)
 		r.reviewWindow.Focus()
 	})
 }

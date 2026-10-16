@@ -30,20 +30,29 @@ func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 		t.Fatal("invalid review mutated data")
 	}
 	// An invalid FSRS time must roll back both the schedule and its review log.
-	if _, err := s.reviewItemAt(folder.ID, card.ID, card.Items[0].ID, 3, card.Items[0].Schedule.LastReview.Add(-time.Second)); err == nil {
+	if _, err := s.reviewItemAt(
+		folder.ID,
+		card.ID,
+		card.Items[0].ID,
+		3,
+		card.Items[0].Schedule.LastReview.Add(-time.Second),
+	); err == nil {
 		t.Fatal("accepted review before last review")
 	}
 	cards, _ = s.ListCards()
 	if !reflect.DeepEqual(cards[0], card) {
 		t.Fatal("failed FSRS operation mutated data")
 	}
-	updated, err := s.UpdateCard(UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: []ItemDraft{
-		{ID: card.Items[1].ID, Kind: "text", Text: "edited"}, {Kind: "text", Text: "new"},
-	}})
+	updated, err := s.UpdateCard(
+		UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: []ItemDraft{
+			{ID: card.Items[1].ID, Kind: "text", Text: "edited"}, {Kind: "text", Text: "new"},
+		}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(updated.Items[0].Schedule, card.Items[1].Schedule) || !reflect.DeepEqual(updated.Items[0].Reviews, card.Items[1].Reviews) {
+	if !reflect.DeepEqual(updated.Items[0].Schedule, card.Items[1].Schedule) ||
+		!reflect.DeepEqual(updated.Items[0].Reviews, card.Items[1].Reviews) {
 		t.Fatal("edit reset schedule")
 	}
 	if updated.Items[1].Schedule.Reps != 1 || !updated.Items[1].Reviews[0].Automatic {
@@ -71,7 +80,9 @@ func TestNotificationAcknowledgmentPersistsAndRejectsStaleSchedules(t *testing.T
 		t.Fatal(err)
 	}
 	cards, _ := s.ListCards()
-	if cards[0].Items[0].LastNotifiedDue != occurrence.Due || cards[0].Items[1].LastNotifiedDue != 0 || cards[0].Items[0].LastNotifiedDue == card.Items[0].Schedule.Due.UnixMilli() {
+	if cards[0].Items[0].LastNotifiedDue != occurrence.Due ||
+		cards[0].Items[1].LastNotifiedDue != 0 ||
+		cards[0].Items[0].LastNotifiedDue == card.Items[0].Schedule.Due.UnixMilli() {
 		t.Fatal("stale acknowledgment suppressed new review")
 	}
 	claimed, err := s.ClaimNotificationPrompt()
@@ -102,7 +113,12 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 	}
 	folder, _ := s.CreateFolder(CreateFolderInput{Title: "V3"})
 	image, _ := mediaFixture(t, ".png")
-	card, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: []ItemDraft{{Kind: "text", Text: "text"}, {Kind: "image", SourcePath: image}}})
+	card, err := s.CreateCard(
+		CreateCardInput{
+			FolderID: folder.ID,
+			Items:    []ItemDraft{{Kind: "text", Text: "text"}, {Kind: "image", SourcePath: image}},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +126,10 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 		if err := tx.Bucket(metaBucket).Put(schemaKey, []byte("3")); err != nil {
 			return err
 		}
-		bucket := tx.Bucket(foldersBucket).Bucket([]byte(folder.ID)).Bucket(itemsBucket).Bucket([]byte(card.ID))
+		bucket := tx.Bucket(foldersBucket).
+			Bucket([]byte(folder.ID)).
+			Bucket(itemsBucket).
+			Bucket([]byte(card.ID))
 		for _, item := range card.Items {
 			data, _ := json.Marshal(item)
 			var old map[string]json.RawMessage
@@ -138,7 +157,9 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, item := range cards[0].Items {
-		if item.ID != card.Items[i].ID || item.RelativePath != card.Items[i].RelativePath || item.Schedule.Reps != 1 || !item.Reviews[0].Automatic {
+		if item.ID != card.Items[i].ID || item.RelativePath != card.Items[i].RelativePath ||
+			item.Schedule.Reps != 1 ||
+			!item.Reviews[0].Automatic {
 			t.Fatal("migration lost content or failed to initialize Again")
 		}
 	}

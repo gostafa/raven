@@ -27,7 +27,10 @@ func (c *reminderCoordinator) wake() {
 func (c *reminderCoordinator) stop() { c.stopOnce.Do(c.cancel); <-c.done }
 
 // A bounded reconciliation interval handles clock changes and resume from sleep.
-func reminderSnapshot(cards []storage.Card, now time.Time) ([]storage.DueOccurrence, time.Duration) {
+func reminderSnapshot(
+	cards []storage.Card,
+	now time.Time,
+) ([]storage.DueOccurrence, time.Duration) {
 	pending := []storage.DueOccurrence{}
 	delay := 30 * time.Second
 	for _, card := range cards {
@@ -35,7 +38,15 @@ func reminderSnapshot(cards []storage.Card, now time.Time) ([]storage.DueOccurre
 			due := item.Schedule.Due
 			if !due.After(now) {
 				if item.LastNotifiedDue != due.UnixMilli() {
-					pending = append(pending, storage.DueOccurrence{FolderID: card.FolderID, CardID: card.ID, ItemID: item.ID, Due: due.UnixMilli()})
+					pending = append(
+						pending,
+						storage.DueOccurrence{
+							FolderID: card.FolderID,
+							CardID:   card.ID,
+							ItemID:   item.ID,
+							Due:      due.UnixMilli(),
+						},
+					)
 				}
 			} else if until := due.Sub(now); until < delay {
 				delay = until
@@ -52,7 +63,11 @@ func (r *RavenService) startReminders() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &reminderCoordinator{cancel: cancel, changed: make(chan struct{}, 1), done: make(chan struct{})}
+	c := &reminderCoordinator{
+		cancel:  cancel,
+		changed: make(chan struct{}, 1),
+		done:    make(chan struct{}),
+	}
 	r.reminders = c
 	go func() {
 		defer close(c.done)
@@ -102,7 +117,11 @@ type reminderNotifier interface {
 	SendNotification(notifications.NotificationOptions) error
 }
 
-func deliverReminders(store *storage.Store, notifier reminderNotifier, pending []storage.DueOccurrence) error {
+func deliverReminders(
+	store *storage.Store,
+	notifier reminderNotifier,
+	pending []storage.DueOccurrence,
+) error {
 	allowed, err := notifier.CheckNotificationAuthorization()
 	if err != nil || !allowed {
 		return err
@@ -112,8 +131,11 @@ func deliverReminders(store *storage.Store, notifier reminderNotifier, pending [
 		sound = &notifications.NotificationSound{Name: "raven.wav"}
 	}
 	if err := notifier.SendNotification(notifications.NotificationOptions{
-		Sound: sound,
-		ID: "raven-due", Title: "Time to review", Body: fmt.Sprintf("%d items are ready to review in Raven.", len(pending)), ThreadID: "raven-reviews",
+		Sound:    sound,
+		ID:       "raven-due",
+		Title:    "Time to review",
+		Body:     fmt.Sprintf("%d items are ready to review in Raven.", len(pending)),
+		ThreadID: "raven-reviews",
 	}); err != nil {
 		return err
 	}

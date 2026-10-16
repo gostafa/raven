@@ -9,14 +9,13 @@ import (
 	"reflect"
 	"testing"
 
-	"raven/internal/storage"
-
 	bolt "go.etcd.io/bbolt"
+	"raven/internal/storage"
 )
 
 func TestSelectedMediaPreview(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "clip.mp4")
-	if err := os.WriteFile(path, []byte("0123456789"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("0123456789"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	service := &RavenService{}
@@ -26,8 +25,14 @@ func TestSelectedMediaPreview(t *testing.T) {
 	request.Header.Set("Range", "bytes=2-5")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusPartialContent || response.Body.String() != "2345" || response.Header().Get("Content-Type") != "video/mp4" {
-		t.Fatalf("preview range: %d %s %v", response.Code, response.Body.String(), response.Header())
+	if response.Code != http.StatusPartialContent || response.Body.String() != "2345" ||
+		response.Header().Get("Content-Type") != "video/mp4" {
+		t.Fatalf(
+			"preview range: %d %s %v",
+			response.Code,
+			response.Body.String(),
+			response.Header(),
+		)
 	}
 	for _, url := range []string{"/media-preview/unknown", "/media-preview/" + path} {
 		response := httptest.NewRecorder()
@@ -37,7 +42,10 @@ func TestSelectedMediaPreview(t *testing.T) {
 		}
 	}
 	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/media-preview/selected-token", nil))
+	handler.ServeHTTP(
+		response,
+		httptest.NewRequest(http.MethodPost, "/media-preview/selected-token", nil),
+	)
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST status: %d", response.Code)
 	}
@@ -59,7 +67,15 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(folders, []storage.Folder{folder}) {
 		t.Fatalf("service folders: %+v, error=%v", folders, err)
 	}
-	card, err := service.CreateCard(storage.CreateCardInput{FolderID: folder.ID, Items: []storage.ItemDraft{{Kind: "text", Text: "A question"}, {Kind: "text", Text: "An answer"}}})
+	card, err := service.CreateCard(
+		storage.CreateCardInput{
+			FolderID: folder.ID,
+			Items: []storage.ItemDraft{
+				{Kind: "text", Text: "A question"},
+				{Kind: "text", Text: "An answer"},
+			},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,10 +84,12 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 		t.Fatalf("service review: %+v, error=%v", card, err)
 	}
 	due := card.DueAt
-	card, err = service.UpdateCard(storage.UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: []storage.ItemDraft{
-		{ID: card.Items[0].ID, Kind: "text", Text: "An edited question"},
-		{ID: card.Items[1].ID, Kind: "text", Text: "An edited answer"},
-	}})
+	card, err = service.UpdateCard(
+		storage.UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: []storage.ItemDraft{
+			{ID: card.Items[0].ID, Kind: "text", Text: "An edited question"},
+			{ID: card.Items[1].ID, Kind: "text", Text: "An edited answer"},
+		}},
+	)
 	if err != nil || card.DueAt != due || card.Items[0].Text != "An edited question" {
 		t.Fatalf("service edit: %+v, error=%v", card, err)
 	}
@@ -102,7 +120,9 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 
 func TestMediaMiddlewareAndPickerErrors(t *testing.T) {
 	service := &RavenService{}
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
+	next := http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) },
+	)
 	for _, test := range []struct {
 		path   string
 		status int

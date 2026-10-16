@@ -36,7 +36,7 @@ func mediaFixture(t *testing.T, ext string) (string, []byte) {
 		t.Fatal("unknown fixture extension")
 	}
 	path := filepath.Join(t.TempDir(), "source"+ext)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path, data
@@ -56,7 +56,10 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	drafts := []ItemDraft{}
 	for batch := range 2 {
 		for i := range 2 {
-			drafts = append(drafts, ItemDraft{Kind: "text", Text: fmt.Sprintf(" text %d %d ", batch, i)})
+			drafts = append(
+				drafts,
+				ItemDraft{Kind: "text", Text: fmt.Sprintf(" text %d %d ", batch, i)},
+			)
 			for _, media := range []struct{ kind, ext string }{{"image", ".png"}, {"audio", ".wav"}, {"video", ".mp4"}} {
 				path, _ := mediaFixture(t, media.ext)
 				drafts = append(drafts, ItemDraft{Kind: media.kind, SourcePath: path})
@@ -90,7 +93,10 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 		if bytes.Contains(data, []byte(`"items"`)) || bytes.Contains(data, []byte(`"prompt"`)) {
 			t.Fatalf("card embeds content: %s", data)
 		}
-		content := tx.Bucket(foldersBucket).Bucket([]byte(folder.ID)).Bucket(itemsBucket).Bucket([]byte(card.ID))
+		content := tx.Bucket(foldersBucket).
+			Bucket([]byte(folder.ID)).
+			Bucket(itemsBucket).
+			Bucket([]byte(card.ID))
 		if content.Stats().KeyN != 16 {
 			t.Fatal("items are not separate records")
 		}
@@ -112,7 +118,8 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.DueAt != due || updated.LastReviewed != reviewed || updated.CreatedAt != card.CreatedAt {
+	if updated.DueAt != due || updated.LastReviewed != reviewed ||
+		updated.CreatedAt != card.CreatedAt {
 		t.Fatal("edit changed schedule")
 	}
 	if updated.Items[0].ID != edit[0].ID || updated.Items[1].Text != "Updated text" {
@@ -140,11 +147,15 @@ func TestContentValidationAndRollback(t *testing.T) {
 	s := openTestStore(t)
 	folder, _ := s.CreateFolder(CreateFolderInput{Title: "First"})
 	other, _ := s.CreateFolder(CreateFolderInput{Title: "Second"})
-	card, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")})
+	card, err := s.CreateCard(
+		CreateCardInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherCard, err := s.CreateCard(CreateCardInput{FolderID: other.ID, Items: textItems("Other", "Answer")})
+	otherCard, err := s.CreateCard(
+		CreateCardInput{FolderID: other.ID, Items: textItems("Other", "Answer")},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,19 +164,27 @@ func TestContentValidationAndRollback(t *testing.T) {
 	duplicate := itemDrafts(card)
 	duplicate = append(duplicate, duplicate[0])
 	invalid := [][]ItemDraft{
-		{}, {{Kind: "text", Text: " "}},
+		{},
+		{{Kind: "text", Text: " "}},
 		{{Kind: "html", Text: "Wrong kind"}},
 		foreign, duplicate,
 		{{ID: card.Items[0].ID, Kind: "image", SourcePath: "anything"}},
 	}
 	for _, drafts := range invalid {
-		if _, err := s.UpdateCard(UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: drafts}); err == nil {
+		if _, err := s.UpdateCard(
+			UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: drafts},
+		); err == nil {
 			t.Fatalf("accepted invalid drafts: %+v", drafts)
 		}
 	}
 	image, _ := mediaFixture(t, ".png")
-	failed := []ItemDraft{{Kind: "image", SourcePath: image}, {Kind: "audio", SourcePath: "missing.wav"}}
-	if _, err := s.UpdateCard(UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: failed}); err == nil {
+	failed := []ItemDraft{
+		{Kind: "image", SourcePath: image},
+		{Kind: "audio", SourcePath: "missing.wav"},
+	}
+	if _, err := s.UpdateCard(
+		UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: failed},
+	); err == nil {
 		t.Fatal("accepted missing import")
 	}
 	entries, _ := os.ReadDir(s.mediaDir)
@@ -173,10 +192,20 @@ func TestContentValidationAndRollback(t *testing.T) {
 		t.Fatal("failed import left media files")
 	}
 	// Force a failure inside the write transaction after a successful copy.
-	if err := s.db.Update(func(tx *bolt.Tx) error { bucket, _ := cardBucket(tx, folder.ID); return bucket.SetSequence(0) }); err != nil {
+	if err := s.db.Update(
+		func(tx *bolt.Tx) error { bucket, _ := cardBucket(tx, folder.ID); return bucket.SetSequence(0) },
+	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: []ItemDraft{{Kind: "image", SourcePath: image}, {Kind: "text", Text: "Answer"}}}); err == nil {
+	if _, err := s.CreateCard(
+		CreateCardInput{
+			FolderID: folder.ID,
+			Items: []ItemDraft{
+				{Kind: "image", SourcePath: image},
+				{Kind: "text", Text: "Answer"},
+			},
+		},
+	); err == nil {
 		t.Fatal("overwrote a colliding card ID")
 	}
 	entries, _ = os.ReadDir(s.mediaDir)
@@ -195,11 +224,27 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 	other, _ := s.CreateFolder(CreateFolderInput{Title: "Other"})
 	image, imageData := mediaFixture(t, ".png")
 	audio, _ := mediaFixture(t, ".wav")
-	card, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: []ItemDraft{{Kind: "image", SourcePath: image}, {Kind: "audio", SourcePath: audio}}})
+	card, err := s.CreateCard(
+		CreateCardInput{
+			FolderID: folder.ID,
+			Items: []ItemDraft{
+				{Kind: "image", SourcePath: image},
+				{Kind: "audio", SourcePath: audio},
+			},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	copyCard, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: []ItemDraft{{Kind: "image", SourcePath: image}, {Kind: "audio", SourcePath: audio}}})
+	copyCard, err := s.CreateCard(
+		CreateCardInput{
+			FolderID: folder.ID,
+			Items: []ItemDraft{
+				{Kind: "image", SourcePath: image},
+				{Kind: "audio", SourcePath: audio},
+			},
+		},
+	)
 	if err != nil || copyCard.Items[0].RelativePath == card.Items[0].RelativePath {
 		t.Fatal("media was shared between cards")
 	}
@@ -248,7 +293,11 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 	}
 	orphan := strings.Repeat("a", 32) + ".png"
 	for _, name := range []string{orphan, ".import-abandoned", "unrelated.txt"} {
-		if err := os.WriteFile(filepath.Join(s.mediaDir, name), []byte("orphan"), 0600); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(s.mediaDir, name),
+			[]byte("orphan"),
+			0o600,
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -281,17 +330,27 @@ func TestMediaTypeValidation(t *testing.T) {
 	s := openTestStore(t)
 	folder, _ := s.CreateFolder(CreateFolderInput{Title: "Media"})
 	path := filepath.Join(t.TempDir(), "fake.png")
-	if err := os.WriteFile(path, []byte("<html>not an image</html>"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("<html>not an image</html>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	image, _ := mediaFixture(t, ".png")
 	for _, draft := range []ItemDraft{{Kind: "image", SourcePath: path}, {Kind: "video", SourcePath: image}, {Kind: "image", SourcePath: filepath.Dir(image)}} {
-		if _, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: append([]ItemDraft{draft}, ItemDraft{Kind: "text", Text: "answer"})}); err == nil {
+		if _, err := s.CreateCard(
+			CreateCardInput{
+				FolderID: folder.ID,
+				Items:    append([]ItemDraft{draft}, ItemDraft{Kind: "text", Text: "answer"}),
+			},
+		); err == nil {
 			t.Fatalf("accepted invalid media: %+v", draft)
 		}
 	}
 	m4a, _ := mediaFixture(t, ".m4a")
-	if _, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: []ItemDraft{{Kind: "audio", SourcePath: m4a}, {Kind: "text", Text: "answer"}}}); err != nil {
+	if _, err := s.CreateCard(
+		CreateCardInput{
+			FolderID: folder.ID,
+			Items:    []ItemDraft{{Kind: "audio", SourcePath: m4a}, {Kind: "text", Text: "answer"}},
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -299,7 +358,9 @@ func TestMediaTypeValidation(t *testing.T) {
 func TestConcurrentReviewAndContentEdit(t *testing.T) {
 	s := openTestStore(t)
 	folder, _ := s.CreateFolder(CreateFolderInput{Title: "Concurrent"})
-	card, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: textItems("prompt", "answer")})
+	card, err := s.CreateCard(
+		CreateCardInput{FolderID: folder.ID, Items: textItems("prompt", "answer")},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,33 +372,42 @@ func TestConcurrentReviewAndContentEdit(t *testing.T) {
 			}
 		})
 		wg.Go(func() {
-			if _, err := s.UpdateCard(UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: itemDrafts(card)}); err != nil {
+			if _, err := s.UpdateCard(
+				UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: itemDrafts(card)},
+			); err != nil {
 				t.Error(err)
 			}
 		})
 	}
 	wg.Wait()
 	cards, err := s.ListCards()
-	if err != nil || cards[0].Items[0].Schedule.Reps != 9 || cards[0].LastReviewed == 0 || cards[0].DueAt <= time.Now().UnixMilli() {
+	if err != nil || cards[0].Items[0].Schedule.Reps != 9 || cards[0].LastReviewed == 0 ||
+		cards[0].DueAt <= time.Now().UnixMilli() {
 		t.Fatalf("edit lost review: %+v, %v", cards, err)
 	}
 }
 
 func createLegacyDB(t *testing.T, path string, malformed bool) []byte {
 	t.Helper()
-	db, err := bolt.Open(path, 0600, nil)
+	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := []byte(`{"id":"00000000000000000001","folderId":"00000000000000000001","prompt":"Old prompt","answer":"Old answer","createdAt":1000,"dueAt":2000,"lastReviewed":1500,"stage":3}`)
+	data := []byte(
+		`{"id":"00000000000000000001","folderId":"00000000000000000001","prompt":"Old prompt","answer":"Old answer","createdAt":1000,"dueAt":2000,"lastReviewed":1500,"stage":3}`,
+	)
 	if malformed {
-		data = []byte(`{"id":"bad","folderId":"missing","prompt":"Old prompt","answer":"Old answer","createdAt":1000,"dueAt":2000}`)
+		data = []byte(
+			`{"id":"bad","folderId":"missing","prompt":"Old prompt","answer":"Old answer","createdAt":1000,"dueAt":2000}`,
+		)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
 		root, _ := tx.CreateBucket(foldersBucket)
 		_ = root.SetSequence(1)
 		folder, _ := root.CreateBucket([]byte("00000000000000000001"))
-		metadata, _ := json.Marshal(Folder{ID: "00000000000000000001", Title: "Legacy", Tags: []string{}})
+		metadata, _ := json.Marshal(
+			Folder{ID: "00000000000000000001", Title: "Legacy", Tags: []string{}},
+		)
 		_ = folder.Put(metadataKey, metadata)
 		cards, _ := folder.CreateBucket(cardsBucket)
 		_ = cards.SetSequence(1)
@@ -364,19 +434,25 @@ func TestLegacyMigrationBackupAndIdempotence(t *testing.T) {
 		t.Fatalf("migration: %v", err)
 	}
 	card := cards[0]
-	if card.CreatedAt != 1000 || card.DueAt <= 2000 || card.LastReviewed != 0 || len(card.Items) != 2 || card.Items[0].Text != "Old prompt" || card.Items[1].Text != "Old answer" {
+	if card.CreatedAt != 1000 || card.DueAt <= 2000 || card.LastReviewed != 0 ||
+		len(card.Items) != 2 ||
+		card.Items[0].Text != "Old prompt" ||
+		card.Items[1].Text != "Old answer" {
 		t.Fatalf("migration lost data: %+v", card)
 	}
 	backups, _ := filepath.Glob(path + ".v1-*.bak")
 	if len(backups) != 1 {
 		t.Fatal("missing pre-migration backup")
 	}
-	backup, err := bolt.Open(backups[0], 0600, &bolt.Options{ReadOnly: true})
+	backup, err := bolt.Open(backups[0], 0o600, &bolt.Options{ReadOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = backup.View(func(tx *bolt.Tx) error {
-		data := tx.Bucket(foldersBucket).Bucket([]byte(card.FolderID)).Bucket(cardsBucket).Get([]byte(card.ID))
+		data := tx.Bucket(foldersBucket).
+			Bucket([]byte(card.FolderID)).
+			Bucket(cardsBucket).
+			Get([]byte(card.ID))
 		if !bytes.Equal(data, original) {
 			t.Fatal("backup does not contain original record")
 		}
@@ -400,7 +476,9 @@ func TestLegacyMigrationBackupAndIdempotence(t *testing.T) {
 	if len(backups) != 1 {
 		t.Fatal("made another backup after migration")
 	}
-	next, err := s.CreateCard(CreateCardInput{FolderID: card.FolderID, Items: textItems("next", "answer")})
+	next, err := s.CreateCard(
+		CreateCardInput{FolderID: card.FolderID, Items: textItems("next", "answer")},
+	)
 	if err != nil || next.ID != "00000000000000000002" {
 		t.Fatal("lost card sequence")
 	}
@@ -413,7 +491,7 @@ func TestFailedMigrationLeavesOriginalRecords(t *testing.T) {
 		_ = s.Close()
 		t.Fatal("accepted invalid legacy ownership")
 	}
-	db, err := bolt.Open(path, 0600, nil)
+	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,16 +517,27 @@ func TestFailedMigrationLeavesOriginalRecords(t *testing.T) {
 func TestSingleContentCards(t *testing.T) {
 	s := openTestStore(t)
 	folder, _ := s.CreateFolder(CreateFolderInput{Title: "Information"})
-	card, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: textItems("A fact worth remembering")})
+	card, err := s.CreateCard(
+		CreateCardInput{FolderID: folder.ID, Items: textItems("A fact worth remembering")},
+	)
 	if err != nil || len(card.Items) != 1 {
 		t.Fatalf("single text card: %+v, %v", card, err)
 	}
 	image, _ := mediaFixture(t, ".png")
-	updated, err := s.UpdateCard(UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: []ItemDraft{{Kind: "image", SourcePath: image}}})
-	if err != nil || len(updated.Items) != 1 || updated.Items[0].Kind != "image" || updated.Items[0].Position != 0 {
+	updated, err := s.UpdateCard(
+		UpdateCardInput{
+			FolderID: folder.ID,
+			CardID:   card.ID,
+			Items:    []ItemDraft{{Kind: "image", SourcePath: image}},
+		},
+	)
+	if err != nil || len(updated.Items) != 1 || updated.Items[0].Kind != "image" ||
+		updated.Items[0].Position != 0 {
 		t.Fatalf("single media card: %+v, %v", updated, err)
 	}
-	if _, err := s.UpdateCard(UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: nil}); err == nil {
+	if _, err := s.UpdateCard(
+		UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: nil},
+	); err == nil {
 		t.Fatal("accepted an empty information card")
 	}
 	cards, err := s.ListCards()
@@ -467,7 +556,16 @@ func TestSidedContentMigration(t *testing.T) {
 			}
 			folder, _ := s.CreateFolder(CreateFolderInput{Title: "Existing content"})
 			image, _ := mediaFixture(t, ".png")
-			card, err := s.CreateCard(CreateCardInput{FolderID: folder.ID, Items: []ItemDraft{{Kind: "text", Text: "Prompt text"}, {Kind: "image", SourcePath: image}, {Kind: "text", Text: "Answer text"}}})
+			card, err := s.CreateCard(
+				CreateCardInput{
+					FolderID: folder.ID,
+					Items: []ItemDraft{
+						{Kind: "text", Text: "Prompt text"},
+						{Kind: "image", SourcePath: image},
+						{Kind: "text", Text: "Answer text"},
+					},
+				},
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -480,7 +578,10 @@ func TestSidedContentMigration(t *testing.T) {
 				if err := tx.Bucket(metaBucket).Put(schemaKey, []byte("2")); err != nil {
 					return err
 				}
-				bucket := tx.Bucket(foldersBucket).Bucket([]byte(folder.ID)).Bucket(itemsBucket).Bucket([]byte(card.ID))
+				bucket := tx.Bucket(foldersBucket).
+					Bucket([]byte(folder.ID)).
+					Bucket(itemsBucket).
+					Bucket([]byte(card.ID))
 				for i, item := range card.Items {
 					old := struct {
 						ContentItem
@@ -518,7 +619,7 @@ func TestSidedContentMigration(t *testing.T) {
 					_ = s.Close()
 					t.Fatal("accepted invalid old item order")
 				}
-				db, err := bolt.Open(path, 0600, nil)
+				db, err := bolt.Open(path, 0o600, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -527,7 +628,10 @@ func TestSidedContentMigration(t *testing.T) {
 					if string(tx.Bucket(metaBucket).Get(schemaKey)) != "2" {
 						t.Fatal("failed migration changed version")
 					}
-					bucket := tx.Bucket(foldersBucket).Bucket([]byte(folder.ID)).Bucket(itemsBucket).Bucket([]byte(card.ID))
+					bucket := tx.Bucket(foldersBucket).
+						Bucket([]byte(folder.ID)).
+						Bucket(itemsBucket).
+						Bucket([]byte(card.ID))
 					for id, data := range originals {
 						if !bytes.Equal(bucket.Get([]byte(id)), data) {
 							t.Fatal("failed migration changed content")
@@ -569,7 +673,10 @@ func TestSidedContentMigration(t *testing.T) {
 				if string(tx.Bucket(metaBucket).Get(schemaKey)) != "4" {
 					t.Fatal("schema not upgraded")
 				}
-				bucket := tx.Bucket(foldersBucket).Bucket([]byte(folder.ID)).Bucket(itemsBucket).Bucket([]byte(card.ID))
+				bucket := tx.Bucket(foldersBucket).
+					Bucket([]byte(folder.ID)).
+					Bucket(itemsBucket).
+					Bucket([]byte(card.ID))
 				return bucket.ForEach(func(_, data []byte) error {
 					if bytes.Contains(data, []byte(`"side"`)) {
 						t.Fatal("kept side in new records")

@@ -1,4 +1,5 @@
-version: '3'
+---
+version: '3.5'
 
 vars:
   APP_NAME: "raven"
@@ -11,6 +12,13 @@ vars:
   GOOS: '{{.GOOS | default OS}}'
 
 includes:
+  taskotter:
+    taskfile: taskotter/Taskfile.yml
+    vars:
+      GO_JUNIT_REPORT_IN: '{{.GO_JUNIT_REPORT_IN | default "test-result.txt"}}'
+      GO_JUNIT_REPORT_OUT: '{{.GO_JUNIT_REPORT_OUT | default "junit.xml"}}'
+      YAMLFIX_EXTRA_ARGS: '{{.YAMLFIX_EXTRA_ARGS | default `--exclude "taskotter/**/*"`}}'
+    dir: .
   common: ./build/Taskfile.yml
   windows: ./build/windows/Taskfile.yml
   darwin: ./build/darwin/Taskfile.yml
