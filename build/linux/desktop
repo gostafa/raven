@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Raven
+Comment=Your quiet desktop companion.
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/raven %u
+Terminal=false
+Type=Application
+Icon=raven
+Categories=Utility;
+StartupWMClass=raven
+
+ 

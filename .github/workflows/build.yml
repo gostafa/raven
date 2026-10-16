@@ -1,0 +1,58 @@
+name: Desktop builds
+
+on:
+  # push:
+  # pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29
+      - name: Install UI dependencies
+        run: npm ci --prefix frontend
+      - name: Generate bindings
+        run: wails3 generate bindings -ts -i -clean
+      - name: Check UI
+        run: npm run check
+      - name: Build desktop application
+        run: npm run build
+      - name: Check Go
+        run: go vet ./...
+      - name: Package macOS application
+        if: runner.os == 'macOS'
+        run: |
+          npm run package
+          tar -czf bin/Raven-macOS.tar.gz -C bin raven.app
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Raven-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            bin/raven
+            bin/raven.exe
+            bin/Raven-macOS.tar.gz
+          if-no-files-found: error
