@@ -15,7 +15,7 @@ import (
 	cardapi "raven/api/cards"
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
-	"raven/internal/features/library"
+	library "raven/internal/features/library/domain"
 )
 
 type (

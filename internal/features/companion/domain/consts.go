@@ -1,7 +1,7 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
-package companion
+package domain
 
 const (
 	// WidgetSize is the floating widget diameter in logical pixels.

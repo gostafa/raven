@@ -18,17 +18,17 @@ import (
 	cardapi "raven/api/cards"
 	folderapi "raven/api/folders"
 	mediaapi "raven/api/media"
-	"raven/internal/features/autostart"
 	loginnative "raven/internal/features/autostart/adapters/native"
 	startupwails "raven/internal/features/autostart/adapters/wails"
+	autostart "raven/internal/features/autostart/application"
 	widgetnative "raven/internal/features/companion/adapters/native"
 	companionwails "raven/internal/features/companion/adapters/wails"
 	"raven/internal/features/library/adapters/boltstore"
 	"raven/internal/features/library/adapters/desktopmedia"
 	"raven/internal/features/library/adapters/scheduling"
 	"raven/internal/features/library/ports"
-	"raven/internal/features/reminders"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
+	reminders "raven/internal/features/reminders/application"
 )
 
 func (service *RavenService) startReminders() {

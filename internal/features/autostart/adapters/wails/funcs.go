@@ -8,7 +8,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"raven/internal/features/autostart"
+	autostart "raven/internal/features/autostart/application"
 )
 
 // EnableWithOptions enables login startup with the supplied application options.

@@ -6,7 +6,7 @@ package scheduling
 import (
 	"errors"
 
-	"raven/internal/features/library"
+	library "raven/internal/features/library/domain"
 )
 
 var (

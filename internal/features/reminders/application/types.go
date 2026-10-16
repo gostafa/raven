@@ -1,8 +1,8 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
-// Package reminders defines review reminder reconciliation and delivery.
-package reminders
+// Package application defines review reminder reconciliation and delivery.
+package application
 
 import (
 	"sync"

@@ -1,8 +1,8 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
-// Package library defines library contracts and content workflows.
-package library
+// Package domain defines library contracts and content workflows.
+package domain
 
 import (
 	"time"

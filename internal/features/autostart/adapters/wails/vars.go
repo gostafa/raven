@@ -4,7 +4,7 @@
 package wails
 
 import (
-	"raven/internal/features/autostart"
+	autostart "raven/internal/features/autostart/application"
 )
 
 var _ autostart.Backend = (*Backend)(nil)

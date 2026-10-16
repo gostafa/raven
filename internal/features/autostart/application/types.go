@@ -1,8 +1,8 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
-// Package autostart defines login startup policy and launch visibility.
-package autostart
+// Package application defines login startup policy and launch visibility.
+package application
 
 import (
 	"sync"

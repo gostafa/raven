@@ -4,7 +4,7 @@
 package wails
 
 import (
-	"raven/internal/features/reminders"
+	reminders "raven/internal/features/reminders/application"
 )
 
 var _ reminders.Notifier = (*Notifier)(nil)

@@ -4,7 +4,7 @@
 package wails
 
 import (
-	"raven/internal/features/companion"
+	companion "raven/internal/features/companion/domain"
 )
 
 var _ companion.Windows = (*Windows)(nil)

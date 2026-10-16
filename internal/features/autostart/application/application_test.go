@@ -1,4 +1,4 @@
-package autostart
+package application
 
 import (
 	"errors"

@@ -28,7 +28,7 @@ import (
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	reviewapi "raven/api/reviews"
-	"raven/internal/features/library"
+	library "raven/internal/features/library/domain"
 	"raven/internal/shared/filesystem"
 )
 

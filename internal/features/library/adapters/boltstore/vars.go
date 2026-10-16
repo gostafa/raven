@@ -7,9 +7,9 @@ import (
 	"errors"
 	"regexp"
 
-	"raven/internal/features/autostart"
+	autostart "raven/internal/features/autostart/application"
 	"raven/internal/features/library/ports"
-	"raven/internal/features/reminders"
+	reminders "raven/internal/features/reminders/application"
 )
 
 var (

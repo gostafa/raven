@@ -90,6 +90,13 @@ func coreDependencyError(path string, s source) error {
 	return nil
 }
 
+func featureLayoutError(path string) error {
+	if strings.HasPrefix(path, "internal/features/") && len(strings.Split(path, "/")) < 5 {
+		return fmt.Errorf("%s: feature roots contain only layer directories", path)
+	}
+	return nil
+}
+
 func facadeErrors(sources []source) []error {
 	types := map[string]struct {
 		expr  ast.Expr
@@ -215,6 +222,14 @@ func TestRepositoryConventions(t *testing.T) {
 			}
 			return nil
 		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if err := featureLayoutError(rel); err != nil {
+			t.Error(err)
+		}
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
@@ -226,11 +241,6 @@ func TestRepositoryConventions(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 		if err := filenameError(d.Name(), s); err != nil {
 			t.Error(err)
 		}
@@ -276,8 +286,8 @@ func TestConventionFixtures(t *testing.T) {
 		})
 	}
 	for _, text := range []string{
-		`package main; import "raven/internal/features/library"; type Card = library.Card`,
-		`package main; import "raven/internal/features/library"; type Envelope struct{ Items []Card }; type Card struct{ Value library.Card }`,
+		`package main; import library "raven/internal/features/library/domain"; type Card = library.Card`,
+		`package main; import library "raven/internal/features/library/domain"; type Envelope struct{ Items []Card }; type Card struct{ Value library.Card }`,
 		`package main; import ext "example.com/vendor"; type Port interface{ Read() ext.Result }`,
 	} {
 		s, err := parseSource("types.go", text)
@@ -315,7 +325,29 @@ func TestConventionFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if coreDependencyError("internal/features/library/funcs.go", s) == nil {
+	if coreDependencyError("internal/features/library/domain/funcs.go", s) == nil {
 		t.Fatal("accepted core-to-adapter dependency")
+	}
+}
+
+func TestFeatureLayoutFixtures(t *testing.T) {
+	for _, tc := range []struct {
+		path  string
+		valid bool
+	}{
+		{"internal/features/library/types.go", false},
+		{"internal/features/library/library_test.go", false},
+		{"internal/features/library/README.md", false},
+		{"internal/features/README.md", false},
+		{"internal/features/library/domain/types.go", true},
+		{"internal/features/library/domain/domain_integration_test.go", true},
+		{"internal/features/library/adapters/boltstore/types.go", true},
+		{"internal/shared/filesystem/types.go", true},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := featureLayoutError(tc.path) == nil; got != tc.valid {
+				t.Fatalf("valid=%v want %v", got, tc.valid)
+			}
+		})
 	}
 }

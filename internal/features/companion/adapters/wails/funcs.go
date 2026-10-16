@@ -9,7 +9,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"raven/internal/features/companion"
+	companion "raven/internal/features/companion/domain"
 	"raven/internal/features/companion/ports"
 )
 

@@ -1,9 +1,9 @@
-package companion_test
+package domain_test
 
 import (
 	"testing"
 
-	"raven/internal/features/companion"
+	companion "raven/internal/features/companion/domain"
 )
 
 func TestFloatingReviewBounds(t *testing.T) {

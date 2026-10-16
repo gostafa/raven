@@ -1,7 +1,7 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
-package companion
+package domain
 
 // Bounds places the floating review window within the available screen area.
 func Bounds(widgetX, widgetY int, area *Rect) Rect {

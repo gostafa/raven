@@ -1,8 +1,8 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
-// Package companion defines floating-window geometry and window ports.
-package companion
+// Package domain defines floating-window geometry and window ports.
+package domain
 
 type (
 	// Rect describes a desktop rectangle in logical pixels.

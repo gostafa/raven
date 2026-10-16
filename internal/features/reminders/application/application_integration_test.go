@@ -1,4 +1,4 @@
-package reminders_test
+package application_test
 
 import (
 	"errors"
@@ -13,7 +13,7 @@ import (
 	reviewapi "raven/api/reviews"
 	"raven/internal/features/library/adapters/boltstore"
 	"raven/internal/features/library/adapters/scheduling"
-	"raven/internal/features/reminders"
+	reminders "raven/internal/features/reminders/application"
 )
 
 func TestReminderSnapshotGroupsDueItemsAndFindsNextDeadline(t *testing.T) {
