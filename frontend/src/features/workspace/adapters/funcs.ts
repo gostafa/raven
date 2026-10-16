@@ -1,15 +1,8 @@
 import { Events } from '@wailsio/runtime';
 import { RavenService } from '../../../../bindings/raven';
-import type { Card as TransportCard, Folder as TransportFolder } from '../../../../bindings/raven/models';
-import { mediaURL, type Card } from '../../cards';
-import type { Folder } from '../../folders';
+import { mediaURL } from '../../cards';
 import type { AppPorts } from '../domain/types';
-function folderFromTransport(value: TransportFolder): Folder {
-  return { ...value, tags: value.tags ?? [] };
-}
-function cardFromTransport(value: TransportCard): Card {
-  return { ...value, items: (value.items ?? []).map((item) => ({ ...item, reviews: item.reviews ?? [] })) };
-}
+import { folderFromTransport, cardFromTransport, draftToTransport, mediaFromTransport } from './transport/funcs';
 async function call<T>(action: () => Promise<T>): Promise<T> {
   try {
     return await action();
@@ -25,12 +18,19 @@ export function createRuntime(): AppPorts {
     CreateFolder: (input) => call(async () => folderFromTransport(await RavenService.CreateFolder(input))),
     DeleteFolder: (id) => call(() => RavenService.DeleteFolder(id)),
     ListCards: () => call(async () => ((await RavenService.ListCards()) ?? []).map(cardFromTransport)),
-    CreateCard: (input) => call(async () => cardFromTransport(await RavenService.CreateCard(input))),
-    UpdateCard: (input) => call(async () => cardFromTransport(await RavenService.UpdateCard(input))),
+    CreateCard: (input) => call(async () => cardFromTransport(await RavenService.CreateCard({
+      folder_id: input.folderId,
+      items: input.items.map(draftToTransport),
+    }))),
+    UpdateCard: (input) => call(async () => cardFromTransport(await RavenService.UpdateCard({
+      folder_id: input.folderId,
+      card_id: input.cardId,
+      items: input.items.map(draftToTransport),
+    }))),
     DeleteCard: (folder, card) => call(() => RavenService.DeleteCard(folder, card)),
     ReviewItem: (folder, card, item, rating) =>
       call(async () => cardFromTransport(await RavenService.ReviewItem(folder, card, item, rating))),
-    SelectMediaFiles: (kind) => call(async () => (await RavenService.SelectMediaFiles(kind)) ?? []),
+    SelectMediaFiles: (kind) => call(async () => ((await RavenService.SelectMediaFiles(kind)) ?? []).map(mediaFromTransport)),
     ShowMain: () => call(() => RavenService.ShowMain()),
     HideMain: () => call(() => RavenService.HideMain()),
     ResetWidget: () => call(() => RavenService.ResetWidget()),

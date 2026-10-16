@@ -4,26 +4,22 @@
 package library
 
 import (
+	"errors"
 	"regexp"
 )
 
-var mediaTypes = map[string]string{
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".png":  "image/png",
-	".gif":  "image/gif",
-	".webp": "image/webp",
-	".avif": "image/avif",
-	".mp3":  "audio/mpeg",
-	".wav":  "audio/wav",
-	".m4a":  "audio/mp4",
-	".ogg":  "audio/ogg",
-	".oga":  "audio/ogg",
-	".flac": "audio/flac",
-	".mp4":  "video/mp4",
-	".m4v":  "video/mp4",
-	".webm": "video/webm",
-	".ogv":  "video/ogg",
-	".mov":  "video/quicktime",
-}
-var itemIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+var (
+	itemIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+	errInvalidContentItem             = errors.New("invalid content item")
+	errInvalidTextItem                = errors.New("invalid text item")
+	errInvalidContentKind             = errors.New("invalid content kind")
+	errInvalidMediaItem               = errors.New("invalid media item")
+	errEnterAFolderTitle              = errors.New("enter a folder title")
+	errInvalidContentOrder            = errors.New("invalid content order")
+	errAddSomethingYouWantToRemember  = errors.New("add something you want to remember")
+	errInvalidReviewRating            = errors.New("invalid review rating")
+	errInvalidExistingItemOrOwnership = errors.New("invalid existing item or ownership")
+	errTextCannotReferenceAFile       = errors.New("text cannot reference a file")
+	errMediaCannotContainText         = errors.New("media cannot contain text")
+)

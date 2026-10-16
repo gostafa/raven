@@ -6,5 +6,5 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// macOS applies its transparent background and panel level through window options.
+// Configure relies on window options for the transparent background and panel level.
 func Configure(_ *application.WebviewWindow) error { return nil }

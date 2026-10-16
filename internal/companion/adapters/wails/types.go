@@ -7,7 +7,9 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-type windows struct {
-	app                              *application.App
-	mainWindow, widget, reviewWindow *application.WebviewWindow
-}
+type (
+	Windows struct {
+		app                              *application.App
+		mainWindow, widget, reviewWindow *application.WebviewWindow
+	}
+)

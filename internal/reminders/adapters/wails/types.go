@@ -7,6 +7,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
-type notifier struct {
-	native *notifications.NotificationService
-}
+type (
+	Notifier struct {
+		native *notifications.NotificationService
+	}
+)

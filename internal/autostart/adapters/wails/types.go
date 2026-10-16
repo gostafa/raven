@@ -7,4 +7,6 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-type backend struct{ native *application.AutostartManager }
+type (
+	Backend struct{ native *application.AutostartManager }
+)

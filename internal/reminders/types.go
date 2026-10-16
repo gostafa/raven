@@ -11,24 +11,31 @@ import (
 	"raven/internal/library"
 )
 
-type Store interface {
-	MarkNotified([]library.DueOccurrence) error
-}
+type (
+	// Store acknowledges notification delivery for unchanged item schedules.
+	Store interface {
+		MarkNotified(occurrences []library.DueOccurrence) error
+	}
 
-type Notifier interface {
-	CheckNotificationAuthorization() (bool, error)
-	Send(int) error
-	RequestAuthorization() error
-}
+	// Notifier provides notification authorization and reminder delivery.
+	Notifier interface {
+		CheckNotificationAuthorization() (bool, error)
+		Send(count int) error
+		RequestAuthorization() error
+	}
 
-type Source interface {
-	Store
-	ListCards() ([]library.Card, error)
-	ClaimNotificationPrompt() (bool, error)
-}
-type Coordinator struct {
-	cancel   context.CancelFunc
-	changed  chan struct{}
-	done     chan struct{}
-	stopOnce sync.Once
-}
+	// Source provides persisted schedules and notification prompt state.
+	Source interface {
+		Store
+		ListCards() ([]library.Card, error)
+		ClaimNotificationPrompt() (bool, error)
+	}
+
+	// Coordinator reconciles review reminders until stopped.
+	Coordinator struct {
+		cancel   context.CancelFunc
+		changed  chan struct{}
+		done     chan struct{}
+		stopOnce sync.Once
+	}
+)

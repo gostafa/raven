@@ -7,161 +7,251 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 )
 
-func (c *Controller) Initialize(settings Settings) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer c.updateMenus()
+// Initialize claims initial registration and reconciles the observed startup state.
+func (controller *Controller) Initialize(settings Settings) error {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	defer controller.updateMenus()
 
-	if c.debug || c.ready {
+	if controller.debug || controller.ready {
 		return nil
 	}
 
-	first, err := settings.ClaimAutostartInitialization()
+	err := controller.initializeRegistration(settings)
 	if err != nil {
-		return err
+		return fmt.Errorf("initialize login startup: %w", err)
 	}
-
-	c.ready = true
-	if err := c.readStatus(); err != nil {
-		return err
-	}
-
-	if !first || c.enabled {
-		return nil
-	}
-
-	return c.setEnabled(true)
-}
-
-func (c *Controller) Toggle() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer c.updateMenus()
-
-	if c.debug || !c.ready {
-		return nil
-	}
-
-	err := c.readStatus()
-	if err != nil {
-		return err
-	}
-
-	return c.setEnabled(!c.enabled)
-}
-
-func (c *Controller) Refresh() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer c.updateMenus()
-
-	if c.debug || !c.ready {
-		return nil
-	}
-
-	return c.readStatus()
-}
-
-func (c *Controller) setEnabled(enabled bool) error {
-	var err error
-
-	if enabled {
-		err = c.backend.EnableWithOptions(Options{
-			Identifier: ApplicationID,
-			Arguments:  []string{autostartArgument},
-		})
-	} else {
-		err = c.backend.Disable()
-	}
-
-	// Even a failed operation can change the OS state. Always read it back.
-	statusErr := c.readStatus()
-
-	if err != nil {
-		err = fmt.Errorf("change login startup registration: %w", err)
-	}
-
-	if err == nil && statusErr == nil && enabled != c.enabled {
-		err = errors.New(
-			"login startup was not changed; check your operating system's startup settings and any required approval",
-		)
-	}
-
-	return errors.Join(err, statusErr)
-}
-
-func (c *Controller) readStatus() error {
-	enabled, err := c.backend.IsEnabled()
-	if err != nil {
-		return fmt.Errorf("read login startup registration: %w", err)
-	}
-
-	c.enabled = enabled
 
 	return nil
 }
 
-func (c *Controller) updateMenus() {
-	if c.publish != nil {
-		c.publish(c.enabled, c.ready && !c.debug)
+func (controller *Controller) initializeRegistration(settings Settings) error {
+	first, err := settings.ClaimAutostartInitialization()
+	if err != nil {
+		return fmt.Errorf("claim login startup initialization: %w", err)
 	}
+
+	controller.ready = true
+
+	err = controller.readStatus()
+	if err != nil {
+		return fmt.Errorf("initialize login startup status: %w", err)
+	}
+
+	forwardErr2 := controller.enableFirstLaunch(first)
+	if forwardErr2 != nil {
+		return fmt.Errorf("initialize registration: %w", forwardErr2)
+	}
+
+	return nil
 }
 
-func IsAutostartLaunch(args []string) bool {
-	return slices.Contains(args, autostartArgument)
+func (controller *Controller) enableFirstLaunch(first bool) error {
+	if !first || controller.enabled {
+		return nil
+	}
+
+	err := controller.setEnabled(true)
+	if err != nil {
+		return fmt.Errorf("enable login startup on first launch: %w", err)
+	}
+
+	return nil
 }
 
-func (v *Visibility) ApplicationStarted() {
-	v.change(func() { v.started = true })
+// Toggle changes login startup registration using the current OS state.
+func (controller *Controller) Toggle() error {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	defer controller.updateMenus()
+
+	if controller.debug || !controller.ready {
+		return nil
+	}
+
+	err := controller.toggleRegistration()
+	if err != nil {
+		return fmt.Errorf("toggle login startup: %w", err)
+	}
+
+	return nil
 }
 
-func (v *Visibility) Classify(automatic bool) {
-	v.change(func() {
-		v.classified = true
-		v.automatic = automatic
+func (controller *Controller) toggleRegistration() error {
+	err := controller.readStatus()
+	if err != nil {
+		return fmt.Errorf("refresh before toggling login startup: %w", err)
+	}
+
+	err = controller.setEnabled(!controller.enabled)
+	if err != nil {
+		return fmt.Errorf("change login startup state: %w", err)
+	}
+
+	return nil
+}
+
+// Refresh refreshes the observed login startup state.
+func (controller *Controller) Refresh() error {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	defer controller.updateMenus()
+
+	if controller.debug || !controller.ready {
+		return nil
+	}
+
+	err := controller.readStatus()
+	if err != nil {
+		return fmt.Errorf("refresh login startup: %w", err)
+	}
+
+	return nil
+}
+
+func (controller *Controller) setEnabled(enabled bool) error {
+	changed := controller.changeRegistration(enabled)
+	// Even a failed operation can change the OS state. Always read it back.
+	observed := controller.readStatus()
+	if changed != nil || observed != nil {
+		return errors.Join(changed, observed)
+	}
+
+	if enabled != controller.enabled {
+		return errLoginStartupNotChanged
+	}
+
+	return nil
+}
+
+func (controller *Controller) changeRegistration(enabled bool) error {
+	if enabled {
+		forwardErr := controller.enableRegistration()
+		if forwardErr != nil {
+			return fmt.Errorf("change registration: %w", forwardErr)
+		}
+
+		return nil
+	}
+
+	err := controller.backend.Disable()
+	if err != nil {
+		return fmt.Errorf("disable login startup registration: %w", err)
+	}
+
+	return nil
+}
+
+func (controller *Controller) enableRegistration() error {
+	err := controller.backend.EnableWithOptions(Options{
+		Identifier: ApplicationID,
+		Arguments:  []string{autostartArgument},
 	})
+	if err != nil {
+		return fmt.Errorf("enable login startup registration: %w", err)
+	}
+
+	return nil
 }
 
-func (v *Visibility) RequestOpen() {
-	v.change(func() { v.open = true })
+func (controller *Controller) readStatus() error {
+	enabled, err := controller.backend.IsEnabled()
+	if err != nil {
+		return fmt.Errorf("read login startup registration: %w", err)
+	}
+
+	controller.enabled = enabled
+
+	return nil
 }
 
-func (v *Visibility) SecondInstance(args []string) {
-	if !IsAutostartLaunch(args) {
-		v.RequestOpen()
+func (controller *Controller) updateMenus() {
+	if controller.publish != nil {
+		controller.publish(controller.enabled, controller.ready && !controller.debug)
 	}
 }
 
-func (v *Visibility) change(change func()) {
-	v.mu.Lock()
+func IsAutostartLaunch(args []string) bool { return slices.Contains(args, autostartArgument) }
+
+// ApplicationStarted records that the native application has started.
+func (visibility *Visibility) ApplicationStarted() {
+	visibility.change(func() { visibility.started = true })
+}
+
+// Classify records whether the launch was automatic.
+func (visibility *Visibility) Classify(automatic bool) {
+	visibility.change(func() { visibility.classified = true; visibility.automatic = automatic })
+}
+
+// RequestOpen records an explicit request to show the main window.
+func (visibility *Visibility) RequestOpen() { visibility.change(func() { visibility.open = true }) }
+
+// SecondInstance handles an additional application launch.
+func (visibility *Visibility) SecondInstance(args []string) {
+	if !IsAutostartLaunch(args) {
+		visibility.RequestOpen()
+	}
+}
+
+func (visibility *Visibility) change(change func()) {
+	visibility.mu.Lock()
 	change()
 
-	show := false
-
-	if v.started && v.classified {
-		show = v.open || (!v.settled && !v.automatic)
-		v.open = false
-		v.settled = true
-	}
-
-	v.mu.Unlock()
+	show := visibility.takeOpenRequest()
+	visibility.mu.Unlock()
 
 	if show {
-		v.show()
+		visibility.show()
 	}
+}
+
+func (visibility *Visibility) takeOpenRequest() bool {
+	if !visibility.started || !visibility.classified {
+		return false
+	}
+
+	show := visibility.open || visibility.firstManualLaunch()
+
+	visibility.open = false
+	visibility.settled = true
+
+	return show
+}
+
+func (visibility *Visibility) firstManualLaunch() bool {
+	return !visibility.settled && !visibility.automatic
 }
 
 func New(backend Backend, debug bool, publish func(bool, bool)) *Controller {
-	return &Controller{backend: backend, debug: debug, publish: publish}
+	return &Controller{
+		backend: backend,
+		debug:   debug,
+		publish: publish,
+		mu:      sync.Mutex{},
+		ready:   false,
+		enabled: false,
+	}
 }
 
-func NewVisibility(show func()) *Visibility { return &Visibility{show: show} }
+func NewVisibility(show func()) *Visibility {
+	return &Visibility{
+		show:       show,
+		mu:         sync.Mutex{},
+		started:    false,
+		classified: false,
+		automatic:  false,
+		open:       false,
+		settled:    false,
+	}
+}
 
-func (c *Controller) SetPublisher(publish func(bool, bool)) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// SetPublisher sets the callback used to update login startup menus.
+func (controller *Controller) SetPublisher(publish func(bool, bool)) {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
 
-	c.publish = publish
+	controller.publish = publish
 }

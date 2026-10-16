@@ -5,6 +5,7 @@ package reminders
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"raven/internal/library"
@@ -48,40 +49,61 @@ func Deliver(
 ) error {
 	allowed, err := notifier.CheckNotificationAuthorization()
 	if err != nil || !allowed {
-		return err
+		if err != nil {
+			return fmt.Errorf("deliver: %w", err)
+		}
+
+		return nil
 	}
 
-	if err := notifier.Send(len(pending)); err != nil {
-		return err
+	sendErr := notifier.Send(len(pending))
+	if sendErr != nil {
+		return fmt.Errorf("deliver: %w", sendErr)
 	}
 
-	return store.MarkNotified(pending)
+	forwardErr := store.MarkNotified(pending)
+	if forwardErr != nil {
+		return fmt.Errorf("deliver: %w", forwardErr)
+	}
+
+	return nil
 }
 
-func (c *Coordinator) Wake() {
+// Wake requests an immediate reminder reconciliation.
+func (coordinator *Coordinator) Wake() {
 	select {
-	case c.changed <- struct{}{}:
+	case coordinator.changed <- struct{}{}:
 	default:
 	}
 }
-func (c *Coordinator) Stop() { c.stopOnce.Do(c.cancel); <-c.done }
+
+// Stop cancels reminder reconciliation and waits for it to finish.
+func (coordinator *Coordinator) Stop() {
+	coordinator.stopOnce.Do(coordinator.cancel)
+	<-coordinator.done
+}
+
 func Start(store Source, notifier Notifier, publish func(), warn func(string, error)) *Coordinator {
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Coordinator{cancel: cancel, changed: make(chan struct{}, 1), done: make(chan struct{})}
+	coordinator := &Coordinator{
+		cancel:  cancel,
+		changed: make(chan struct{}, 1),
+		done:    make(chan struct{}),
+	}
 
 	go func() {
-		defer close(c.done)
+		defer close(coordinator.done)
 
 		if notifier != nil {
 			prompt, err := store.ClaimNotificationPrompt()
 			if err == nil && prompt {
 				go func() {
-					err := notifier.RequestAuthorization()
-					if err != nil {
-						warn("Notification authorization unavailable", err)
+					requestAuthorizationErr := notifier.RequestAuthorization()
+					if requestAuthorizationErr != nil {
+						warn("Notification authorization unavailable", requestAuthorizationErr)
 					}
 
-					c.Wake()
+					coordinator.Wake()
 				}()
 			}
 		}
@@ -98,9 +120,9 @@ func Start(store Source, notifier Notifier, publish func(), warn func(string, er
 				publish()
 
 				if len(pending) > 0 && notifier != nil {
-					err := Deliver(store, notifier, pending)
-					if err != nil {
-						warn("Could not deliver review reminder", err)
+					DeliverErr := Deliver(store, notifier, pending)
+					if DeliverErr != nil {
+						warn("Could not deliver review reminder", DeliverErr)
 					}
 				}
 			} else {
@@ -113,12 +135,12 @@ func Start(store Source, notifier Notifier, publish func(), warn func(string, er
 				timer.Stop()
 
 				return
-			case <-c.changed:
+			case <-coordinator.changed:
 				timer.Stop()
 			case <-timer.C:
 			}
 		}
 	}()
 
-	return c
+	return coordinator
 }

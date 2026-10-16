@@ -4,144 +4,249 @@
 package desktopmedia
 
 import (
+	"context"
 	"crypto/rand"
-	"errors"
+	"fmt"
+	"log/slog"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"raven/internal/library"
 )
 
+// New creates a native picker and an isolated preview registry.
 func New(
 	app *application.App,
 	window *application.WebviewWindow,
 	saved func() http.Handler,
-) *picker {
+) *Picker {
 	if saved == nil {
 		saved = func() http.Handler { return nil }
 	}
 
-	return &picker{app: app, mainWindow: window, saved: saved}
+	return &Picker{
+		choose:   nativeChooser(app, window),
+		saved:    saved,
+		previews: sync.Map{},
+		logger:   slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
 }
 
-func (r *picker) Select(kind string) ([]library.SelectedMedia, error) {
-	filters := map[string]string{
+func nativeChooser(
+	app *application.App,
+	window *application.WebviewWindow,
+) func(string, string) ([]string, error) {
+	return func(kind, filter string) ([]string, error) {
+		if app == nil || window == nil {
+			return nil, errFileSelectionIsUnavailable
+		}
+
+		paths, err := app.Dialog.OpenFile().AttachToWindow(window).CanChooseFiles(true).
+			CanChooseDirectories(false).
+			AllowsOtherFileTypes(false).AddFilter(kind+" files", filter).
+			PromptForMultipleSelection()
+		if err != nil {
+			return nil, fmt.Errorf("select native media files: %w", err)
+		}
+
+		return paths, nil
+	}
+}
+
+// Select selects supported media files and issues temporary preview URLs.
+func (picker *Picker) Select(kind string) ([]library.SelectedMedia, error) {
+	filter := selectionFilter(kind)
+	if filter == "" {
+		return nil, errInvalidMediaType
+	}
+
+	paths, err := picker.choose(kind, filter)
+	if err != nil {
+		return nil, fmt.Errorf("select media: %w", err)
+	}
+
+	result, forwardErr := picker.describePaths(paths, filter)
+	if forwardErr != nil {
+		return result, fmt.Errorf("select: %w", forwardErr)
+	}
+
+	return result, nil
+}
+
+func selectionFilter(kind string) string {
+	return map[string]string{
 		"image": "*.jpg;*.jpeg;*.png;*.gif;*.webp;*.avif",
 		"audio": "*.mp3;*.wav;*.m4a;*.ogg;*.oga;*.flac",
 		"video": "*.mp4;*.m4v;*.webm;*.ogv;*.mov",
-	}
-	filter, ok := filters[kind]
+	}[kind]
+}
 
-	if !ok {
-		return nil, errors.New("invalid media type")
-	}
-
-	if r.app == nil || r.mainWindow == nil {
-		return nil, errors.New("file selection is unavailable")
-	}
-
-	paths, err := r.app.Dialog.OpenFile().
-		AttachToWindow(r.mainWindow).
-		CanChooseFiles(true).
-		CanChooseDirectories(false).
-		AllowsOtherFileTypes(false).
-		AddFilter(kind+" files", filter).
-		PromptForMultipleSelection()
-	if err != nil {
-		return nil, err
-	}
-
+func (picker *Picker) describePaths(
+	paths []string,
+	filter string,
+) ([]library.SelectedMedia, error) {
 	selected := make([]library.SelectedMedia, 0, len(paths))
-	for _, path := range paths {
-		info, err := os.Stat(path)
+	for index := range paths {
+		value, err := picker.describePath(paths[index], filter)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("inspect selected media: %w", err)
 		}
 
-		if !info.Mode().IsRegular() || info.Size() == 0 {
-			return nil, errors.New("select a nonempty media file")
-		}
-
-		ext := strings.ToLower(filepath.Ext(path))
-		if !strings.Contains(";"+filter+";", ";*"+ext+";") {
-			return nil, errors.New("choose a supported file for this media type")
-		}
-
-		token := rand.Text()
-		r.previews.Store(token, path)
-
-		selected = append(
-			selected,
-			library.SelectedMedia{
-				SourcePath:   path,
-				OriginalName: filepath.Base(path),
-				ByteSize:     info.Size(),
-				PreviewURL:   "/media-preview/" + token,
-			},
-		)
+		selected = append(selected, value)
 	}
 
 	return selected, nil
 }
 
-func (r *picker) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if strings.HasPrefix(req.URL.Path, "/media-preview/") {
-			if req.Method != http.MethodGet && req.Method != http.MethodHead {
-				w.WriteHeader(http.StatusMethodNotAllowed)
+func (picker *Picker) describePath(path, filter string) (library.SelectedMedia, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return library.SelectedMedia{}, fmt.Errorf("inspect selected file: %w", err)
+	}
 
-				return
-			}
+	err = validateSelection(info, path, filter)
+	if err != nil {
+		return library.SelectedMedia{}, fmt.Errorf("validate selected file: %w", err)
+	}
 
-			path, ok := r.previews.Load(strings.TrimPrefix(req.URL.Path, "/media-preview/"))
-			if !ok {
-				http.NotFound(w, req)
+	key := rand.Text()
+	picker.previews.Store(key, path)
 
-				return
-			}
+	return library.SelectedMedia{
+		SourcePath:   path,
+		OriginalName: filepath.Base(path),
+		ByteSize:     info.Size(),
+		PreviewURL:   previewRoutePrefix + key,
+	}, nil
+}
 
-			file, err := os.Open(path.(string))
-			if err != nil {
-				http.NotFound(w, req)
+func validateSelection(info os.FileInfo, path, filter string) error {
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return errSelectANonemptyMediaFile
+	}
 
-				return
-			}
-			defer file.Close()
+	extension := strings.ToLower(filepath.Ext(path))
+	if !strings.Contains(";"+filter+";", ";*"+extension+";") {
+		return errChooseASupportedFileForThisMedia
+	}
 
-			info, err := file.Stat()
-			if err != nil || !info.Mode().IsRegular() {
-				http.NotFound(w, req)
+	return nil
+}
 
-				return
-			}
-
-			w.Header().
-				Set("Content-Type", mime.TypeByExtension(strings.ToLower(filepath.Ext(path.(string)))))
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Header().Set("Cache-Control", "no-store")
-			http.ServeContent(w, req, info.Name(), info.ModTime(), file)
-
-			return
+// Middleware serves selected previews and saved media before delegating other routes.
+func (picker *Picker) Middleware(next http.Handler) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case strings.HasPrefix(request.URL.Path, previewRoutePrefix):
+			picker.servePreview(writer, request)
+		case strings.HasPrefix(request.URL.Path, mediaRoutePrefix):
+			picker.serveSaved(writer, request)
+		default:
+			next.ServeHTTP(writer, request)
 		}
+	}
+}
 
-		if !strings.HasPrefix(req.URL.Path, "/media/") {
-			next.ServeHTTP(w, req)
+func (picker *Picker) serveSaved(writer http.ResponseWriter, request *http.Request) {
+	handler := picker.saved()
+	if handler == nil {
+		http.Error(writer, "media storage is unavailable", http.StatusServiceUnavailable)
 
-			return
-		}
+		return
+	}
 
-		handler := r.saved()
-		if handler == nil {
-			http.Error(w, "media storage is unavailable", http.StatusServiceUnavailable)
+	handler.ServeHTTP(writer, request)
+}
 
-			return
-		}
+func (picker *Picker) servePreview(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
 
-		handler.ServeHTTP(w, req)
-	})
+		return
+	}
+
+	path, ok := picker.previewPath(request.URL.Path)
+	if !ok {
+		http.NotFound(writer, request)
+
+		return
+	}
+
+	picker.servePreviewPath(writer, request, path)
+}
+
+func (picker *Picker) previewPath(url string) (string, bool) {
+	value, exists := picker.previews.Load(strings.TrimPrefix(url, previewRoutePrefix))
+	if !exists {
+		return "", false
+	}
+
+	path, valid := value.(string)
+
+	return path, valid
+}
+
+func (picker *Picker) servePreviewPath(
+	writer http.ResponseWriter,
+	request *http.Request,
+	path string,
+) {
+	file, err := openSelectedFile(path)
+	if err != nil {
+		http.NotFound(writer, request)
+
+		return
+	}
+	defer picker.closePreview(request.Context(), file)
+
+	picker.servePreviewFile(writer, request, file)
+}
+
+func openSelectedFile(path string) (*os.File, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve selected media path: %w", err)
+	}
+
+	file, err := os.OpenInRoot(filepath.Dir(resolved), filepath.Base(resolved))
+	if err != nil {
+		return nil, fmt.Errorf("open selected media: %w", err)
+	}
+
+	return file, nil
+}
+
+func (picker *Picker) closePreview(ctx context.Context, file *os.File) {
+	err := file.Close()
+	if err != nil {
+		picker.logger.WarnContext(ctx, "could not close media preview", slog.Any(logErrorKey, err))
+	}
+}
+
+func (picker *Picker) servePreviewFile(
+	writer http.ResponseWriter,
+	request *http.Request,
+	file *os.File,
+) {
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		http.NotFound(writer, request)
+
+		return
+	}
+
+	setPreviewHeaders(writer, info.Name())
+	http.ServeContent(writer, request, info.Name(), info.ModTime(), file)
+}
+
+func setPreviewHeaders(writer http.ResponseWriter, name string) {
+	writer.Header().Set("Content-Type", mime.TypeByExtension(strings.ToLower(filepath.Ext(name))))
+	writer.Header().Set("X-Content-Type-Options", "nosniff")
+	writer.Header().Set("Cache-Control", "no-store")
 }

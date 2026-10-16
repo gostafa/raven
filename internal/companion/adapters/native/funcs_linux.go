@@ -31,7 +31,9 @@ static void raven_style_widget(void *handle) {
 */
 import "C"
 
-import "github.com/wailsapp/wails/v3/pkg/application"
+import (
+	"github.com/wailsapp/wails/v3/pkg/application"
+)
 
 func Configure(window *application.WebviewWindow) error {
 	if handle := window.NativeWindow(); handle != nil {

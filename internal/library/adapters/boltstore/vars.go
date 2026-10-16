@@ -4,46 +4,53 @@
 package boltstore
 
 import (
+	"errors"
 	"regexp"
 )
 
 var (
-	settingsBucket          = []byte("settings")
-	autostartInitializedKey = []byte("autostartInitialized")
+	// Deliberately exclude active formats such as SVG and HTML.
+
+	itemIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+	errMissingMetadata                     = errors.New("missing metadata")
+	errMissingFoldersBucket                = errors.New("missing folders bucket")
+	errInvalidLegacyFolder                 = errors.New("invalid legacy folder")
+	errMissingLegacyContentBucket          = errors.New("missing legacy content bucket")
+	errMissingLegacyCardContent            = errors.New("missing legacy card content")
+	errInvalidLegacyContentOwnershipOrSide = errors.New(
+		"invalid legacy content ownership or side",
+	)
+	errInvalidLegacyContentOrder        = errors.New("invalid legacy content order")
+	errChooseASupportedFileForThisMedia = errors.New(
+		"choose a supported file for this media type",
+	)
+	errEmptyMediaFile                          = errors.New("empty media file")
+	errSelectARegularMediaFile                 = errors.New("select a regular media file")
+	errSelectedFileChangedDuringImportTryAgain = errors.New(
+		"selected file changed during import; try again",
+	)
+	errMediaNotFound             = errors.New("media not found")
+	errFolderIDSequenceExhausted = errors.New("folder ID sequence exhausted")
+	errFolderNotFound            = errors.New("folder not found")
+	errFolderNotFoundOrInvalid   = errors.New("folder not found or invalid")
+	errCardNotFound              = errors.New("card not found")
+	errInvalidCardMetadata       = errors.New("invalid card metadata")
+	errMissingCardContent        = errors.New("missing card content")
+	errInvalidContentOwnership   = errors.New("invalid content ownership")
+	errMissingItemSchedule       = errors.New("missing item schedule")
+	errInvalidFolderBucket       = errors.New("invalid folder bucket")
+	errCardIDIsRequired          = errors.New("card ID is required")
+	errCardIDSequenceExhausted   = errors.New("card ID sequence exhausted")
+	errCardIDAlreadyExists       = errors.New("card ID already exists")
+	errInvalidReviewRating       = errors.New("invalid review rating")
+	errContentItemNotFound       = errors.New("content item not found")
+
+	errEmptyStoredRecord    = errors.New("empty stored record")
+	errAmbiguousStoredField = errors.New("ambiguous stored field names")
+
+	errUnsupportedDatabaseSchema  = errors.New("unsupported database schema")
+	errIncompleteMigrationBackup  = errors.New("incomplete migration backup")
+	errInvalidLegacyCardOwnership = errors.New("invalid legacy card ownership")
+	errInvalidLegacyCard          = errors.New("invalid legacy card")
 )
-
-var (
-	metaBucket = []byte("meta")
-	schemaKey  = []byte("schemaVersion")
-)
-
-// Deliberately exclude active formats such as SVG and HTML.
-var mediaTypes = map[string]string{
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".png":  "image/png",
-	".gif":  "image/gif",
-	".webp": "image/webp",
-	".avif": "image/avif",
-	".mp3":  "audio/mpeg",
-	".wav":  "audio/wav",
-	".m4a":  "audio/mp4",
-	".ogg":  "audio/ogg",
-	".oga":  "audio/ogg",
-	".flac": "audio/flac",
-	".mp4":  "video/mp4",
-	".m4v":  "video/mp4",
-	".webm": "video/webm",
-	".ogv":  "video/ogg",
-	".mov":  "video/quicktime",
-}
-
-var itemIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
-
-var (
-	foldersBucket = []byte("folders")
-	metadataKey   = []byte("metadata")
-	cardsBucket   = []byte("cards")
-)
-
-var itemsBucket = []byte("card_items")

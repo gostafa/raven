@@ -232,9 +232,9 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 		if bytes.Contains(data, []byte(`"items"`)) || bytes.Contains(data, []byte(`"prompt"`)) {
 			t.Fatalf("card embeds content: %s", data)
 		}
-		content := tx.Bucket(foldersBucket).
+		content := tx.Bucket([]byte(foldersBucket)).
 			Bucket([]byte(folder.ID)).
-			Bucket(itemsBucket).
+			Bucket([]byte(itemsBucket)).
 			Bucket([]byte(card.ID))
 		if content.Stats().KeyN != 16 {
 			t.Fatal("items are not separate records")
@@ -553,14 +553,14 @@ func createLegacyDB(t *testing.T, path string, malformed bool) []byte {
 		)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		root, _ := tx.CreateBucket(foldersBucket)
+		root, _ := tx.CreateBucket([]byte(foldersBucket))
 		_ = root.SetSequence(1)
 		folder, _ := root.CreateBucket([]byte("00000000000000000001"))
 		metadata, _ := json.Marshal(
 			library.Folder{ID: "00000000000000000001", Title: "Legacy", Tags: []string{}},
 		)
-		_ = folder.Put(metadataKey, metadata)
-		cards, _ := folder.CreateBucket(cardsBucket)
+		_ = folder.Put([]byte(metadataKey), metadata)
+		cards, _ := folder.CreateBucket([]byte(cardsBucket))
 		_ = cards.SetSequence(1)
 		return cards.Put([]byte("00000000000000000001"), data)
 	})
@@ -600,9 +600,9 @@ func TestLegacyMigrationBackupAndIdempotence(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = backup.View(func(tx *bolt.Tx) error {
-		data := tx.Bucket(foldersBucket).
+		data := tx.Bucket([]byte(foldersBucket)).
 			Bucket([]byte(card.FolderID)).
-			Bucket(cardsBucket).
+			Bucket([]byte(cardsBucket)).
 			Get([]byte(card.ID))
 		if !bytes.Equal(data, original) {
 			t.Fatal("backup does not contain original record")
@@ -648,14 +648,17 @@ func TestFailedMigrationLeavesOriginalRecords(t *testing.T) {
 	}
 	defer db.Close()
 	err = db.View(func(tx *bolt.Tx) error {
-		if tx.Bucket(metaBucket) != nil {
+		if tx.Bucket([]byte(metaBucket)) != nil {
 			t.Fatal("failed migration committed schema version")
 		}
-		folder := tx.Bucket(foldersBucket).Bucket([]byte("00000000000000000001"))
-		if folder.Bucket(itemsBucket) != nil {
+		folder := tx.Bucket([]byte(foldersBucket)).Bucket([]byte("00000000000000000001"))
+		if folder.Bucket([]byte(itemsBucket)) != nil {
 			t.Fatal("failed migration left content records")
 		}
-		if !bytes.Equal(folder.Bucket(cardsBucket).Get([]byte("00000000000000000001")), original) {
+		if !bytes.Equal(
+			folder.Bucket([]byte(cardsBucket)).Get([]byte("00000000000000000001")),
+			original,
+		) {
 			t.Fatal("failed migration changed original card")
 		}
 		return nil
@@ -726,12 +729,13 @@ func TestSidedContentMigration(t *testing.T) {
 			}
 			originals := map[string][]byte{}
 			err = s.db.Update(func(tx *bolt.Tx) error {
-				if err := tx.Bucket(metaBucket).Put(schemaKey, []byte("2")); err != nil {
+				if err := tx.Bucket([]byte(metaBucket)).
+					Put([]byte(schemaKey), []byte("2")); err != nil {
 					return err
 				}
-				bucket := tx.Bucket(foldersBucket).
+				bucket := tx.Bucket([]byte(foldersBucket)).
 					Bucket([]byte(folder.ID)).
-					Bucket(itemsBucket).
+					Bucket([]byte(itemsBucket)).
 					Bucket([]byte(card.ID))
 				for i, item := range card.Items {
 					old := struct {
@@ -776,12 +780,12 @@ func TestSidedContentMigration(t *testing.T) {
 				}
 				defer db.Close()
 				err = db.View(func(tx *bolt.Tx) error {
-					if string(tx.Bucket(metaBucket).Get(schemaKey)) != "2" {
+					if string(tx.Bucket([]byte(metaBucket)).Get([]byte(schemaKey))) != "2" {
 						t.Fatal("failed migration changed version")
 					}
-					bucket := tx.Bucket(foldersBucket).
+					bucket := tx.Bucket([]byte(foldersBucket)).
 						Bucket([]byte(folder.ID)).
-						Bucket(itemsBucket).
+						Bucket([]byte(itemsBucket)).
 						Bucket([]byte(card.ID))
 					for id, data := range originals {
 						if !bytes.Equal(bucket.Get([]byte(id)), data) {
@@ -821,12 +825,12 @@ func TestSidedContentMigration(t *testing.T) {
 				t.Fatal("migration lost media file")
 			}
 			err = s.db.View(func(tx *bolt.Tx) error {
-				if string(tx.Bucket(metaBucket).Get(schemaKey)) != "4" {
+				if string(tx.Bucket([]byte(metaBucket)).Get([]byte(schemaKey))) != "5" {
 					t.Fatal("schema not upgraded")
 				}
-				bucket := tx.Bucket(foldersBucket).
+				bucket := tx.Bucket([]byte(foldersBucket)).
 					Bucket([]byte(folder.ID)).
-					Bucket(itemsBucket).
+					Bucket([]byte(itemsBucket)).
 					Bucket([]byte(card.ID))
 				return bucket.ForEach(func(_, data []byte) error {
 					if bytes.Contains(data, []byte(`"side"`)) {
@@ -887,9 +891,9 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.db.View(func(tx *bolt.Tx) error {
-		if tx.Bucket(foldersBucket).
+		if tx.Bucket([]byte(foldersBucket)).
 			Bucket([]byte(first.ID)).
-			Bucket(itemsBucket).
+			Bucket([]byte(itemsBucket)).
 			Bucket([]byte(removed.ID)) !=
 			nil {
 			t.Error("deleted card still has item records")
@@ -922,7 +926,7 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 	}
 }
 
-func openTestStore(t *testing.T) *store {
+func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := openStore(filepath.Join(t.TempDir(), "raven.db"))
 	if err != nil {
@@ -994,14 +998,14 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 		t.Fatalf("reopened folders: got=%+v, want=%+v, error=%v", got, want, err)
 	}
 	err = store.db.View(func(tx *bolt.Tx) error {
-		root := tx.Bucket(foldersBucket)
+		root := tx.Bucket([]byte(foldersBucket))
 		for _, folder := range want {
 			bucket := root.Bucket([]byte(folder.ID))
-			if bucket == nil || bucket.Get(metadataKey) == nil ||
-				bucket.Bucket(cardsBucket) == nil {
+			if bucket == nil || bucket.Get([]byte(metadataKey)) == nil ||
+				bucket.Bucket([]byte(cardsBucket)) == nil {
 				return fmt.Errorf("folder %s missing metadata or cards bucket", folder.ID)
 			}
-			if key, _ := bucket.Bucket(cardsBucket).Cursor().First(); key != nil {
+			if key, _ := bucket.Bucket([]byte(cardsBucket)).Cursor().First(); key != nil {
 				return fmt.Errorf("folder %s cards bucket is not empty", folder.ID)
 			}
 		}
@@ -1065,7 +1069,7 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 	}
 	// Force a collision after NextSequence so the failed transaction must roll it back.
 	if err := store.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(foldersBucket).SetSequence(0)
+		return tx.Bucket([]byte(foldersBucket)).SetSequence(0)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1078,7 +1082,7 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 		t.Fatalf("expected bucket collision, got %v", err)
 	}
 	if err := store.db.View(func(tx *bolt.Tx) error {
-		if sequence := tx.Bucket(foldersBucket).Sequence(); sequence != 0 {
+		if sequence := tx.Bucket([]byte(foldersBucket)).Sequence(); sequence != 0 {
 			return fmt.Errorf("failed transaction advanced sequence to %d", sequence)
 		}
 		return nil
@@ -1133,9 +1137,9 @@ func TestReadFailureDoesNotReturnPartialFolders(t *testing.T) {
 		}
 	}
 	if err := store.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(foldersBucket).
+		return tx.Bucket([]byte(foldersBucket)).
 			Bucket([]byte("00000000000000000002")).
-			Put(metadataKey, []byte("{broken"))
+			Put([]byte(metadataKey), []byte("{broken"))
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1287,12 +1291,12 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = s.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.Bucket(metaBucket).Put(schemaKey, []byte("3")); err != nil {
+		if err := tx.Bucket([]byte(metaBucket)).Put([]byte(schemaKey), []byte("3")); err != nil {
 			return err
 		}
-		bucket := tx.Bucket(foldersBucket).
+		bucket := tx.Bucket([]byte(foldersBucket)).
 			Bucket([]byte(folder.ID)).
-			Bucket(itemsBucket).
+			Bucket([]byte(itemsBucket)).
 			Bucket([]byte(card.ID))
 		for _, item := range card.Items {
 			data, _ := json.Marshal(item)
@@ -1384,7 +1388,7 @@ func TestAutostartMarkerPersistsWithoutChangingContentOrSchema(t *testing.T) {
 		t.Fatalf("cards changed: %+v, %v", cards, err)
 	}
 	if err := s.db.View(func(tx *bolt.Tx) error {
-		if string(tx.Bucket(metaBucket).Get(schemaKey)) != "4" {
+		if string(tx.Bucket([]byte(metaBucket)).Get([]byte(schemaKey))) != "5" {
 			t.Fatal("settings changed schema version")
 		}
 		return nil
@@ -1422,7 +1426,7 @@ func TestAutostartMarkerFailsOnClosedDatabase(t *testing.T) {
 	}
 }
 
-func openStore(path string) (*store, error) { return Open(path, scheduling.New()) }
+func openStore(path string) (*Store, error) { return Open(path, scheduling.New()) }
 
 func nativeSchedule(v library.Schedule) fsrs.Card {
 	return fsrs.Card{
@@ -1435,5 +1439,224 @@ func nativeSchedule(v library.Schedule) fsrs.Card {
 		State:          fsrs.State(v.State),
 		LastReview:     v.LastReview,
 		RemainingSteps: v.RemainingSteps,
+	}
+}
+
+func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "raven.db")
+	storage, err := openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folder, err := storage.CreateFolder(library.CreateFolderInput{Title: "Existing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	media, contents := mediaFixture(t, ".png")
+	card, err := storage.CreateCard(
+		library.CreateCardInput{FolderID: folder.ID, Items: []library.ItemDraft{
+			{Kind: "text", Text: "Keep this schedule"}, {Kind: "image", SourcePath: media},
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err = storage.ReviewItem(folder.ID, card.ID, card.Items[0].ID, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = storage.MarkNotified(
+		[]library.DueOccurrence{
+			{
+				FolderID: folder.ID,
+				CardID:   card.ID,
+				ItemID:   card.Items[0].ID,
+				Due:      card.Items[0].Schedule.Due.UnixMilli(),
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cards, err := storage.ListCards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := cards[0]
+	claimed, err := storage.ClaimAutostartInitialization()
+	if err != nil || !claimed {
+		t.Fatalf("claim startup: %v %v", claimed, err)
+	}
+	claimed, err = storage.ClaimNotificationPrompt()
+	if err != nil || !claimed {
+		t.Fatalf("claim prompt: %v %v", claimed, err)
+	}
+	err = storage.db.Update(func(tx *bolt.Tx) error {
+		folderBucket := tx.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID))
+		cardsBucket := folderBucket.Bucket([]byte(cardsBucket))
+		if err := cardsBucket.Put(
+			[]byte(card.ID),
+			v4JSON(t, cardsBucket.Get([]byte(card.ID))),
+		); err != nil {
+			return err
+		}
+		items := folderBucket.Bucket([]byte(itemsBucket)).Bucket([]byte(card.ID))
+		for _, item := range want.Items {
+			if err := items.Put(
+				[]byte(item.ID),
+				v4JSON(t, items.Get([]byte(item.ID))),
+			); err != nil {
+				return err
+			}
+		}
+		return tx.Bucket([]byte(metaBucket)).Put([]byte(schemaKey), []byte("4"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := range 2 {
+		reopened, err := openStore(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := reopened.ListCards()
+		if err != nil || !reflect.DeepEqual(got, []library.Card{want}) {
+			t.Fatalf("lost records: %+v %v", got, err)
+		}
+		if claimed, err := reopened.ClaimAutostartInitialization(); err != nil || claimed {
+			t.Fatalf("lost startup marker: %v %v", claimed, err)
+		}
+		if claimed, err := reopened.ClaimNotificationPrompt(); err != nil || claimed {
+			t.Fatalf("lost prompt marker: %v %v", claimed, err)
+		}
+		data, err := os.ReadFile(reopened.mediaPath(want.Items[1].RelativePath))
+		if err != nil || !bytes.Equal(data, contents) {
+			t.Fatalf("lost media: %v", err)
+		}
+		err = reopened.db.View(func(tx *bolt.Tx) error {
+			if string(tx.Bucket([]byte(metaBucket)).Get([]byte(schemaKey))) != "5" {
+				t.Fatal("schema not upgraded")
+			}
+			data := tx.Bucket([]byte(foldersBucket)).
+				Bucket([]byte(folder.ID)).
+				Bucket([]byte(cardsBucket)).
+				Get([]byte(card.ID))
+			if !bytes.Contains(data, []byte(`"folder_id"`)) ||
+				bytes.Contains(data, []byte(`"folderId"`)) {
+				t.Fatalf("wrong persisted keys: %s", data)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatal(err)
+		}
+		backups, err := filepath.Glob(path + ".v4-*.bak")
+		if err != nil || len(backups) != 1 {
+			t.Fatalf("attempt %d backups %v error %v", attempt, backups, err)
+		}
+	}
+}
+
+func v4JSON(t *testing.T, data []byte) []byte {
+	t.Helper()
+	// These are the historical schema-4 field names, independent of Go struct tags.
+	replacer := strings.NewReplacer(
+		`"folder_id":`, `"folderId":`, `"card_id":`, `"cardId":`,
+		`"created_at":`, `"createdAt":`, `"due_at":`, `"dueAt":`,
+		`"last_reviewed":`, `"lastReviewed":`, `"original_name":`, `"originalName":`,
+		`"mime_type":`, `"mimeType":`, `"relative_path":`, `"relativePath":`,
+		`"byte_size":`, `"byteSize":`, `"last_notified_due":`, `"lastNotifiedDue":`,
+		`"due":`, `"Due":`, `"last_review":`, `"LastReview":`,
+		`"stability":`, `"Stability":`, `"difficulty":`, `"Difficulty":`,
+		`"scheduled_days":`, `"ScheduledDays":`, `"reps":`, `"Reps":`,
+		`"lapses":`, `"Lapses":`, `"remaining_steps":`, `"RemainingSteps":`,
+		`"state":`, `"State":`, `"review":`, `"Review":`, `"rating":`, `"Rating":`,
+	)
+	result := []byte(replacer.Replace(string(data)))
+	if !json.Valid(result) {
+		t.Fatal("invalid legacy fixture")
+	}
+	return result
+}
+
+func TestV4MigrationFailureRollsBackOriginalRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "raven.db")
+	storage, err := openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folder, err := storage.CreateFolder(library.CreateFolderInput{Title: "Existing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := storage.CreateCard(
+		library.CreateCardInput{FolderID: folder.ID, Items: textItems("Keep me")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original []byte
+	err = storage.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(foldersBucket)).
+			Bucket([]byte(folder.ID)).
+			Bucket([]byte(cardsBucket))
+		original = v4JSON(t, bucket.Get([]byte(card.ID)))
+		if err := bucket.Put([]byte(card.ID), original); err != nil {
+			return err
+		}
+		items := tx.Bucket([]byte(foldersBucket)).
+			Bucket([]byte(folder.ID)).
+			Bucket([]byte(itemsBucket)).
+			Bucket([]byte(card.ID))
+		if err := items.Put([]byte(card.Items[0].ID), []byte(`{"invalid":`)); err != nil {
+			return err
+		}
+		return tx.Bucket([]byte(metaBucket)).Put([]byte(schemaKey), []byte("4"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if failed, err := openStore(path); err == nil {
+		failed.Close()
+		t.Fatal("accepted corrupted legacy record")
+	}
+	db, err := bolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	err = db.View(func(tx *bolt.Tx) error {
+		if string(tx.Bucket([]byte(metaBucket)).Get([]byte(schemaKey))) != "4" {
+			t.Fatal("failed migration advanced schema")
+		}
+		data := tx.Bucket([]byte(foldersBucket)).
+			Bucket([]byte(folder.ID)).
+			Bucket([]byte(cardsBucket)).
+			Get([]byte(card.ID))
+		if !bytes.Equal(data, original) {
+			t.Fatal("failed migration rewrote original records")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecordDecoderRejectsMalformedAndAmbiguousData(t *testing.T) {
+	for _, data := range []string{"", "{", "[", `{"folderId":"one","folder_id":"two"}`, `{"items":[{"Due":1,"due":2}]}`} {
+		var target map[string]any
+		if err := decodeRecord([]byte(data), &target); err == nil {
+			t.Fatalf("accepted %q", data)
+		}
 	}
 }

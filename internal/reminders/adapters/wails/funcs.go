@@ -8,26 +8,29 @@ import (
 	"runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
-
-	"raven/internal/reminders"
 )
 
-func New(native *notifications.NotificationService) reminders.Notifier {
-	return notifier{native: native}
+func New(native *notifications.NotificationService) Notifier {
+	return Notifier{native: native}
 }
 
-func (n notifier) CheckNotificationAuthorization() (bool, error) {
-	return n.native.CheckNotificationAuthorization()
+func (notifier Notifier) CheckNotificationAuthorization() (bool, error) {
+	result, forwardErr := notifier.native.CheckNotificationAuthorization()
+	if forwardErr != nil {
+		return result, fmt.Errorf("check notification authorization: %w", forwardErr)
+	}
+
+	return result, nil
 }
 
-func (n notifier) Send(count int) error {
+func (notifier Notifier) Send(count int) error {
 	var sound *notifications.NotificationSound
 
 	if runtime.GOOS == "darwin" {
 		sound = &notifications.NotificationSound{Name: "raven.wav"}
 	}
 
-	return n.native.SendNotification(
+	forwardErr2 := notifier.native.SendNotification(
 		notifications.NotificationOptions{
 			Sound:    sound,
 			ID:       "raven-due",
@@ -36,10 +39,18 @@ func (n notifier) Send(count int) error {
 			ThreadID: "raven-reviews",
 		},
 	)
+	if forwardErr2 != nil {
+		return fmt.Errorf("send: %w", forwardErr2)
+	}
+
+	return nil
 }
 
-func (n notifier) RequestAuthorization() error {
-	_, err := n.native.RequestNotificationAuthorization()
+func (notifier Notifier) RequestAuthorization() error {
+	_, err := notifier.native.RequestNotificationAuthorization()
+	if err != nil {
+		return fmt.Errorf("request authorization: %w", err)
+	}
 
-	return err
+	return nil
 }

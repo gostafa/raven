@@ -3,4 +3,6 @@
 
 package scheduling
 
-type scheduler struct{}
+type (
+	Scheduler struct{}
+)

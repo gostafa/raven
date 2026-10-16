@@ -5,7 +5,8 @@ package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -25,211 +26,278 @@ import (
 	reminderwails "raven/internal/reminders/adapters/wails"
 )
 
-func (r *RavenService) startReminders() {
-	r.reminderMu.Lock()
-	defer r.reminderMu.Unlock()
+func (service *RavenService) startReminders() {
+	service.reminderMu.Lock()
+	defer service.reminderMu.Unlock()
 
-	if r.store == nil || r.reminders != nil {
+	if service.store == nil || service.reminders != nil {
 		return
 	}
 
 	var notifier reminders.Notifier
 
-	if r.notifier != nil {
-		notifier = reminderwails.New(r.notifier)
+	if service.notifier != nil {
+		notifier = reminderwails.New(service.notifier)
 	}
 
-	r.reminders = reminders.Start(
-		r.store,
+	service.reminders = reminders.Start(
+		service.store,
 		notifier,
-		func() { r.app.Event.Emit("raven:schedules-changed") },
-		func(message string, err error) { r.app.Logger.Warn(message, "error", err) },
+		func() { service.app.Event.Emit("raven:schedules-changed") },
+		func(message string, err error) {
+			service.app.Logger.WarnContext(
+				context.Background(),
+				"review reminder unavailable",
+				slog.String(logOperationKey, message),
+				slog.Any(logErrorKey, err),
+			)
+		},
 	)
 }
 
-func (r *RavenService) configureWidget() { r.windows.ConfigureWidget() }
+func (service *RavenService) configureWidget() { service.windows.ConfigureWidget() }
 
-func (l *lifecycleAdapter) ServiceStartup(
+func (lifecycle *lifecycleAdapter) ServiceStartup(
 	ctx context.Context,
 	options application.ServiceOptions,
 ) error {
-	r := l.service
+	service := lifecycle.service
 
 	path, err := boltstore.DefaultPath()
 	if err != nil {
-		return publicError(err)
+		return &ServiceError{Message: err.Error()}
 	}
 
 	store, err := boltstore.Open(path, scheduling.New())
 	if err != nil {
-		return publicError(err)
+		return &ServiceError{Message: err.Error()}
 	}
 
-	r.store = store
-	r.mediaHandler = store.MediaHandler()
+	service.store = store
+	service.mediaHandler = store.MediaHandler()
 
-	if r.notifier != nil {
-		err := r.notifier.ServiceStartup(ctx, options)
-		if err != nil {
-			if r.app != nil {
-				r.app.Logger.Warn("Desktop notifications unavailable", "error", err)
+	if service.notifier != nil {
+		serviceStartupErr := service.notifier.ServiceStartup(ctx, options)
+		if serviceStartupErr != nil {
+			if service.app != nil {
+				service.app.Logger.WarnContext(
+					context.Background(),
+					"desktop notifications unavailable",
+					slog.Any(logErrorKey, serviceStartupErr),
+				)
 			}
 
-			r.notifier = nil
+			service.notifier = nil
 		}
 	}
 
 	return nil
 }
 
-func (l *lifecycleAdapter) ServiceShutdown() error {
-	r := l.service
-	r.reminderMu.Lock()
+func (lifecycle *lifecycleAdapter) ServiceShutdown() error {
+	lifecycle.service.stopReminders()
 
-	c := r.reminders
-	r.reminderMu.Unlock()
-
-	if c != nil {
-		c.Stop()
-	}
-
-	if r.store == nil {
-		return nil
-	}
-
-	if r.notifier != nil {
-		_ = r.notifier.ServiceShutdown()
-	}
-
-	return r.store.Close()
+	return lifecycle.service.closeResources()
 }
 
-func (r *RavenService) ListFolders() ([]Folder, error) {
-	if r.store == nil {
+func (service *RavenService) stopReminders() {
+	service.reminderMu.Lock()
+
+	coordinator := service.reminders
+	service.reminderMu.Unlock()
+
+	if coordinator != nil {
+		coordinator.Stop()
+	}
+}
+
+func (service *RavenService) closeResources() error {
+	var failure error
+
+	if service.notifier != nil {
+		failure = service.notifier.ServiceShutdown()
+	}
+
+	if service.store != nil {
+		failure = errors.Join(failure, service.store.Close())
+	}
+
+	if failure != nil {
+		return &ServiceError{Message: failure.Error()}
+	}
+
+	return nil
+}
+
+// ListFolders returns folders in creation order.
+func (service *RavenService) ListFolders() ([]Folder, error) {
+	if service.store == nil {
 		return nil, &ServiceError{Message: "folder storage is unavailable"}
 	}
 
-	value, err := r.store.ListFolders()
+	value, err := service.store.ListFolders()
+	if err != nil {
+		return publicFolders(value), &ServiceError{Message: err.Error()}
+	}
 
-	return publicFolders(value), publicError(err)
+	return publicFolders(value), nil
 }
 
-func (r *RavenService) CreateFolder(input CreateFolderInput) (Folder, error) {
-	if r.store == nil {
+// CreateFolder creates a folder from editable metadata.
+func (service *RavenService) CreateFolder(input CreateFolderInput) (Folder, error) {
+	if service.store == nil {
 		return Folder{}, &ServiceError{Message: "folder storage is unavailable"}
 	}
 
-	value, err := r.store.CreateFolder(folderInput(input))
+	value, err := service.store.CreateFolder(folderInput(input))
+	if err != nil {
+		return publicFolder(value), &ServiceError{Message: err.Error()}
+	}
 
-	return publicFolder(value), publicError(err)
+	return publicFolder(value), nil
 }
 
-func (r *RavenService) ListCards() ([]Card, error) {
-	if r.store == nil {
+// ListCards returns the persisted library cards.
+func (service *RavenService) ListCards() ([]Card, error) {
+	if service.store == nil {
 		return nil, &ServiceError{Message: "card storage is unavailable"}
 	}
 
-	value, err := r.store.ListCards()
+	value, err := service.store.ListCards()
+	if err != nil {
+		return publicCards(value), &ServiceError{Message: err.Error()}
+	}
 
-	return publicCards(value), publicError(err)
+	return publicCards(value), nil
 }
 
-func (r *RavenService) DeleteFolder(folderID string) error {
-	if r.store == nil {
+// DeleteFolder deletes a folder and its content.
+func (service *RavenService) DeleteFolder(folderID string) error {
+	if service.store == nil {
 		return &ServiceError{Message: "folder storage is unavailable"}
 	}
 
-	err := r.store.DeleteFolder(folderID)
+	err := service.store.DeleteFolder(folderID)
 	if err == nil {
-		r.schedulesChanged()
+		service.schedulesChanged()
 	}
 
-	return publicError(err)
+	if err != nil {
+		return &ServiceError{Message: err.Error()}
+	}
+
+	return nil
 }
 
-func (r *RavenService) DeleteCard(folderID, cardID string) error {
-	if r.store == nil {
+// DeleteCard deletes a card from its owning folder.
+func (service *RavenService) DeleteCard(folderID, cardID string) error {
+	if service.store == nil {
 		return &ServiceError{Message: "card storage is unavailable"}
 	}
 
-	err := r.store.DeleteCard(folderID, cardID)
+	err := service.store.DeleteCard(folderID, cardID)
 	if err == nil {
-		r.schedulesChanged()
+		service.schedulesChanged()
 	}
 
-	return publicError(err)
+	if err != nil {
+		return &ServiceError{Message: err.Error()}
+	}
+
+	return nil
 }
 
-func (r *RavenService) CreateCard(input CreateCardInput) (Card, error) {
-	if r.store == nil {
+// CreateCard creates a card and initializes its item schedules.
+func (service *RavenService) CreateCard(input CreateCardInput) (Card, error) {
+	if service.store == nil {
 		return Card{}, &ServiceError{Message: "card storage is unavailable"}
 	}
 
-	card, err := r.store.CreateCard(createCardInput(input))
+	card, err := service.store.CreateCard(createCardInput(input))
 	if err == nil {
-		r.schedulesChanged()
+		service.schedulesChanged()
 	}
 
-	return publicCard(card), publicError(err)
+	if err != nil {
+		return publicCard(card), &ServiceError{Message: err.Error()}
+	}
+
+	return publicCard(card), nil
 }
 
-func (r *RavenService) UpdateCard(input UpdateCardInput) (Card, error) {
-	if r.store == nil {
+// UpdateCard updates card content while preserving retained item schedules.
+func (service *RavenService) UpdateCard(input UpdateCardInput) (Card, error) {
+	if service.store == nil {
 		return Card{}, &ServiceError{Message: "card storage is unavailable"}
 	}
 
-	card, err := r.store.UpdateCard(updateCardInput(input))
+	card, err := service.store.UpdateCard(updateCardInput(input))
 	if err == nil {
-		r.schedulesChanged()
+		service.schedulesChanged()
 	}
 
-	return publicCard(card), publicError(err)
+	if err != nil {
+		return publicCard(card), &ServiceError{Message: err.Error()}
+	}
+
+	return publicCard(card), nil
 }
 
-func (r *RavenService) ReviewItem(
+// ReviewItem records a rating and advances an item schedule.
+func (service *RavenService) ReviewItem(
 	folderID, cardID, itemID string,
 	rating int,
 ) (Card, error) {
-	if r.store == nil {
+	if service.store == nil {
 		return Card{}, &ServiceError{Message: "card storage is unavailable"}
 	}
 
-	card, err := r.store.ReviewItem(folderID, cardID, itemID, rating)
+	card, err := service.store.ReviewItem(folderID, cardID, itemID, rating)
 	if err == nil {
-		r.schedulesChanged()
+		service.schedulesChanged()
 	}
 
-	return publicCard(card), publicError(err)
+	if err != nil {
+		return publicCard(card), &ServiceError{Message: err.Error()}
+	}
+
+	return publicCard(card), nil
 }
 
-func (r *RavenService) ShowMain() { r.windows.ShowMain() }
+// ShowMain shows and focuses the main library window.
+func (service *RavenService) ShowMain() { service.windows.ShowMain() }
 
-func (r *RavenService) HideMain() { r.windows.HideMain() }
+// HideMain hides the main library window.
+func (service *RavenService) HideMain() { service.windows.HideMain() }
 
-func (r *RavenService) ResetWidget() { r.windows.ResetWidget() }
+// ResetWidget moves the floating widget onto the primary screen.
+func (service *RavenService) ResetWidget() { service.windows.ResetWidget() }
 
-func (r *RavenService) Quit() { r.windows.Quit() }
+// Quit terminates Raven.
+func (service *RavenService) Quit() { service.windows.Quit() }
 
-func (r *RavenService) ShowReviews() {
-	r.ShowMain()
-	r.app.Event.Emit("raven:show-reviews")
+// ShowReviews opens the library review session.
+func (service *RavenService) ShowReviews() {
+	service.ShowMain()
+	service.app.Event.Emit("raven:show-reviews")
 }
 
-func (r *RavenService) RefreshReminders() {
-	r.reminderMu.Lock()
-	defer r.reminderMu.Unlock()
+// RefreshReminders requests reconciliation of persisted review schedules.
+func (service *RavenService) RefreshReminders() {
+	service.reminderMu.Lock()
+	defer service.reminderMu.Unlock()
 
-	if r.reminders != nil {
-		r.reminders.Wake()
+	if service.reminders != nil {
+		service.reminders.Wake()
 	}
 }
 
-func (r *RavenService) schedulesChanged() {
-	if r.app != nil {
-		r.app.Event.Emit("raven:schedules-changed")
+func (service *RavenService) schedulesChanged() {
+	if service.app != nil {
+		service.app.Event.Emit("raven:schedules-changed")
 	}
 
-	r.RefreshReminders()
+	service.RefreshReminders()
 }
 
 func main() {
@@ -268,7 +336,6 @@ func main() {
 	ns.OnNotificationResponse(func(result notifications.NotificationResult) {
 		if result.Error == nil &&
 			result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
-
 			raven.ShowReviews()
 		}
 	})
@@ -278,7 +345,11 @@ func main() {
 	startup := autostart.New(startupwails.New(app.Autostart), app.Env.Info().Debug, nil)
 	reportStartupError := func(err error) {
 		if err != nil {
-			app.Logger.Error("Could not configure login startup", "error", err)
+			app.Logger.ErrorContext(
+				context.Background(),
+				"could not configure login startup",
+				slog.Any(logErrorKey, err),
+			)
 			app.Dialog.Error().
 				SetTitle("Start at login").
 				SetMessage("Raven could not update login startup. You can try again from the Raven menu.\n\n" + err.Error()).
@@ -288,7 +359,11 @@ func main() {
 	refreshStartup := func() {
 		err := startup.Refresh()
 		if err != nil {
-			app.Logger.Warn("Could not refresh login startup status", "error", err)
+			app.Logger.WarnContext(
+				context.Background(),
+				"could not refresh login startup status",
+				slog.Any(logErrorKey, err),
+			)
 		}
 	}
 	toggleStartup := func(_ *application.Context) {
@@ -436,7 +511,7 @@ func main() {
 
 	menu := app.ContextMenu.New()
 	menu.Add("Open Raven").OnClick(func(_ *application.Context) { raven.ShowMain() })
-	menu.Add("Reset widget position").OnClick(func(_ *application.Context) { raven.ResetWidget() })
+	menu.Add(resetMenuTitle).OnClick(func(_ *application.Context) { raven.ResetWidget() })
 	menu.AddSeparator()
 
 	widgetStartup := menu.AddCheckbox("Start at login", false).SetEnabled(false)
@@ -447,7 +522,7 @@ func main() {
 
 	trayMenu := app.Menu.New()
 	trayMenu.Add("Open Raven").OnClick(func(_ *application.Context) { raven.ShowMain() })
-	trayMenu.Add("Reset widget position").
+	trayMenu.Add(resetMenuTitle).
 		OnClick(func(_ *application.Context) { raven.ResetWidget() })
 	trayMenu.AddSeparator()
 
@@ -469,110 +544,122 @@ func main() {
 
 	err := app.Run()
 	if err != nil {
-		log.Fatal(err)
+		app.Logger.ErrorContext(
+			context.Background(),
+			"application stopped",
+			slog.Any(logErrorKey, err),
+		)
+		os.Exit(1)
 	}
 }
 
-func (e *ServiceError) Error() string { return e.Message }
-
-func publicError(err error) error {
-	if err == nil {
-		return nil
-	}
-
-	return &ServiceError{Message: err.Error()}
-}
+// Error returns the public service error message.
+func (failure *ServiceError) Error() string { return failure.Message }
 
 func mapValues[From, To any](values []From, convert func(From) To) []To {
 	if values == nil {
 		return nil
 	}
 
-	result := make([]To, len(values))
-	for i, value := range values {
-		result[i] = convert(value)
+	result := make([]To, 0, len(values))
+	for _, value := range values {
+		result = append(result, convert(value))
 	}
 
 	return result
 }
-func publicFolder(v library.Folder) Folder      { return Folder(v) }
-func publicFolders(v []library.Folder) []Folder { return mapValues(v, publicFolder) }
-func publicReview(v library.ItemReview) ItemReview {
-	return ItemReview{Log: ReviewLog(v.Log), Automatic: v.Automatic}
+func publicFolder(value library.Folder) Folder      { return Folder(value) }
+func publicFolders(value []library.Folder) []Folder { return mapValues(value, publicFolder) }
+func publicReview(value library.ItemReview) ItemReview {
+	return ItemReview{Log: ReviewLog(value.Log), Automatic: value.Automatic}
 }
 
-func publicItem(v library.ContentItem) ContentItem {
+func publicItem(value library.ContentItem) ContentItem {
 	return ContentItem{
-		Schedule:        Schedule(v.Schedule),
-		Reviews:         mapValues(v.Reviews, publicReview),
-		LastNotifiedDue: v.LastNotifiedDue,
-		ID:              v.ID,
-		FolderID:        v.FolderID,
-		CardID:          v.CardID,
-		Position:        v.Position,
-		Kind:            v.Kind,
-		Text:            v.Text,
-		OriginalName:    v.OriginalName,
-		MIMEType:        v.MIMEType,
-		ByteSize:        v.ByteSize,
-		RelativePath:    v.RelativePath,
+		Schedule:        Schedule(value.Schedule),
+		Reviews:         mapValues(value.Reviews, publicReview),
+		LastNotifiedDue: value.LastNotifiedDue,
+		ID:              value.ID,
+		FolderID:        value.FolderID,
+		CardID:          value.CardID,
+		Position:        value.Position,
+		Kind:            value.Kind,
+		Text:            value.Text,
+		OriginalName:    value.OriginalName,
+		MIMEType:        value.MIMEType,
+		ByteSize:        value.ByteSize,
+		RelativePath:    value.RelativePath,
 	}
 }
 
-func publicCard(v library.Card) Card {
+func publicCard(value library.Card) Card {
 	return Card{
-		ID:           v.ID,
-		FolderID:     v.FolderID,
-		CreatedAt:    v.CreatedAt,
-		DueAt:        v.DueAt,
-		LastReviewed: v.LastReviewed,
-		Items:        mapValues(v.Items, publicItem),
+		ID:           value.ID,
+		FolderID:     value.FolderID,
+		CreatedAt:    value.CreatedAt,
+		DueAt:        value.DueAt,
+		LastReviewed: value.LastReviewed,
+		Items:        mapValues(value.Items, publicItem),
 	}
 }
-func publicCards(v []library.Card) []Card { return mapValues(v, publicCard) }
+func publicCards(value []library.Card) []Card { return mapValues(value, publicCard) }
 
 func folderInput(
-	v CreateFolderInput,
+	value CreateFolderInput,
 ) library.CreateFolderInput {
-	return library.CreateFolderInput(v)
+	return library.CreateFolderInput(value)
 }
-func itemInput(v ItemDraft) library.ItemDraft { return library.ItemDraft(v) }
-func createCardInput(v CreateCardInput) library.CreateCardInput {
-	return library.CreateCardInput{FolderID: v.FolderID, Items: mapValues(v.Items, itemInput)}
-}
-
-func updateCardInput(v UpdateCardInput) library.UpdateCardInput {
-	return library.UpdateCardInput{
-		FolderID: v.FolderID,
-		CardID:   v.CardID,
-		Items:    mapValues(v.Items, itemInput),
+func itemInput(value ItemDraft) library.ItemDraft { return library.ItemDraft(value) }
+func createCardInput(value CreateCardInput) library.CreateCardInput {
+	return library.CreateCardInput{
+		FolderID: value.FolderID,
+		Items:    mapValues(value.Items, itemInput),
 	}
 }
 
-func publicMedia(v library.SelectedMedia) SelectedMedia { return SelectedMedia(v) }
-func (r *RavenService) SelectMediaFiles(kind string) ([]SelectedMedia, error) {
-	if r.media == nil {
+func updateCardInput(value UpdateCardInput) library.UpdateCardInput {
+	return library.UpdateCardInput{
+		FolderID: value.FolderID,
+		CardID:   value.CardID,
+		Items:    mapValues(value.Items, itemInput),
+	}
+}
+
+func publicMedia(value library.SelectedMedia) SelectedMedia { return SelectedMedia(value) }
+
+// SelectMediaFiles selects local media for a card draft.
+func (service *RavenService) SelectMediaFiles(kind string) ([]SelectedMedia, error) {
+	if service.media == nil {
 		return nil, &ServiceError{Message: "file selection is unavailable"}
 	}
 
-	values, err := r.media.Select(kind)
+	values, err := service.media.Select(kind)
+	if err != nil {
+		return mapValues(values, publicMedia), &ServiceError{Message: err.Error()}
+	}
 
-	return mapValues(values, publicMedia), publicError(err)
+	return mapValues(values, publicMedia), nil
 }
 
-func (r *RavenService) mediaMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+func (service *RavenService) mediaMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, req *http.Request) {
 		// Composition initializes the picker before Run; tests can omit native windows.
-		media := r.media
+		media := service.media
 		if media == nil {
-			media = desktopmedia.New(nil, nil, func() http.Handler { return r.mediaHandler })
+			media = desktopmedia.New(nil, nil, func() http.Handler { return service.mediaHandler })
 		}
 
-		media.Middleware(next).ServeHTTP(w, req)
+		media.Middleware(next).ServeHTTP(writer, req)
 	})
 }
 
-func (r *RavenService) positionFloatingReview()     { r.windows.PositionFloatingReview() }
-func (r *RavenService) requestFloatingReviewClose() { r.windows.RequestFloatingReviewClose() }
-func (r *RavenService) ToggleFloatingReview()       { r.windows.ToggleFloatingReview() }
-func (r *RavenService) HideFloatingReview()         { r.windows.HideFloatingReview() }
+func (service *RavenService) positionFloatingReview() { service.windows.PositionFloatingReview() }
+func (service *RavenService) requestFloatingReviewClose() {
+	service.windows.RequestFloatingReviewClose()
+}
+
+// ToggleFloatingReview opens or requests closing the floating review window.
+func (service *RavenService) ToggleFloatingReview() { service.windows.ToggleFloatingReview() }
+
+// HideFloatingReview hides the floating review window.
+func (service *RavenService) HideFloatingReview() { service.windows.HideFloatingReview() }

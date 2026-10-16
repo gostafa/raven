@@ -7,8 +7,10 @@ import (
 	"embed"
 )
 
-//go:embed all:frontend/dist
-var assets embed.FS
+var (
+	//go:embed all:frontend/dist
+	assets embed.FS
 
-//go:embed build/appicon.png
-var appIcon []byte
+	//go:embed build/appicon.png
+	appIcon []byte
+)

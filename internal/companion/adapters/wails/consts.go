@@ -7,4 +7,8 @@ import (
 	"raven/internal/companion"
 )
 
-const widgetSize = companion.WidgetSize
+const (
+	widgetSize = companion.WidgetSize
+
+	logErrorKey = "error"
+)

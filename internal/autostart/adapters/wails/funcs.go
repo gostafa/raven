@@ -4,19 +4,43 @@
 package wails
 
 import (
+	"fmt"
+
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"raven/internal/autostart"
 )
 
-func (b backend) EnableWithOptions(v autostart.Options) error {
-	return b.native.EnableWithOptions(
-		application.AutostartOptions{Identifier: v.Identifier, Arguments: v.Arguments},
+func (backend Backend) EnableWithOptions(visibility autostart.Options) error {
+	forwardErr3 := backend.native.EnableWithOptions(
+		application.AutostartOptions{
+			Identifier: visibility.Identifier,
+			Arguments:  visibility.Arguments,
+		},
 	)
+	if forwardErr3 != nil {
+		return fmt.Errorf("enable with options: %w", forwardErr3)
+	}
+
+	return nil
 }
 
-func (b backend) Disable() error { return b.native.Disable() }
+func (backend Backend) Disable() error {
+	forwardErr := backend.native.Disable()
+	if forwardErr != nil {
+		return fmt.Errorf("disable: %w", forwardErr)
+	}
 
-func (b backend) IsEnabled() (bool, error) { return b.native.IsEnabled() }
+	return nil
+}
 
-func New(native *application.AutostartManager) autostart.Backend { return backend{native: native} }
+func (backend Backend) IsEnabled() (bool, error) {
+	result, forwardErr2 := backend.native.IsEnabled()
+	if forwardErr2 != nil {
+		return result, fmt.Errorf("is enabled: %w", forwardErr2)
+	}
+
+	return result, nil
+}
+
+func New(native *application.AutostartManager) Backend { return Backend{native: native} }

@@ -3,10 +3,17 @@
 
 package main
 
-import "raven/internal/companion"
+import (
+	"raven/internal/companion"
+)
 
 const (
 	widgetSize   = companion.WidgetSize
 	reviewWidth  = companion.ReviewWidth
 	reviewHeight = companion.ReviewHeight
+
+	logErrorKey     = "error"
+	logOperationKey = "operation"
+
+	resetMenuTitle = "Reset widget position"
 )
