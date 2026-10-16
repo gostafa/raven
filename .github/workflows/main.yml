@@ -10,8 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pipeline:
-    name: CI
+  taskotter:
+    name: taskotter
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -27,9 +27,33 @@ jobs:
         uses: $/.github/actions/taskotter
         with:
           github-token: ${{ github.token }}
+
+  ci:
+    name: CI (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+          pkg-config --exists glib-2.0 gobject-2.0 gtk4 webkitgtk-6.0 gio-unix-2.0 libsoup-3.0
       - name: Set up Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
       - name: Apply automated fixes and run CI checks
-        uses: $/.github/actions/ci
+        uses: ./.github/actions/ci
         with:
           github-token: ${{ github.token }}

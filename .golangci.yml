@@ -680,7 +680,7 @@ linters:
     paths:
       - .*_test.go
     generated: disable
-    warn-unused: true
+    warn-unused: false
 
 issues:
   max-issues-per-linter: 0

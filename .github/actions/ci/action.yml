@@ -17,6 +17,7 @@ runs:
       uses: $/.github/actions/auto-fix
       with:
         token: ${{ inputs.github-token }}
+        branch: automation/auto-fix-${{ runner.os }}
     - name: Run all CI checks
       shell: bash
       run: task ci:check
