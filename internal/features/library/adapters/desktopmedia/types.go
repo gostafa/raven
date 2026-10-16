@@ -13,7 +13,13 @@ import (
 type (
 	// Picker owns file selection and the preview capabilities issued to selected paths.
 	Picker struct {
-		choose   func(kind, filter string) ([]string, error)
+		*Registry
+
+		choose func(kind, filter string) ([]string, error)
+	}
+
+	// Registry owns HTTP media routes and preview capabilities without native dependencies.
+	Registry struct {
 		saved    func() http.Handler
 		logger   *slog.Logger
 		previews sync.Map

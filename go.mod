@@ -6,6 +6,7 @@ require (
 	github.com/open-spaced-repetition/go-fsrs/v4 v4.0.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.29
 	go.etcd.io/bbolt v1.5.0
+	go.uber.org/fx v1.24.0
 	golang.org/x/sys v0.46.0
 )
 
@@ -17,4 +18,7 @@ require (
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	go.uber.org/dig v1.19.0 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
+	go.uber.org/zap v1.26.0 // indirect
 )

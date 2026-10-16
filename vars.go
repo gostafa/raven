@@ -6,18 +6,29 @@ package main
 import (
 	"embed"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
-	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+	"go.uber.org/fx"
+
+	autostartcomposition "raven/internal/features/autostart/composition"
+	companioncomposition "raven/internal/features/companion/composition"
+	desktopcomposition "raven/internal/features/desktop/composition"
+	desktopports "raven/internal/features/desktop/ports"
+	librarycomposition "raven/internal/features/library/composition"
+	remindercomposition "raven/internal/features/reminders/composition"
 )
 
 var (
-	_ notificationRuntime         = (*notifications.NotificationService)(nil)
-	_ notificationResponses       = (*notifications.NotificationService)(nil)
-	_ application.ServiceStartup  = (*lifecycleAdapter)(nil)
-	_ application.ServiceShutdown = (*lifecycleAdapter)(nil)
 	//go:embed all:frontend/dist
 	assets embed.FS
-
 	//go:embed build/appicon.png
-	appIcon []byte
+	appIcon           []byte
+	applicationModule = fx.Module("raven",
+		fx.Supply(desktopports.Assets{Files: assets, Icon: appIcon}),
+		fx.Provide(newLogger, newService),
+		fx.WithLogger(newFxLogger),
+		librarycomposition.Module,
+		autostartcomposition.Module,
+		companioncomposition.Module,
+		remindercomposition.Module,
+		desktopcomposition.Module,
+	)
 )

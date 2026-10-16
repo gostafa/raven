@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -21,11 +22,13 @@ import (
 type (
 	// Store owns atomic database and media persistence.
 	Store struct {
-		logger    *slog.Logger
 		scheduler library.Scheduler
+		logger    *slog.Logger
 		db        *bolt.DB
+		path      string
 		mediaDir  string
 		mediaMu   sync.Mutex
+		ready     atomic.Bool
 	}
 
 	legacyItem struct {

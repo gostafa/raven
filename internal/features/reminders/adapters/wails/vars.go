@@ -4,7 +4,15 @@
 package wails
 
 import (
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+
 	reminders "raven/internal/features/reminders/application"
+	reminderports "raven/internal/features/reminders/ports"
+)
+
+var (
+	_ NativeRuntime               = (*notifications.NotificationService)(nil)
+	_ reminderports.Notifications = (*Runtime)(nil)
 )
 
 var _ reminders.Notifier = (*Notifier)(nil)

@@ -16,10 +16,19 @@ Keep Raven's monochrome palette and dark sidebar during future design, content, 
 ## Architecture
 
 - Use ports and adapters architecture, organized by feature. Keep each backend feature's domain rules, application use cases, ports, and adapters together under `internal/`; reuse existing layers when extending a feature.
-- Each `internal/features/<feature>/` root contains only layer directories, such as `domain/`, `application/`, `ports/`, and `adapters/`. Place all files, including tests and documentation, inside the appropriate layer; create only layers with content.
-- Keep domain logic independent of adapters and third-party libraries. Application code depends on domain contracts and ports; adapters implement those ports. Wire concrete adapters at the composition boundary during application startup.
+- Each `internal/features/<feature>/` root contains only layer directories: `domain/`, `application/`, `ports/`, `adapters/`, and `composition/`. Place all files, including tests and documentation, inside the appropriate layer; create only layers with content.
+- Keep domain, application, and ports packages independent of adapters, composition packages, and third-party libraries. Adapters implement consumer-owned ports; composition packages wire concrete implementations.
 - Every outbound adapter must explicitly implement a specific, named port owned by its consumer. Declare Go conformance with compile-time interface assertions in `vars.go`; use `implements`, `satisfies`, or a port-typed factory/function in TypeScript. Keep ports independent of concrete adapters and third-party types. Helpers inside an adapter share its port; Svelte UI adapters use typed props and callbacks as their contracts.
 - Keep Raven's Wails services as the public facade. Put implementation details in `internal/` and expose only the contracts frontend consumers need.
+
+## Backend dependency injection and lifecycle
+
+- Use `go.uber.org/fx` at the executable and feature `composition/` boundaries. Each feature composition package exposes a `Module`; the executable assembles one graph. Keep Fx imports, parameter/result objects, and registration in these boundaries.
+- Inject runtime dependencies through constructors and consumer-owned ports. Constructors allocate stable objects; use Fx lifecycle hooks to acquire resources and start workers. Keep construction out of facade methods and avoid mutable service dependency installation or service locators.
+- Composition packages may import Fx, concrete adapters, and their internal contracts. Keep ordinary constructors callable without Fx. Use typed providers or `fx.As` to bind adapters to ports, retaining compile-time conformance assertions.
+- Preserve role-based filenames in composition packages: module variables in `vars.go`, providers and hook registration in `funcs.go`, and parameter/result objects in `types.go`.
+- Wails owns the native event loop on the main goroutine. Its private lifecycle bridge starts and stops Fx once. Establish single-instance ownership before opening persistence, and wait for application readiness before starting reminders.
+- Use a cancellable runtime context for background work and separate bounded contexts for startup and shutdown. Stop workers before closing their dependencies; release partial startup resources. Keep notification initialization optional and route Fx events through the injected structured logger.
 
 ## Go Package Files
 
@@ -42,9 +51,9 @@ Place package documentation on the package declaration in `types.go`. Consolidat
 ## Public API Boundaries
 
 - Keep implementation types, fields, helpers, and state unexported wherever possible. Export symbols inside `internal/` only when another internal package needs them.
-- Public signatures, exported fields, type aliases, and interface methods must use public facade types or standard-library types. Keep internal types and third-party adapter types out of the public API.
+- Frontend-facing facade signatures, exported fields, type aliases, and interface methods must use public facade types or standard-library types. Keep internal types, Fx types, and third-party adapter types out of this public API.
 - Translate implementation errors, events, and options at the facade boundary. Expose public error contracts without leaking concrete internal or third-party errors through error chains.
-- Use internal contracts only in private implementation code. Keep consumers independent of internal packages and concrete adapters.
+- Keep frontend-facing consumers independent of internal packages and concrete adapters. Exported APIs inside `internal/` may use internal contracts; composition APIs may additionally use Fx and adapter types. These are implementation boundaries, not public Wails contracts.
 
 ## Svelte Architecture
 

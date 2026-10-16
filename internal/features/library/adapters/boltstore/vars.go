@@ -13,6 +13,9 @@ import (
 )
 
 var (
+	errStoreAlreadyStarted = errors.New(
+		"library persistence already started",
+	)
 	_ libraryports.Repository = (*Store)(nil)
 	_ autostart.Settings      = (*Store)(nil)
 	_ reminders.Source        = (*Store)(nil)

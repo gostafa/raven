@@ -47,7 +47,17 @@ type (
 
 	// Media selects local files and serves temporary or saved media.
 	Media interface {
+		Selection
+		MediaRoutes
+	}
+
+	// Selection selects local files for a draft.
+	Selection interface {
 		Select(kind string) ([]mediaapi.Selection, error)
+	}
+
+	// MediaRoutes serves previews and persisted content independently of native windows.
+	MediaRoutes interface {
 		Middleware(next http.Handler) http.HandlerFunc
 	}
 )

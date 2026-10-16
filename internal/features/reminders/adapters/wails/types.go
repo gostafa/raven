@@ -5,6 +5,11 @@
 package wails
 
 import (
+	"context"
+	"log/slog"
+	"sync/atomic"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
@@ -19,5 +24,22 @@ type (
 		CheckNotificationAuthorization() (bool, error)
 		SendNotification(options notifications.NotificationOptions) error
 		RequestNotificationAuthorization() (bool, error)
+	}
+
+	// NativeRuntime supplies the notification service lifecycle and responses.
+	NativeRuntime interface {
+		NativeNotifications
+		ServiceStartup(context.Context, application.ServiceOptions) error
+		ServiceShutdown() error
+		OnNotificationResponse(func(notifications.NotificationResult))
+	}
+
+	// Runtime tracks optional native notification availability for managed workers.
+	Runtime struct {
+		Notifier
+
+		native    NativeRuntime
+		logger    *slog.Logger
+		available atomic.Bool
 	}
 )

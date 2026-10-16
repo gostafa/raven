@@ -106,9 +106,10 @@ Wails 3 is currently beta. TypeScript 7.0.2 is the latest release, but svelte-ch
 
 ## Project
 
-- `funcs.go`: startup composition, native menus, lifecycle wiring, and the Wails facade.
+- `funcs.go`: thin Wails facade, constructor injection, and executable Fx graph startup.
 - `types.go`: facade-owned transport contracts and private application state.
 - `internal/features/`: library, reminders, autostart, and companion features with owned ports and concrete adapters.
+- Feature `composition/` packages expose Fx modules; domain, application, and ports packages remain independent of Fx. Desktop adapters own menus, events, and native window configuration.
 - `internal/shared/`: reusable infrastructure, including selected-file access shared by media adapters.
 - `frontend/src/main.ts` and `App.svelte`: adapter composition and selection of the workspace, widget, or floating review.
 - `frontend/src/features/`: folders, cards, reviews, workspace, companion, and shared UI, with explicit public entry points and frontend-owned contracts.
@@ -116,6 +117,8 @@ Wails 3 is currently beta. TypeScript 7.0.2 is the latest release, but svelte-ch
 - `frontend/public/style.css`: shared workspace theme tokens.
 - `raven.svg`: original supplied logo; copied to `frontend/public/raven.svg`.
 - `build/appicon.png`, `build/darwin/icons.icns`, `build/windows/icon.ico`: icons rendered from the supplied SVG.
+
+Backend dependencies are constructed through one Fx graph using `go.uber.org/fx` v1.24.0. The Wails shell establishes single-instance ownership before its lifecycle bridge starts storage and optional notifications. Reminder reconciliation starts after the native application readiness event. Wails keeps the native event loop on the main goroutine; Fx releases workers, notifications, and persistence in dependency order. Background work uses a runtime context independent of startup deadlines. Notification initialization failures leave the widget and review reconciliation available.
 
 Install development tooling with `npm ci` and UI dependencies with `npm --prefix frontend ci`. After editing Go services, regenerate bindings with the pinned Wails CLI. Build frontend assets once before loading Go packages on a fresh checkout.
 

@@ -10,7 +10,8 @@ import (
 )
 
 var (
-	_ libraryports.Media = (*Picker)(nil)
+	_ libraryports.Media       = (*Picker)(nil)
+	_ libraryports.MediaRoutes = (*Registry)(nil)
 
 	errInvalidMediaType                 = errors.New("invalid media type")
 	errFileSelectionIsUnavailable       = errors.New("file selection is unavailable")

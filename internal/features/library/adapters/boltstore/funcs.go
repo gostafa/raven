@@ -1142,6 +1142,12 @@ func removableMedia(entry os.DirEntry, referenced map[string]bool) bool {
 func (storage *Store) MediaHandler() http.HandlerFunc { return storage.serveMedia }
 
 func (storage *Store) serveMedia(writer http.ResponseWriter, request *http.Request) {
+	if !storage.ready.Load() {
+		http.Error(writer, "media storage is unavailable", http.StatusServiceUnavailable)
+
+		return
+	}
+
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 
@@ -1266,21 +1272,54 @@ func DefaultPath() (string, error) {
 
 // Open opens and migrates library persistence, then reconciles saved media.
 func Open(path string, scheduler library.Scheduler, loggers ...*slog.Logger) (*Store, error) {
-	db, err := openDatabase(path)
+	storage := New(path, scheduler, storageLogger(loggers))
+
+	err := storage.Start()
 	if err != nil {
-		return nil, fmt.Errorf("open library persistence %q: %w", path, err)
-	}
-
-	storage := newStore(db, scheduler, path)
-
-	storage.logger = storageLogger(loggers)
-
-	err = storage.prepare(path)
-	if err != nil {
-		return nil, fmt.Errorf("prepare library persistence: %w", errors.Join(err, db.Close()))
+		return nil, err
 	}
 
 	return storage, nil
+}
+
+// New constructs persistence without acquiring the database lock.
+func New(path string, scheduler library.Scheduler, logger *slog.Logger) *Store {
+	storage := newStore(nil, scheduler, path)
+
+	storage.path = path
+	storage.logger = logger
+
+	return storage
+}
+
+// Start opens, migrates, and reconciles persistence before consumers begin work.
+func (storage *Store) Start() error {
+	storage.mediaMu.Lock()
+	defer storage.mediaMu.Unlock()
+
+	if storage.db != nil {
+		return errStoreAlreadyStarted
+	}
+
+	db, err := openDatabase(storage.path)
+	if err != nil {
+		return fmt.Errorf("open library persistence %q: %w", storage.path, err)
+	}
+
+	storage.db = db
+
+	err = storage.prepare(storage.path)
+	if err != nil {
+		failure := errors.Join(err, db.Close())
+
+		storage.db = nil
+
+		return fmt.Errorf("prepare library persistence: %w", failure)
+	}
+
+	storage.ready.Store(true)
+
+	return nil
 }
 
 func openDatabase(path string) (*bolt.DB, error) {
@@ -1361,8 +1400,13 @@ func (storage *Store) reportCleanupFailure(err error) {
 
 // Close closes library persistence after current media operations finish.
 func (storage *Store) Close() error {
+	storage.ready.Store(false)
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
+
+	if storage.db == nil {
+		return nil
+	}
 
 	forwardErr2 := storage.db.Close()
 	if forwardErr2 != nil {

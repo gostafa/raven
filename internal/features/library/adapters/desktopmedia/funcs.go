@@ -27,15 +27,28 @@ func New(
 	window *application.WebviewWindow,
 	saved func() http.Handler,
 ) *Picker {
+	return NewPicker(app, window, NewRegistry(saved, slog.New(slog.NewTextHandler(os.Stderr, nil))))
+}
+
+// NewPicker attaches native selection to an existing HTTP registry.
+func NewPicker(
+	app *application.App,
+	window *application.WebviewWindow,
+	registry *Registry,
+) *Picker {
+	return &Picker{Registry: registry, choose: nativeChooser(app, window)}
+}
+
+// NewRegistry creates media routes before native application construction.
+func NewRegistry(saved func() http.Handler, logger *slog.Logger) *Registry {
 	if saved == nil {
 		saved = func() http.Handler { return nil }
 	}
 
-	return &Picker{
-		choose:   nativeChooser(app, window),
+	return &Registry{
 		saved:    saved,
 		previews: sync.Map{},
-		logger:   slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		logger:   logger,
 	}
 }
 
@@ -141,7 +154,7 @@ func validateSelection(info os.FileInfo, path, filter string) error {
 }
 
 // Middleware serves selected previews and saved media before delegating other routes.
-func (picker *Picker) Middleware(next http.Handler) http.HandlerFunc {
+func (picker *Registry) Middleware(next http.Handler) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case strings.HasPrefix(request.URL.Path, previewRoutePrefix):
@@ -154,7 +167,7 @@ func (picker *Picker) Middleware(next http.Handler) http.HandlerFunc {
 	}
 }
 
-func (picker *Picker) serveSaved(writer http.ResponseWriter, request *http.Request) {
+func (picker *Registry) serveSaved(writer http.ResponseWriter, request *http.Request) {
 	handler := picker.saved()
 	if handler == nil {
 		http.Error(writer, "media storage is unavailable", http.StatusServiceUnavailable)
@@ -165,7 +178,7 @@ func (picker *Picker) serveSaved(writer http.ResponseWriter, request *http.Reque
 	handler.ServeHTTP(writer, request)
 }
 
-func (picker *Picker) servePreview(writer http.ResponseWriter, request *http.Request) {
+func (picker *Registry) servePreview(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 
@@ -182,7 +195,7 @@ func (picker *Picker) servePreview(writer http.ResponseWriter, request *http.Req
 	picker.servePreviewPath(writer, request, path)
 }
 
-func (picker *Picker) previewPath(url string) (string, bool) {
+func (picker *Registry) previewPath(url string) (string, bool) {
 	value, exists := picker.previews.Load(strings.TrimPrefix(url, previewRoutePrefix))
 	if !exists {
 		return "", false
@@ -193,7 +206,7 @@ func (picker *Picker) previewPath(url string) (string, bool) {
 	return path, valid
 }
 
-func (picker *Picker) servePreviewPath(
+func (picker *Registry) servePreviewPath(
 	writer http.ResponseWriter,
 	request *http.Request,
 	path string,
@@ -209,7 +222,7 @@ func (picker *Picker) servePreviewPath(
 	servePreviewFile(writer, request, file)
 }
 
-func (picker *Picker) closePreview(ctx context.Context, file *os.File) {
+func (picker *Registry) closePreview(ctx context.Context, file *os.File) {
 	err := file.Close()
 	if err != nil {
 		picker.logger.WarnContext(ctx, "could not close media preview", slog.Any(logErrorKey, err))

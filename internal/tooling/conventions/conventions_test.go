@@ -77,17 +77,30 @@ func filenameError(name string, s source) error {
 }
 
 func coreDependencyError(path string, s source) error {
+	composition := isComposition(path)
+	for _, dependency := range s.imports {
+		if strings.HasPrefix(dependency, "go.uber.org/fx") && !composition {
+			return fmt.Errorf("%s: Fx belongs at a composition boundary", path)
+		}
+	}
 	if !strings.HasPrefix(path, "internal/") || strings.Contains(path, "/adapters/") ||
-		strings.HasPrefix(path, "internal/tooling/conventions/") {
+		composition || strings.HasPrefix(path, "internal/tooling/conventions/") {
 		return nil
 	}
 	for _, dependency := range s.imports {
 		if strings.Contains(dependency, "/adapters/") ||
+			strings.Contains(dependency, "/composition") ||
 			strings.Contains(strings.Split(dependency, "/")[0], ".") {
 			return fmt.Errorf("%s: core imports adapter dependency %s", path, dependency)
 		}
 	}
 	return nil
+}
+
+func isComposition(path string) bool {
+	parts := strings.Split(path, "/")
+	return len(parts) == 1 || (len(parts) >= 5 && parts[0] == "internal" &&
+		parts[1] == "features" && parts[3] == "composition")
 }
 
 func featureLayoutError(path string) error {
@@ -289,6 +302,8 @@ func TestConventionFixtures(t *testing.T) {
 		`package main; import library "raven/internal/features/library/domain"; type Card = library.Card`,
 		`package main; import library "raven/internal/features/library/domain"; type Envelope struct{ Items []Card }; type Card struct{ Value library.Card }`,
 		`package main; import ext "example.com/vendor"; type Port interface{ Read() ext.Result }`,
+		`package main; import "go.uber.org/fx"; type Params struct{ fx.In }`,
+		`package main; import "go.uber.org/fx"; func Module() fx.Option { return nil }`,
 	} {
 		s, err := parseSource("types.go", text)
 		if err != nil {
@@ -342,10 +357,41 @@ func TestFeatureLayoutFixtures(t *testing.T) {
 		{"internal/features/library/domain/types.go", true},
 		{"internal/features/library/domain/domain_integration_test.go", true},
 		{"internal/features/library/adapters/boltstore/types.go", true},
+		{"internal/features/library/composition/vars.go", true},
 		{"internal/shared/filesystem/types.go", true},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			if got := featureLayoutError(tc.path) == nil; got != tc.valid {
+				t.Fatalf("valid=%v want %v", got, tc.valid)
+			}
+		})
+	}
+}
+
+func TestCompositionDependencyFixtures(t *testing.T) {
+	for _, tc := range []struct {
+		path, dependency string
+		valid            bool
+	}{
+		{"vars.go", "go.uber.org/fx", true},
+		{"internal/features/library/composition/vars.go", "go.uber.org/fx", true},
+		{"internal/features/library/composition/funcs.go", "raven/internal/features/library/adapters/boltstore", true},
+		{"internal/features/library/domain/types.go", "go.uber.org/fx", false},
+		{"internal/features/library/application/types.go", "go.uber.org/fx", false},
+		{"internal/features/library/ports/types.go", "go.uber.org/fx", false},
+		{"internal/features/library/adapters/boltstore/types.go", "go.uber.org/fx", false},
+		{"internal/features/library/domain/funcs.go", "raven/internal/features/library/composition", false},
+		{"internal/shared/filesystem/funcs.go", "raven/internal/features/library/composition", false},
+	} {
+		t.Run(tc.path+tc.dependency, func(t *testing.T) {
+			s, err := parseSource(
+				filepath.Base(tc.path),
+				"package fixture; import _ "+strconv.Quote(tc.dependency),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := coreDependencyError(tc.path, s) == nil; got != tc.valid {
 				t.Fatalf("valid=%v want %v", got, tc.valid)
 			}
 		})

@@ -4,10 +4,64 @@
 package wails
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
+
+// NewRuntime constructs an optional notification runtime without starting it.
+func NewRuntime(native NativeRuntime, logger *slog.Logger) *Runtime {
+	return &Runtime{Notifier: New(native), native: native, logger: logger}
+}
+
+// Start initializes notifications without making native availability fatal.
+func (runtime *Runtime) Start(ctx context.Context) error {
+	err := runtime.native.ServiceStartup(ctx, application.ServiceOptions{})
+	if err != nil {
+		runtime.logger.WarnContext(
+			ctx,
+			"desktop notifications unavailable",
+			slog.Any(logErrorKey, err),
+		)
+
+		return nil
+	}
+
+	runtime.available.Store(true)
+
+	return nil
+}
+
+// Available reports whether native initialization succeeded.
+func (runtime *Runtime) Available() bool { return runtime.available.Load() }
+
+// Stop releases only a successfully initialized notification service.
+func (runtime *Runtime) Stop() error {
+	if !runtime.available.Swap(false) {
+		return nil
+	}
+
+	err := runtime.native.ServiceShutdown()
+	if err != nil {
+		return fmt.Errorf("stop notifications: %w", err)
+	}
+
+	return nil
+}
+
+// OnReview opens reviews only for a successful default notification action.
+func (runtime *Runtime) OnReview(show func()) {
+	runtime.native.OnNotificationResponse(func(result notifications.NotificationResult) {
+		if result.Error == nil &&
+			result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
+
+			show()
+		}
+	})
+}
 
 // New constructs the adapter with its required runtime dependencies.
 func New(native NativeNotifications) Notifier {
