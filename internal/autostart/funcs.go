@@ -34,11 +34,13 @@ func (controller *Controller) initializeRegistration(settings Settings) error {
 		return fmt.Errorf("prepare login startup: %w", err)
 	}
 
-	if first && !controller.enabled {
-		err = controller.setEnabled(true)
-		if err != nil {
-			return fmt.Errorf("enable login startup on first launch: %w", err)
-		}
+	if !first || controller.enabled {
+		return nil
+	}
+
+	err = controller.setRegistration(controller.enableRegistration)
+	if err != nil {
+		return fmt.Errorf("enable login startup on first launch: %w", err)
 	}
 
 	return nil
@@ -76,7 +78,12 @@ func (controller *Controller) toggleRegistration() error {
 		return fmt.Errorf("refresh before toggling login startup: %w", err)
 	}
 
-	err = controller.setEnabled(!controller.enabled)
+	operation := controller.enableRegistration
+	if controller.enabled {
+		operation = controller.disableRegistration
+	}
+
+	err = controller.setRegistration(operation)
 	if err != nil {
 		return fmt.Errorf("change login startup state: %w", err)
 	}
@@ -111,31 +118,23 @@ func (controller *Controller) whenReady(operation func() error) error {
 	return nil
 }
 
-func (controller *Controller) setEnabled(enabled bool) error {
-	changed := controller.changeRegistration(enabled)
+func (controller *Controller) setRegistration(operation func() error) error {
+	expected := !controller.enabled
+	changed := operation()
 	// Even a failed operation can change the OS state. Always read it back.
 	observed := controller.readStatus()
 	if changed != nil || observed != nil {
 		return errors.Join(changed, observed)
 	}
 
-	if enabled != controller.enabled {
+	if expected != controller.enabled {
 		return errLoginStartupNotChanged
 	}
 
 	return nil
 }
 
-func (controller *Controller) changeRegistration(enabled bool) error {
-	if enabled {
-		forwardErr := controller.enableRegistration()
-		if forwardErr != nil {
-			return fmt.Errorf("change registration: %w", forwardErr)
-		}
-
-		return nil
-	}
-
+func (controller *Controller) disableRegistration() error {
 	err := controller.backend.Disable()
 	if err != nil {
 		return fmt.Errorf("disable login startup registration: %w", err)
@@ -145,7 +144,7 @@ func (controller *Controller) changeRegistration(enabled bool) error {
 }
 
 func (controller *Controller) enableRegistration() error {
-	err := controller.backend.EnableWithOptions(Options{
+	err := controller.backend.EnableWithOptions(&Options{
 		Identifier: ApplicationID,
 		Arguments:  []string{autostartArgument},
 	})

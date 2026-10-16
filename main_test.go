@@ -15,17 +15,20 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	bolt "go.etcd.io/bbolt"
 
-	"raven/internal/library"
+	cardapi "raven/api/cards"
+	contentapi "raven/api/content"
+	folderapi "raven/api/folders"
 	"raven/internal/library/adapters/boltstore"
 	"raven/internal/library/adapters/scheduling"
+	"raven/internal/library/ports"
 )
 
 type failingRepository struct {
-	library.Repository
+	ports.Repository
 	failure error
 }
 
-func (r failingRepository) ListFolders() ([]library.Folder, error) { return nil, r.failure }
+func (r failingRepository) ListFolders() ([]folderapi.Folder, error) { return nil, r.failure }
 
 func TestFacadeOwnsErrorContract(t *testing.T) {
 	cause := fmt.Errorf("read library: %w", bolt.ErrDatabaseNotOpen)
@@ -67,7 +70,7 @@ func TestStartupInstallsStorageAndMediaTogether(t *testing.T) {
 	if service.store != store || service.mediaHandler == nil {
 		t.Fatal("startup did not install storage and its media handler")
 	}
-	if _, err = service.CreateFolder(&CreateFolderInput{Title: "Startup"}); err != nil {
+	if _, err = service.CreateFolder(&folderapi.CreateInput{Title: "Startup"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -97,12 +100,12 @@ func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value := library.Card{
+	value := cardapi.Card{
 		ID:        "card",
 		FolderID:  "folder",
 		CreatedAt: now.UnixMilli(),
 		DueAt:     schedule.Due.UnixMilli(),
-		Items: []library.ContentItem{
+		Items: []contentapi.Item{
 			{
 				ID:              "item",
 				FolderID:        "folder",
@@ -114,15 +117,15 @@ func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 				ByteSize:        12,
 				RelativePath:    "media/item.png",
 				Schedule:        schedule,
-				Reviews:         []library.ItemReview{{Log: log, Automatic: true}},
+				Reviews:         []contentapi.Review{{Log: log, Automatic: true}},
 				LastNotifiedDue: schedule.Due.UnixMilli(),
 			},
 		},
 	}
 	for _, pair := range [][2]any{
-		{value, publicCard(&value)},
-		{library.Folder{ID: "folder", Title: "Ideas", Tags: []string{}}, publicFolder(&library.Folder{ID: "folder", Title: "Ideas", Tags: []string{}})},
-		{[]library.Card(nil), publicCards(nil)},
+		{value, facadeValue(t, value)},
+		{folderapi.Folder{ID: "folder", Title: "Ideas", Tags: []string{}}, facadeValue(t, folderapi.Folder{ID: "folder", Title: "Ideas", Tags: []string{}})},
+		{[]cardapi.Card(nil), facadeValue(t, []cardapi.Card(nil))},
 	} {
 		before, err := json.Marshal(pair[0])
 		if err != nil {
@@ -138,6 +141,17 @@ func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 	}
 }
 
+func facadeValue[Value any](t *testing.T, value Value) Value {
+	t.Helper()
+	cause := errors.New("storage failure")
+	result, err := publicResult(value, cause)
+	var failure *ServiceError
+	if !errors.As(err, &failure) || failure.Message != cause.Error() || errors.Is(err, cause) {
+		t.Fatalf("public result leaked its implementation error: %v", err)
+	}
+	return result
+}
+
 func TestFolderServiceAndShutdown(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
 	store, err := boltstore.Open(path, scheduling.New())
@@ -146,18 +160,18 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	service := &RavenService{store: store}
-	folder, err := service.CreateFolder(&CreateFolderInput{Title: " Ideas "})
+	folder, err := service.CreateFolder(&folderapi.CreateInput{Title: " Ideas "})
 	if err != nil {
 		t.Fatal(err)
 	}
 	folders, err := service.ListFolders()
-	if err != nil || !reflect.DeepEqual(folders, []Folder{folder}) {
+	if err != nil || !reflect.DeepEqual(folders, []folderapi.Folder{folder}) {
 		t.Fatalf("service folders: %+v, error=%v", folders, err)
 	}
 	card, err := service.CreateCard(
-		&CreateCardInput{
+		&cardapi.CreateInput{
 			FolderID: folder.ID,
-			Items: []ItemDraft{
+			Items: []contentapi.Draft{
 				{Kind: "text", Text: "A question"},
 				{Kind: "text", Text: "An answer"},
 			},
@@ -166,13 +180,20 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err = service.ReviewItem(folder.ID, card.ID, card.Items[0].ID, 3)
+	card, err = service.ReviewItem(
+		&cardapi.ReviewInput{
+			FolderID: folder.ID,
+			CardID:   card.ID,
+			ItemID:   card.Items[0].ID,
+			Rating:   3,
+		},
+	)
 	if err != nil || card.Items[0].Schedule.Reps != 2 || card.DueAt <= card.LastReviewed {
 		t.Fatalf("service review: %+v, error=%v", card, err)
 	}
 	due := card.DueAt
 	card, err = service.UpdateCard(
-		&UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: []ItemDraft{
+		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: []contentapi.Draft{
 			{ID: card.Items[0].ID, Kind: "text", Text: "An edited question"},
 			{ID: card.Items[1].ID, Kind: "text", Text: "An edited answer"},
 		}},
@@ -181,7 +202,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 		t.Fatalf("service edit: %+v, error=%v", card, err)
 	}
 	cards, err := service.ListCards()
-	if err != nil || !reflect.DeepEqual(cards, []Card{card}) {
+	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("service cards: %+v, error=%v", cards, err)
 	}
 	if err := (&lifecycleAdapter{service: service}).ServiceShutdown(); err != nil {
@@ -196,13 +217,13 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	}
 	defer reopened.Close()
 	rawFolders, err := reopened.ListFolders()
-	folders = publicFolders(rawFolders)
-	if err != nil || !reflect.DeepEqual(folders, []Folder{folder}) {
+	folders = rawFolders
+	if err != nil || !reflect.DeepEqual(folders, []folderapi.Folder{folder}) {
 		t.Fatalf("folders after service shutdown: %+v, error=%v", folders, err)
 	}
 	rawCards, err := reopened.ListCards()
-	cards = publicCards(rawCards)
-	if err != nil || !reflect.DeepEqual(cards, []Card{card}) {
+	cards = rawCards
+	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("cards after service shutdown: %+v, error=%v", cards, err)
 	}
 }
@@ -234,19 +255,21 @@ func TestFolderServiceWithoutStorage(t *testing.T) {
 	if _, err := service.ListFolders(); err == nil {
 		t.Fatal("listing without storage should fail")
 	}
-	if _, err := service.CreateFolder(&CreateFolderInput{Title: "Ideas"}); err == nil {
+	if _, err := service.CreateFolder(&folderapi.CreateInput{Title: "Ideas"}); err == nil {
 		t.Fatal("creating without storage should fail")
 	}
 	if _, err := service.ListCards(); err == nil {
 		t.Fatal("listing cards without storage should fail")
 	}
-	if _, err := service.CreateCard(&CreateCardInput{}); err == nil {
+	if _, err := service.CreateCard(&cardapi.CreateInput{}); err == nil {
 		t.Fatal("creating cards without storage should fail")
 	}
-	if _, err := service.UpdateCard(&UpdateCardInput{}); err == nil {
+	if _, err := service.UpdateCard(&cardapi.UpdateInput{}); err == nil {
 		t.Fatal("editing without storage should fail")
 	}
-	if _, err := service.ReviewItem("folder", "card", "item", 3); err == nil {
+	if _, err := service.ReviewItem(
+		&cardapi.ReviewInput{FolderID: "folder", CardID: "card", ItemID: "item", Rating: 3},
+	); err == nil {
 		t.Fatal("reviewing cards without storage should fail")
 	}
 	if err := (&lifecycleAdapter{service: service}).ServiceShutdown(); err != nil {

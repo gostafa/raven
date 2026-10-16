@@ -9,14 +9,14 @@ import (
 
 	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
 
-	"raven/internal/library"
+	reviewapi "raven/api/reviews"
 )
 
 // New constructs the adapter with its required runtime dependencies.
 func New() Scheduler { return Scheduler{engine: fsrs.NewFSRS(fsrs.DefaultParam())} }
 
 // Initialize creates the initial spaced repetition schedule.
-func (scheduler Scheduler) Initialize(now time.Time) (library.Schedule, library.ReviewLog, error) {
+func (scheduler Scheduler) Initialize(now time.Time) (reviewapi.Schedule, reviewapi.Log, error) {
 	card := fsrs.NewCard(now)
 
 	result2, result3, forwardErr := scheduler.advance(&card, now, minimumRating)
@@ -29,11 +29,11 @@ func (scheduler Scheduler) Initialize(now time.Time) (library.Schedule, library.
 
 // Next advances a spaced repetition schedule for a user rating.
 func (scheduler Scheduler) Next(
-	card library.Schedule,
+	card *reviewapi.Schedule,
 	now time.Time,
 	rating int,
-) (library.Schedule, library.ReviewLog, error) {
-	native := toCard(&card)
+) (reviewapi.Schedule, reviewapi.Log, error) {
+	native := toCard(card)
 
 	result4, result5, forwardErr2 := scheduler.advance(&native, now, rating)
 	if forwardErr2 != nil {
@@ -44,8 +44,8 @@ func (scheduler Scheduler) Next(
 }
 
 // Validate checks that a persisted schedule is accepted by FSRS.
-func (scheduler Scheduler) Validate(card library.Schedule) error {
-	_, err := scheduler.engine.Repeat(toCard(&card), card.LastReview)
+func (scheduler Scheduler) Validate(card *reviewapi.Schedule) error {
+	_, err := scheduler.engine.Repeat(toCard(card), card.LastReview)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
@@ -57,9 +57,9 @@ func (scheduler Scheduler) advance(
 	card *fsrs.Card,
 	now time.Time,
 	rating int,
-) (library.Schedule, library.ReviewLog, error) {
+) (reviewapi.Schedule, reviewapi.Log, error) {
 	if rating < minimumRating || rating > maximumRating {
-		return library.Schedule{}, library.ReviewLog{}, errInvalidRating
+		return reviewapi.Schedule{}, reviewapi.Log{}, errInvalidRating
 	}
 
 	result, err := scheduler.engine.Next(*card, now, fsrs.Rating(rating))
@@ -67,7 +67,7 @@ func (scheduler Scheduler) advance(
 	return fromCard(&result.Card), fromLog(&result.ReviewLog), err
 }
 
-func toCard(value *library.Schedule) fsrs.Card {
+func toCard(value *reviewapi.Schedule) fsrs.Card {
 	return fsrs.Card{
 		Due:            value.Due,
 		Stability:      value.Stability,
@@ -81,8 +81,8 @@ func toCard(value *library.Schedule) fsrs.Card {
 	}
 }
 
-func fromCard(value *fsrs.Card) library.Schedule {
-	return library.Schedule{
+func fromCard(value *fsrs.Card) reviewapi.Schedule {
+	return reviewapi.Schedule{
 		Due:            value.Due,
 		Stability:      value.Stability,
 		Difficulty:     value.Difficulty,
@@ -95,8 +95,8 @@ func fromCard(value *fsrs.Card) library.Schedule {
 	}
 }
 
-func fromLog(value *fsrs.ReviewLog) library.ReviewLog {
-	return library.ReviewLog{
+func fromLog(value *fsrs.ReviewLog) reviewapi.Log {
+	return reviewapi.Log{
 		Rating:         int8(value.Rating),
 		Due:            value.Due,
 		ScheduledDays:  value.ScheduledDays,

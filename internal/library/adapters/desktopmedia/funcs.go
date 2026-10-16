@@ -17,7 +17,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"raven/internal/library"
+	mediaapi "raven/api/media"
 	"raven/internal/library/adapters/filesystem"
 )
 
@@ -61,7 +61,7 @@ func nativeChooser(
 }
 
 // Select selects supported media files and issues temporary preview URLs.
-func (picker *Picker) Select(kind string) ([]library.SelectedMedia, error) {
+func (picker *Picker) Select(kind string) ([]mediaapi.Selection, error) {
 	filter := selectionFilter(kind)
 	if filter == "" {
 		return nil, errInvalidMediaType
@@ -91,8 +91,8 @@ func selectionFilter(kind string) string {
 func (picker *Picker) describePaths(
 	paths []string,
 	filter string,
-) ([]library.SelectedMedia, error) {
-	selected := make([]library.SelectedMedia, zero, len(paths))
+) ([]mediaapi.Selection, error) {
+	selected := make([]mediaapi.Selection, zero, len(paths))
 	for index := range paths {
 		value, err := picker.describePath(paths[index], filter)
 		if err != nil {
@@ -105,21 +105,21 @@ func (picker *Picker) describePaths(
 	return selected, nil
 }
 
-func (picker *Picker) describePath(path, filter string) (library.SelectedMedia, error) {
+func (picker *Picker) describePath(path, filter string) (mediaapi.Selection, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return library.SelectedMedia{}, fmt.Errorf("inspect selected file: %w", err)
+		return mediaapi.Selection{}, fmt.Errorf("inspect selected file: %w", err)
 	}
 
 	err = validateSelection(info, path, filter)
 	if err != nil {
-		return library.SelectedMedia{}, fmt.Errorf("validate selected file: %w", err)
+		return mediaapi.Selection{}, fmt.Errorf("validate selected file: %w", err)
 	}
 
 	key := rand.Text()
 	picker.previews.Store(key, path)
 
-	return library.SelectedMedia{
+	return mediaapi.Selection{
 		SourcePath:   path,
 		OriginalName: filepath.Base(path),
 		ByteSize:     info.Size(),

@@ -22,7 +22,10 @@ import (
 	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
 	bolt "go.etcd.io/bbolt"
 
-	"raven/internal/library"
+	cardapi "raven/api/cards"
+	contentapi "raven/api/content"
+	folderapi "raven/api/folders"
+	reviewapi "raven/api/reviews"
 	"raven/internal/library/adapters/scheduling"
 )
 
@@ -33,16 +36,14 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	folder, err := store.CreateFolder(library.CreateFolderInput{Title: "Spanish"})
+	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Spanish"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.CreateCard(
-		library.CreateCardInput{
-			FolderID: folder.ID,
-			Items:    textItems("  See you tomorrow? ", " Hasta mañana. "),
-		},
-	)
+	card, err := store.CreateCard(&cardapi.CreateInput{
+		FolderID: folder.ID,
+		Items:    textItems("  See you tomorrow? ", " Hasta mañana. "),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,15 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		card, err = store.reviewItemAt(folder.ID, card.ID, initial.ID, rating, now)
+		card, err = store.reviewItemAt(
+			&cardapi.ReviewInput{
+				FolderID: folder.ID,
+				CardID:   card.ID,
+				ItemID:   initial.ID,
+				Rating:   rating,
+			},
+			now,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -85,21 +94,21 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 		t.Fatal(err)
 	}
 	cards, err := store.ListCards()
-	if err != nil || !reflect.DeepEqual(cards, []library.Card{card}) {
+	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("cards after reopen: %+v, %v", cards, err)
 	}
 }
 
 func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 	store := openTestStore(t)
-	first, _ := store.CreateFolder(library.CreateFolderInput{Title: "First"})
-	second, _ := store.CreateFolder(library.CreateFolderInput{Title: "Second"})
-	for _, input := range []library.CreateCardInput{
+	first, _ := store.CreateFolder(&folderapi.CreateInput{Title: "First"})
+	second, _ := store.CreateFolder(&folderapi.CreateInput{Title: "Second"})
+	for _, input := range []cardapi.CreateInput{
 		{FolderID: first.ID, Items: textItems(" ", "answer")},
 		{FolderID: first.ID, Items: textItems("question", " \n")},
 		{FolderID: "missing", Items: textItems("question", "answer")},
 	} {
-		if _, err := store.CreateCard(input); err == nil {
+		if _, err := store.CreateCard(&input); err == nil {
 			t.Fatalf("accepted invalid card: %+v", input)
 		}
 	}
@@ -108,19 +117,33 @@ func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 		t.Fatalf("failed save wrote cards: %+v, %v", cards, err)
 	}
 	card, err := store.CreateCard(
-		library.CreateCardInput{FolderID: first.ID, Items: textItems("Question", "Answer")},
+		&cardapi.CreateInput{FolderID: first.ID, Items: textItems("Question", "Answer")},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReviewItem(second.ID, card.ID, card.Items[0].ID, 3); err == nil {
+	if _, err := store.ReviewItem(
+		&cardapi.ReviewInput{
+			FolderID: second.ID,
+			CardID:   card.ID,
+			ItemID:   card.Items[0].ID,
+			Rating:   3,
+		},
+	); err == nil {
 		t.Fatal("reviewed a card through the wrong folder")
 	}
-	if _, err := store.ReviewItem(first.ID, "missing", card.Items[0].ID, 3); err == nil {
+	if _, err := store.ReviewItem(
+		&cardapi.ReviewInput{
+			FolderID: first.ID,
+			CardID:   "missing",
+			ItemID:   card.Items[0].ID,
+			Rating:   3,
+		},
+	); err == nil {
 		t.Fatal("reviewed a missing card")
 	}
 	cards, err = store.ListCards()
-	if err != nil || !reflect.DeepEqual(cards, []library.Card{card}) {
+	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("failed review changed cards: %+v, %v", cards, err)
 	}
 	if err := store.Close(); err != nil {
@@ -130,7 +153,7 @@ func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 		t.Fatalf("closed list: %v", err)
 	}
 	if _, err := store.CreateCard(
-		library.CreateCardInput{FolderID: first.ID, Items: textItems("Question", "Answer")},
+		&cardapi.CreateInput{FolderID: first.ID, Items: textItems("Question", "Answer")},
 	); !errors.Is(
 		err,
 		bolt.ErrDatabaseNotOpen,
@@ -138,10 +161,12 @@ func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 		t.Fatalf("closed create: %v", err)
 	}
 	if _, err := store.ReviewItem(
-		first.ID,
-		card.ID,
-		card.Items[0].ID,
-		3,
+		&cardapi.ReviewInput{
+			FolderID: first.ID,
+			CardID:   card.ID,
+			ItemID:   card.Items[0].ID,
+			Rating:   3,
+		},
 	); !errors.Is(
 		err,
 		bolt.ErrDatabaseNotOpen,
@@ -150,10 +175,10 @@ func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 	}
 }
 
-func textItems(texts ...string) []library.ItemDraft {
-	items := make([]library.ItemDraft, 0, len(texts))
+func textItems(texts ...string) []contentapi.Draft {
+	items := make([]contentapi.Draft, 0, len(texts))
 	for _, text := range texts {
-		items = append(items, library.ItemDraft{Kind: "text", Text: text})
+		items = append(items, contentapi.Draft{Kind: "text", Text: text})
 	}
 	return items
 }
@@ -182,31 +207,31 @@ func mediaFixture(t *testing.T, ext string) (string, []byte) {
 	return path, data
 }
 
-func itemDrafts(card library.Card) []library.ItemDraft {
-	drafts := make([]library.ItemDraft, 0, len(card.Items))
+func itemDrafts(card cardapi.Card) []contentapi.Draft {
+	drafts := make([]contentapi.Draft, 0, len(card.Items))
 	for _, item := range card.Items {
-		drafts = append(drafts, library.ItemDraft{ID: item.ID, Kind: item.Kind, Text: item.Text})
+		drafts = append(drafts, contentapi.Draft{ID: item.ID, Kind: item.Kind, Text: item.Text})
 	}
 	return drafts
 }
 
 func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "Mixed"})
-	drafts := []library.ItemDraft{}
+	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Mixed"})
+	drafts := []contentapi.Draft{}
 	for batch := range 2 {
 		for i := range 2 {
 			drafts = append(
 				drafts,
-				library.ItemDraft{Kind: "text", Text: fmt.Sprintf(" text %d %d ", batch, i)},
+				contentapi.Draft{Kind: "text", Text: fmt.Sprintf(" text %d %d ", batch, i)},
 			)
 			for _, media := range []struct{ kind, ext string }{{"image", ".png"}, {"audio", ".wav"}, {"video", ".mp4"}} {
 				path, _ := mediaFixture(t, media.ext)
-				drafts = append(drafts, library.ItemDraft{Kind: media.kind, SourcePath: path})
+				drafts = append(drafts, contentapi.Draft{Kind: media.kind, SourcePath: path})
 			}
 		}
 	}
-	card, err := s.CreateCard(library.CreateCardInput{FolderID: folder.ID, Items: drafts})
+	card, err := s.CreateCard(&cardapi.CreateInput{FolderID: folder.ID, Items: drafts})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +269,14 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	card, err = s.ReviewItem(folder.ID, card.ID, card.Items[0].ID, 3)
+	card, err = s.ReviewItem(
+		&cardapi.ReviewInput{
+			FolderID: folder.ID,
+			CardID:   card.ID,
+			ItemID:   card.Items[0].ID,
+			Rating:   3,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +287,7 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	edit[0], edit[1] = edit[1], edit[0]
 	edit[1].Text = "Updated text"
 	updated, err := s.UpdateCard(
-		library.UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: edit},
+		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: edit},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -280,32 +312,32 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	}
 	defer reopened.Close()
 	cards, err := reopened.ListCards()
-	if err != nil || !reflect.DeepEqual(cards, []library.Card{updated}) {
+	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{updated}) {
 		t.Fatalf("reopen mismatch: %v", err)
 	}
 }
 
 func TestContentValidationAndRollback(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "First"})
-	other, _ := s.CreateFolder(library.CreateFolderInput{Title: "Second"})
+	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "First"})
+	other, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Second"})
 	card, err := s.CreateCard(
-		library.CreateCardInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")},
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	otherCard, err := s.CreateCard(
-		library.CreateCardInput{FolderID: other.ID, Items: textItems("Other", "Answer")},
+		&cardapi.CreateInput{FolderID: other.ID, Items: textItems("Other", "Answer")},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// library.Card IDs are folder scoped, so both may be equal; content IDs still cannot cross ownership.
+	// cardapi.Card IDs are folder scoped, so both may be equal; content IDs still cannot cross ownership.
 	foreign := itemDrafts(otherCard)
 	duplicate := itemDrafts(card)
 	duplicate = append(duplicate, duplicate[0])
-	invalid := [][]library.ItemDraft{
+	invalid := [][]contentapi.Draft{
 		{},
 		{{Kind: "text", Text: " "}},
 		{{Kind: "html", Text: "Wrong kind"}},
@@ -314,18 +346,18 @@ func TestContentValidationAndRollback(t *testing.T) {
 	}
 	for _, drafts := range invalid {
 		if _, err := s.UpdateCard(
-			library.UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: drafts},
+			&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: drafts},
 		); err == nil {
 			t.Fatalf("accepted invalid drafts: %+v", drafts)
 		}
 	}
 	image, _ := mediaFixture(t, ".png")
-	failed := []library.ItemDraft{
+	failed := []contentapi.Draft{
 		{Kind: "image", SourcePath: image},
 		{Kind: "audio", SourcePath: "missing.wav"},
 	}
 	if _, err := s.UpdateCard(
-		library.UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: failed},
+		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: failed},
 	); err == nil {
 		t.Fatal("accepted missing import")
 	}
@@ -339,15 +371,13 @@ func TestContentValidationAndRollback(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateCard(
-		library.CreateCardInput{
-			FolderID: folder.ID,
-			Items: []library.ItemDraft{
-				{Kind: "image", SourcePath: image},
-				{Kind: "text", Text: "Answer"},
-			},
+	if _, err := s.CreateCard(&cardapi.CreateInput{
+		FolderID: folder.ID,
+		Items: []contentapi.Draft{
+			{Kind: "image", SourcePath: image},
+			{Kind: "text", Text: "Answer"},
 		},
-	); err == nil {
+	}); err == nil {
 		t.Fatal("overwrote a colliding card ID")
 	}
 	entries, _ = os.ReadDir(s.mediaDir)
@@ -355,38 +385,34 @@ func TestContentValidationAndRollback(t *testing.T) {
 		t.Fatal("transaction rollback left imported file")
 	}
 	cards, err := s.ListCards()
-	if err != nil || !reflect.DeepEqual(cards, []library.Card{card, otherCard}) {
+	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card, otherCard}) {
 		t.Fatalf("failed edit changed data: %+v, %v", cards, err)
 	}
 }
 
 func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "Media"})
-	other, _ := s.CreateFolder(library.CreateFolderInput{Title: "Other"})
+	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Media"})
+	other, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Other"})
 	image, imageData := mediaFixture(t, ".png")
 	audio, _ := mediaFixture(t, ".wav")
-	card, err := s.CreateCard(
-		library.CreateCardInput{
-			FolderID: folder.ID,
-			Items: []library.ItemDraft{
-				{Kind: "image", SourcePath: image},
-				{Kind: "audio", SourcePath: audio},
-			},
+	card, err := s.CreateCard(&cardapi.CreateInput{
+		FolderID: folder.ID,
+		Items: []contentapi.Draft{
+			{Kind: "image", SourcePath: image},
+			{Kind: "audio", SourcePath: audio},
 		},
-	)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	copyCard, err := s.CreateCard(
-		library.CreateCardInput{
-			FolderID: folder.ID,
-			Items: []library.ItemDraft{
-				{Kind: "image", SourcePath: image},
-				{Kind: "audio", SourcePath: audio},
-			},
+	copyCard, err := s.CreateCard(&cardapi.CreateInput{
+		FolderID: folder.ID,
+		Items: []contentapi.Draft{
+			{Kind: "image", SourcePath: image},
+			{Kind: "audio", SourcePath: audio},
 		},
-	)
+	})
 	if err != nil || copyCard.Items[0].RelativePath == card.Items[0].RelativePath {
 		t.Fatal("media was shared between cards")
 	}
@@ -470,44 +496,40 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 
 func TestMediaTypeValidation(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "Media"})
+	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Media"})
 	path := filepath.Join(t.TempDir(), "fake.png")
 	if err := os.WriteFile(path, []byte("<html>not an image</html>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	image, _ := mediaFixture(t, ".png")
-	for _, draft := range []library.ItemDraft{{Kind: "image", SourcePath: path}, {Kind: "video", SourcePath: image}, {Kind: "image", SourcePath: filepath.Dir(image)}} {
-		if _, err := s.CreateCard(
-			library.CreateCardInput{
-				FolderID: folder.ID,
-				Items: append(
-					[]library.ItemDraft{draft},
-					library.ItemDraft{Kind: "text", Text: "answer"},
-				),
-			},
-		); err == nil {
+	for _, draft := range []contentapi.Draft{{Kind: "image", SourcePath: path}, {Kind: "video", SourcePath: image}, {Kind: "image", SourcePath: filepath.Dir(image)}} {
+		if _, err := s.CreateCard(&cardapi.CreateInput{
+			FolderID: folder.ID,
+			Items: append(
+				[]contentapi.Draft{draft},
+				contentapi.Draft{Kind: "text", Text: "answer"},
+			),
+		}); err == nil {
 			t.Fatalf("accepted invalid media: %+v", draft)
 		}
 	}
 	m4a, _ := mediaFixture(t, ".m4a")
-	if _, err := s.CreateCard(
-		library.CreateCardInput{
-			FolderID: folder.ID,
-			Items: []library.ItemDraft{
-				{Kind: "audio", SourcePath: m4a},
-				{Kind: "text", Text: "answer"},
-			},
+	if _, err := s.CreateCard(&cardapi.CreateInput{
+		FolderID: folder.ID,
+		Items: []contentapi.Draft{
+			{Kind: "audio", SourcePath: m4a},
+			{Kind: "text", Text: "answer"},
 		},
-	); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestConcurrentReviewAndContentEdit(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "Concurrent"})
+	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Concurrent"})
 	card, err := s.CreateCard(
-		library.CreateCardInput{FolderID: folder.ID, Items: textItems("prompt", "answer")},
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("prompt", "answer")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -515,18 +537,23 @@ func TestConcurrentReviewAndContentEdit(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			if _, err := s.ReviewItem(folder.ID, card.ID, card.Items[0].ID, 3); err != nil {
+			if _, err := s.ReviewItem(
+				&cardapi.ReviewInput{
+					FolderID: folder.ID,
+					CardID:   card.ID,
+					ItemID:   card.Items[0].ID,
+					Rating:   3,
+				},
+			); err != nil {
 				t.Error(err)
 			}
 		})
 		wg.Go(func() {
-			if _, err := s.UpdateCard(
-				library.UpdateCardInput{
-					FolderID: folder.ID,
-					CardID:   card.ID,
-					Items:    itemDrafts(card),
-				},
-			); err != nil {
+			if _, err := s.UpdateCard(&cardapi.UpdateInput{
+				FolderID: folder.ID,
+				CardID:   card.ID,
+				Items:    itemDrafts(card),
+			}); err != nil {
 				t.Error(err)
 			}
 		})
@@ -558,7 +585,7 @@ func createLegacyDB(t *testing.T, path string, malformed bool) []byte {
 		_ = root.SetSequence(1)
 		folder, _ := root.CreateBucket([]byte("00000000000000000001"))
 		metadata, _ := json.Marshal(
-			library.Folder{ID: "00000000000000000001", Title: "Legacy", Tags: []string{}},
+			folderapi.Folder{ID: "00000000000000000001", Title: "Legacy", Tags: []string{}},
 		)
 		_ = folder.Put([]byte(metadataKey), metadata)
 		cards, _ := folder.CreateBucket([]byte(cardsBucket))
@@ -629,7 +656,7 @@ func TestLegacyMigrationBackupAndIdempotence(t *testing.T) {
 		t.Fatal("made another backup after migration")
 	}
 	next, err := s.CreateCard(
-		library.CreateCardInput{FolderID: card.FolderID, Items: textItems("next", "answer")},
+		&cardapi.CreateInput{FolderID: card.FolderID, Items: textItems("next", "answer")},
 	)
 	if err != nil || next.ID != "00000000000000000002" {
 		t.Fatal("lost card sequence")
@@ -671,32 +698,30 @@ func TestFailedMigrationLeavesOriginalRecords(t *testing.T) {
 
 func TestSingleContentCards(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "Information"})
+	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Information"})
 	card, err := s.CreateCard(
-		library.CreateCardInput{FolderID: folder.ID, Items: textItems("A fact worth remembering")},
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("A fact worth remembering")},
 	)
 	if err != nil || len(card.Items) != 1 {
 		t.Fatalf("single text card: %+v, %v", card, err)
 	}
 	image, _ := mediaFixture(t, ".png")
-	updated, err := s.UpdateCard(
-		library.UpdateCardInput{
-			FolderID: folder.ID,
-			CardID:   card.ID,
-			Items:    []library.ItemDraft{{Kind: "image", SourcePath: image}},
-		},
-	)
+	updated, err := s.UpdateCard(&cardapi.UpdateInput{
+		FolderID: folder.ID,
+		CardID:   card.ID,
+		Items:    []contentapi.Draft{{Kind: "image", SourcePath: image}},
+	})
 	if err != nil || len(updated.Items) != 1 || updated.Items[0].Kind != "image" ||
 		updated.Items[0].Position != 0 {
 		t.Fatalf("single media card: %+v, %v", updated, err)
 	}
 	if _, err := s.UpdateCard(
-		library.UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: nil},
+		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: nil},
 	); err == nil {
 		t.Fatal("accepted an empty information card")
 	}
 	cards, err := s.ListCards()
-	if err != nil || !reflect.DeepEqual(cards, []library.Card{updated}) {
+	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{updated}) {
 		t.Fatalf("empty edit changed saved content: %+v, %v", cards, err)
 	}
 }
@@ -709,22 +734,27 @@ func TestSidedContentMigration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "Existing content"})
+			folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Existing content"})
 			image, _ := mediaFixture(t, ".png")
-			card, err := s.CreateCard(
-				library.CreateCardInput{
-					FolderID: folder.ID,
-					Items: []library.ItemDraft{
-						{Kind: "text", Text: "Prompt text"},
-						{Kind: "image", SourcePath: image},
-						{Kind: "text", Text: "Answer text"},
-					},
+			card, err := s.CreateCard(&cardapi.CreateInput{
+				FolderID: folder.ID,
+				Items: []contentapi.Draft{
+					{Kind: "text", Text: "Prompt text"},
+					{Kind: "image", SourcePath: image},
+					{Kind: "text", Text: "Answer text"},
 				},
-			)
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			card, err = s.ReviewItem(folder.ID, card.ID, card.Items[0].ID, 3)
+			card, err = s.ReviewItem(
+				&cardapi.ReviewInput{
+					FolderID: folder.ID,
+					CardID:   card.ID,
+					ItemID:   card.Items[0].ID,
+					Rating:   3,
+				},
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -740,9 +770,9 @@ func TestSidedContentMigration(t *testing.T) {
 					Bucket([]byte(card.ID))
 				for i, item := range card.Items {
 					old := struct {
-						library.ContentItem
+						contentapi.Item
 						Side string `json:"side"`
-					}{ContentItem: item, Side: "prompt"}
+					}{Item: item, Side: "prompt"}
 					// Put the image before the text on the old prompt side.
 					old.Position = 1 - i
 					if i == 2 {
@@ -808,7 +838,7 @@ func TestSidedContentMigration(t *testing.T) {
 				t.Fatalf("migrated cards: %+v, %v", cards, err)
 			}
 			want := card
-			want.Items = []library.ContentItem{card.Items[1], card.Items[0], card.Items[2]}
+			want.Items = []contentapi.Item{card.Items[1], card.Items[0], card.Items[2]}
 			for i := range want.Items {
 				want.Items[i].Position = i
 				want.Items[i].Schedule = cards[0].Items[i].Schedule
@@ -867,18 +897,18 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	first, err := s.CreateFolder(library.CreateFolderInput{Title: "First"})
+	first, err := s.CreateFolder(&folderapi.CreateInput{Title: "First"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.CreateFolder(library.CreateFolderInput{Title: "Second"})
+	second, err := s.CreateFolder(&folderapi.CreateInput{Title: "Second"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	create := func(folder string) library.Card {
+	create := func(folder string) cardapi.Card {
 		t.Helper()
 		card, err := s.CreateCard(
-			library.CreateCardInput{FolderID: folder, Items: textItems("Remember")},
+			&cardapi.CreateInput{FolderID: folder, Items: textItems("Remember")},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -972,9 +1002,9 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	want := make([]library.Folder, 0)
+	want := make([]folderapi.Folder, 0)
 	for i := range 12 {
-		folder, err := store.CreateFolder(library.CreateFolderInput{
+		folder, err := store.CreateFolder(&folderapi.CreateInput{
 			Title: fmt.Sprintf("  Ideas %d  ", i), Description: "  Things to explore 新しい  ",
 			Tags: []string{" ideas ", "", "Personal", "IDEAS", "personal", " 新しい "},
 		})
@@ -1015,7 +1045,7 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := store.CreateFolder(library.CreateFolderInput{Title: "After restart"})
+	next, err := store.CreateFolder(&folderapi.CreateInput{Title: "After restart"})
 	if err != nil || next.ID != fmt.Sprintf("%020d", len(want)+1) || next.Tags == nil {
 		t.Fatalf("sequence/tags after reopen: %+v, error=%v", next, err)
 	}
@@ -1024,7 +1054,7 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 func TestValidationDoesNotWrite(t *testing.T) {
 	store := openTestStore(t)
 	for _, title := range []string{"", " \n\t ", "\u3000"} {
-		if _, err := store.CreateFolder(library.CreateFolderInput{Title: title}); err == nil {
+		if _, err := store.CreateFolder(&folderapi.CreateInput{Title: title}); err == nil {
 			t.Errorf("accepted empty title %q", title)
 		}
 	}
@@ -1032,7 +1062,7 @@ func TestValidationDoesNotWrite(t *testing.T) {
 	if err != nil || len(folders) != 0 {
 		t.Fatalf("validation wrote folders: %v, error=%v", folders, err)
 	}
-	folder, err := store.CreateFolder(library.CreateFolderInput{Title: "Valid"})
+	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Valid"})
 	if err != nil || folder.ID != "00000000000000000001" || folder.Tags == nil {
 		t.Fatalf("invalid sequence or null tags: %+v, error=%v", folder, err)
 	}
@@ -1044,7 +1074,7 @@ func TestConcurrentFolderCreation(t *testing.T) {
 	for i := range 32 {
 		wg.Go(func() {
 			if _, err := store.CreateFolder(
-				library.CreateFolderInput{Title: fmt.Sprintf("library.Folder %d", i)},
+				&folderapi.CreateInput{Title: fmt.Sprintf("folderapi.Folder %d", i)},
 			); err != nil {
 				t.Error(err)
 			}
@@ -1064,7 +1094,7 @@ func TestConcurrentFolderCreation(t *testing.T) {
 
 func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T) {
 	store := openTestStore(t)
-	original, err := store.CreateFolder(library.CreateFolderInput{Title: "Original"})
+	original, err := store.CreateFolder(&folderapi.CreateInput{Title: "Original"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1075,7 +1105,7 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 		t.Fatal(err)
 	}
 	if _, err := store.CreateFolder(
-		library.CreateFolderInput{Title: "Must not overwrite"},
+		&folderapi.CreateInput{Title: "Must not overwrite"},
 	); !errors.Is(
 		err,
 		bolt.ErrBucketExists,
@@ -1091,7 +1121,7 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 		t.Fatal(err)
 	}
 	folders, err := store.ListFolders()
-	if err != nil || !reflect.DeepEqual(folders, []library.Folder{original}) {
+	if err != nil || !reflect.DeepEqual(folders, []folderapi.Folder{original}) {
 		t.Fatalf("failed transaction changed folders: %+v, error=%v", folders, err)
 	}
 }
@@ -1133,7 +1163,7 @@ func TestUnreadableDatabaseIsNotReplaced(t *testing.T) {
 func TestReadFailureDoesNotReturnPartialFolders(t *testing.T) {
 	store := openTestStore(t)
 	for range 2 {
-		if _, err := store.CreateFolder(library.CreateFolderInput{Title: "Ideas"}); err != nil {
+		if _, err := store.CreateFolder(&folderapi.CreateInput{Title: "Ideas"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1157,9 +1187,7 @@ func TestClosedStoreReturnsErrors(t *testing.T) {
 	if _, err := store.ListFolders(); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
 		t.Fatalf("expected closed database error, got %v", err)
 	}
-	if _, err := store.CreateFolder(
-		library.CreateFolderInput{Title: "Ideas"},
-	); !errors.Is(
+	if _, err := store.CreateFolder(&folderapi.CreateInput{Title: "Ideas"}); !errors.Is(
 		err,
 		bolt.ErrDatabaseNotOpen,
 	) {
@@ -1169,9 +1197,9 @@ func TestClosedStoreReturnsErrors(t *testing.T) {
 
 func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "Learning"})
+	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Learning"})
 	card, err := s.CreateCard(
-		library.CreateCardInput{FolderID: folder.ID, Items: textItems("one", "two")},
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("one", "two")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1180,7 +1208,14 @@ func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 		item   string
 		rating int
 	}{{card.Items[0].ID, 0}, {card.Items[0].ID, 5}, {"missing", 3}, {card.Items[1].ID, -1}} {
-		if _, err := s.ReviewItem(folder.ID, card.ID, invalid.item, invalid.rating); err == nil {
+		if _, err := s.ReviewItem(
+			&cardapi.ReviewInput{
+				FolderID: folder.ID,
+				CardID:   card.ID,
+				ItemID:   invalid.item,
+				Rating:   invalid.rating,
+			},
+		); err == nil {
 			t.Fatal("accepted invalid review")
 		}
 	}
@@ -1190,10 +1225,12 @@ func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 	}
 	// An invalid FSRS time must roll back both the schedule and its review log.
 	if _, err := s.reviewItemAt(
-		folder.ID,
-		card.ID,
-		card.Items[0].ID,
-		3,
+		&cardapi.ReviewInput{
+			FolderID: folder.ID,
+			CardID:   card.ID,
+			ItemID:   card.Items[0].ID,
+			Rating:   3,
+		},
 		card.Items[0].Schedule.LastReview.Add(-time.Second),
 	); err == nil {
 		t.Fatal("accepted review before last review")
@@ -1203,7 +1240,7 @@ func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 		t.Fatal("failed FSRS operation mutated data")
 	}
 	updated, err := s.UpdateCard(
-		library.UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: []library.ItemDraft{
+		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: []contentapi.Draft{
 			{ID: card.Items[1].ID, Kind: "text", Text: "edited"}, {Kind: "text", Text: "new"},
 		}},
 	)
@@ -1217,32 +1254,41 @@ func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 	if updated.Items[1].Schedule.Reps != 1 || !updated.Items[1].Reviews[0].Automatic {
 		t.Fatal("new item did not start Again")
 	}
-	if _, err := s.ReviewItem(folder.ID, card.ID, card.Items[0].ID, 3); err == nil {
+	if _, err := s.ReviewItem(
+		&cardapi.ReviewInput{
+			FolderID: folder.ID,
+			CardID:   card.ID,
+			ItemID:   card.Items[0].ID,
+			Rating:   3,
+		},
+	); err == nil {
 		t.Fatal("removed item remains reviewable")
 	}
 }
 
 func TestNotificationAcknowledgmentPersistsAndRejectsStaleSchedules(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "Reminders"})
+	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Reminders"})
 	card, _ := s.CreateCard(
-		library.CreateCardInput{FolderID: folder.ID, Items: textItems("one", "two")},
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("one", "two")},
 	)
 	first := card.Items[0]
-	occurrence := library.DueOccurrence{
+	occurrence := reviewapi.DueOccurrence{
 		folder.ID,
 		card.ID,
 		first.ID,
 		first.Schedule.Due.UnixMilli(),
 	}
-	if err := s.MarkNotified([]library.DueOccurrence{occurrence}); err != nil {
+	if err := s.MarkNotified([]reviewapi.DueOccurrence{occurrence}); err != nil {
 		t.Fatal(err)
 	}
-	card, err := s.ReviewItem(folder.ID, card.ID, first.ID, 4)
+	card, err := s.ReviewItem(
+		&cardapi.ReviewInput{FolderID: folder.ID, CardID: card.ID, ItemID: first.ID, Rating: 4},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkNotified([]library.DueOccurrence{occurrence}); err != nil {
+	if err := s.MarkNotified([]reviewapi.DueOccurrence{occurrence}); err != nil {
 		t.Fatal(err)
 	}
 	cards, _ := s.ListCards()
@@ -1277,17 +1323,15 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	folder, _ := s.CreateFolder(library.CreateFolderInput{Title: "V3"})
+	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "V3"})
 	image, _ := mediaFixture(t, ".png")
-	card, err := s.CreateCard(
-		library.CreateCardInput{
-			FolderID: folder.ID,
-			Items: []library.ItemDraft{
-				{Kind: "text", Text: "text"},
-				{Kind: "image", SourcePath: image},
-			},
+	card, err := s.CreateCard(&cardapi.CreateInput{
+		FolderID: folder.ID,
+		Items: []contentapi.Draft{
+			{Kind: "text", Text: "text"},
+			{Kind: "image", SourcePath: image},
 		},
-	)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1356,13 +1400,13 @@ func TestAutostartMarkerPersistsWithoutChangingContentOrSchema(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	folder, err := s.CreateFolder(
-		library.CreateFolderInput{Title: "Existing folder", Tags: []string{"retained"}},
+		&folderapi.CreateInput{Title: "Existing folder", Tags: []string{"retained"}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	card, err := s.CreateCard(
-		library.CreateCardInput{FolderID: folder.ID, Items: textItems("Existing memory")},
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Existing memory")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1381,11 +1425,11 @@ func TestAutostartMarkerPersistsWithoutChangingContentOrSchema(t *testing.T) {
 		t.Fatalf("reopened claim=%v error=%v", first, err)
 	}
 	folders, err := s.ListFolders()
-	if err != nil || !reflect.DeepEqual(folders, []library.Folder{folder}) {
+	if err != nil || !reflect.DeepEqual(folders, []folderapi.Folder{folder}) {
 		t.Fatalf("folders changed: %+v, %v", folders, err)
 	}
 	cards, err := s.ListCards()
-	if err != nil || !reflect.DeepEqual(cards, []library.Card{card}) {
+	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("cards changed: %+v, %v", cards, err)
 	}
 	if err := s.db.View(func(tx *bolt.Tx) error {
@@ -1429,7 +1473,7 @@ func TestAutostartMarkerFailsOnClosedDatabase(t *testing.T) {
 
 func openStore(path string) (*Store, error) { return Open(path, scheduling.New()) }
 
-func nativeSchedule(v library.Schedule) fsrs.Card {
+func nativeSchedule(v reviewapi.Schedule) fsrs.Card {
 	return fsrs.Card{
 		Due:            v.Due,
 		Stability:      v.Stability,
@@ -1449,25 +1493,32 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	folder, err := storage.CreateFolder(library.CreateFolderInput{Title: "Existing"})
+	folder, err := storage.CreateFolder(&folderapi.CreateInput{Title: "Existing"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	media, contents := mediaFixture(t, ".png")
 	card, err := storage.CreateCard(
-		library.CreateCardInput{FolderID: folder.ID, Items: []library.ItemDraft{
+		&cardapi.CreateInput{FolderID: folder.ID, Items: []contentapi.Draft{
 			{Kind: "text", Text: "Keep this schedule"}, {Kind: "image", SourcePath: media},
 		}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err = storage.ReviewItem(folder.ID, card.ID, card.Items[0].ID, 3)
+	card, err = storage.ReviewItem(
+		&cardapi.ReviewInput{
+			FolderID: folder.ID,
+			CardID:   card.ID,
+			ItemID:   card.Items[0].ID,
+			Rating:   3,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = storage.MarkNotified(
-		[]library.DueOccurrence{
+		[]reviewapi.DueOccurrence{
 			{
 				FolderID: folder.ID,
 				CardID:   card.ID,
@@ -1524,7 +1575,7 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := reopened.ListCards()
-		if err != nil || !reflect.DeepEqual(got, []library.Card{want}) {
+		if err != nil || !reflect.DeepEqual(got, []cardapi.Card{want}) {
 			t.Fatalf("lost records: %+v %v", got, err)
 		}
 		if claimed, err := reopened.ClaimAutostartInitialization(); err != nil || claimed {
@@ -1592,12 +1643,12 @@ func TestV4MigrationFailureRollsBackOriginalRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	folder, err := storage.CreateFolder(library.CreateFolderInput{Title: "Existing"})
+	folder, err := storage.CreateFolder(&folderapi.CreateInput{Title: "Existing"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	card, err := storage.CreateCard(
-		library.CreateCardInput{FolderID: folder.ID, Items: textItems("Keep me")},
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Keep me")},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1674,7 +1725,7 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	item := library.ContentItem{ID: strings.Repeat("a", 32), Kind: "image"}
+	item := contentapi.Item{ID: strings.Repeat("a", 32), Kind: "image"}
 	if err = inspectImportedMedia(source, path, &item); err != nil {
 		t.Fatal(err)
 	}
@@ -1727,29 +1778,29 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 func TestStoredContentIsValidatedWhenRead(t *testing.T) {
 	cases := []struct {
 		name   string
-		mutate func(*library.ContentItem)
+		mutate func(*contentapi.Item)
 	}{
-		{"item ownership", func(item *library.ContentItem) { item.ID = strings.Repeat("b", 32) }},
-		{"card ownership", func(item *library.ContentItem) { item.CardID = "other" }},
-		{"folder ownership", func(item *library.ContentItem) { item.FolderID = "other" }},
-		{"content structure", func(item *library.ContentItem) { item.Text = "" }},
-		{"missing due", func(item *library.ContentItem) { item.Schedule.Due = time.Time{} }},
+		{"item ownership", func(item *contentapi.Item) { item.ID = strings.Repeat("b", 32) }},
+		{"card ownership", func(item *contentapi.Item) { item.CardID = "other" }},
+		{"folder ownership", func(item *contentapi.Item) { item.FolderID = "other" }},
+		{"content structure", func(item *contentapi.Item) { item.Text = "" }},
+		{"missing due", func(item *contentapi.Item) { item.Schedule.Due = time.Time{} }},
 		{
 			"missing review time",
-			func(item *library.ContentItem) { item.Schedule.LastReview = time.Time{} },
+			func(item *contentapi.Item) { item.Schedule.LastReview = time.Time{} },
 		},
-		{"missing history", func(item *library.ContentItem) { item.Reviews = nil }},
-		{"invalid schedule", func(item *library.ContentItem) { item.Schedule.State = -1 }},
+		{"missing history", func(item *contentapi.Item) { item.Reviews = nil }},
+		{"invalid schedule", func(item *contentapi.Item) { item.Schedule.State = -1 }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			store := openTestStore(t)
-			folder, err := store.CreateFolder(library.CreateFolderInput{Title: "Stored validation"})
+			folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Stored validation"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			card, err := store.CreateCard(
-				library.CreateCardInput{FolderID: folder.ID, Items: textItems("content")},
+				&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("content")},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -1777,13 +1828,13 @@ func TestStoredContentIsValidatedWhenRead(t *testing.T) {
 
 func TestCardReadFailureDoesNotReturnPartialResults(t *testing.T) {
 	store := openTestStore(t)
-	folder, err := store.CreateFolder(library.CreateFolderInput{Title: "Partial reads"})
+	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Partial reads"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for index := 0; index < 2; index++ {
 		if _, err = store.CreateCard(
-			library.CreateCardInput{FolderID: folder.ID, Items: textItems("valid")},
+			&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("valid")},
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -1807,7 +1858,7 @@ func TestCardReadFailureDoesNotReturnPartialResults(t *testing.T) {
 }
 
 func TestRecordEncoderRejectsNonFiniteScheduleValues(t *testing.T) {
-	item := library.ContentItem{Schedule: library.Schedule{Stability: math.NaN()}}
+	item := contentapi.Item{Schedule: reviewapi.Schedule{Stability: math.NaN()}}
 	if _, err := encodeRecord(item); err == nil {
 		t.Fatal("encoded non-finite schedule")
 	}

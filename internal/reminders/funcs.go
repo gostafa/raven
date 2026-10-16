@@ -8,12 +8,18 @@ import (
 	"sync"
 	"time"
 
-	"raven/internal/library"
+	cardapi "raven/api/cards"
+	contentapi "raven/api/content"
+	reviewapi "raven/api/reviews"
 )
 
 // Snapshot returns unacknowledged due items and the next reminder delay.
-func Snapshot(cards []library.Card, now time.Time) ([]library.DueOccurrence, time.Duration) {
-	snapshot := reminderSnapshot{pending: []library.DueOccurrence{}, delay: pollInterval, now: now}
+func Snapshot(cards []cardapi.Card, now time.Time) ([]reviewapi.DueOccurrence, time.Duration) {
+	snapshot := reminderSnapshot{
+		pending: []reviewapi.DueOccurrence{},
+		delay:   pollInterval,
+		now:     now,
+	}
 
 	for cardIndex := range cards {
 		card := &cards[cardIndex]
@@ -25,7 +31,7 @@ func Snapshot(cards []library.Card, now time.Time) ([]library.DueOccurrence, tim
 	return snapshot.pending, snapshot.delay
 }
 
-func (snapshot *reminderSnapshot) add(card *library.Card, item *library.ContentItem) {
+func (snapshot *reminderSnapshot) add(card *cardapi.Card, item *contentapi.Item) {
 	due := item.Schedule.Due
 	if due.After(snapshot.now) {
 		snapshot.delay = min(snapshot.delay, due.Sub(snapshot.now))
@@ -38,7 +44,7 @@ func (snapshot *reminderSnapshot) add(card *library.Card, item *library.ContentI
 		return
 	}
 
-	occurrence := library.DueOccurrence{
+	occurrence := reviewapi.DueOccurrence{
 		FolderID: card.FolderID, CardID: card.ID, ItemID: item.ID, Due: dueMillis,
 	}
 
@@ -46,7 +52,7 @@ func (snapshot *reminderSnapshot) add(card *library.Card, item *library.ContentI
 }
 
 // Deliver sends an authorized reminder before acknowledging unchanged schedules.
-func Deliver(store Store, notifier Notifier, pending []library.DueOccurrence) error {
+func Deliver(store Store, notifier Notifier, pending []reviewapi.DueOccurrence) error {
 	allowed, err := notifier.CheckNotificationAuthorization()
 	if err != nil {
 		return fmt.Errorf("check reminder authorization: %w", err)
@@ -64,7 +70,7 @@ func Deliver(store Store, notifier Notifier, pending []library.DueOccurrence) er
 	return nil
 }
 
-func deliverAuthorized(store Store, notifier Notifier, pending []library.DueOccurrence) error {
+func deliverAuthorized(store Store, notifier Notifier, pending []reviewapi.DueOccurrence) error {
 	err := notifier.Send(len(pending))
 	if err != nil {
 		return fmt.Errorf("send review reminder: %w", err)
@@ -161,7 +167,7 @@ func (coordinator *Coordinator) reconcile() time.Duration {
 	return delay
 }
 
-func (coordinator *Coordinator) deliver(pending []library.DueOccurrence) {
+func (coordinator *Coordinator) deliver(pending []reviewapi.DueOccurrence) {
 	if len(pending) == zero || coordinator.notifier == nil {
 		return
 	}

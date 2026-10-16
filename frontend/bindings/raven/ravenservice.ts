@@ -12,19 +12,25 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as $models from "./models.js";
+import * as cards$0 from "./api/cards/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as folders$0 from "./api/folders/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as media$0 from "./api/media/models.js";
 
 /**
  * CreateCard creates a card and initializes its item schedules.
  */
-export function CreateCard(input: $models.CreateCardInput | null): $CancellablePromise<$models.Card> {
+export function CreateCard(input: cards$0.CreateInput | null): $CancellablePromise<cards$0.Card> {
     return $Call.ByID(2101102601, input);
 }
 
 /**
  * CreateFolder creates a folder from editable metadata.
  */
-export function CreateFolder(input: $models.CreateFolderInput | null): $CancellablePromise<$models.Folder> {
+export function CreateFolder(input: folders$0.CreateInput | null): $CancellablePromise<folders$0.Folder> {
     return $Call.ByID(1359139579, input);
 }
 
@@ -59,14 +65,14 @@ export function HideMain(): $CancellablePromise<void> {
 /**
  * ListCards returns the persisted library cards.
  */
-export function ListCards(): $CancellablePromise<$models.Card[] | null> {
+export function ListCards(): $CancellablePromise<cards$0.Card[] | null> {
     return $Call.ByID(1147556462);
 }
 
 /**
  * ListFolders returns folders in creation order.
  */
-export function ListFolders(): $CancellablePromise<$models.Folder[] | null> {
+export function ListFolders(): $CancellablePromise<folders$0.Folder[] | null> {
     return $Call.ByID(3506033272);
 }
 
@@ -94,14 +100,14 @@ export function ResetWidget(): $CancellablePromise<void> {
 /**
  * ReviewItem records a rating and advances an item schedule.
  */
-export function ReviewItem(folderID: string, cardID: string, itemID: string, rating: number): $CancellablePromise<$models.Card> {
-    return $Call.ByID(3012119832, folderID, cardID, itemID, rating);
+export function ReviewItem(input: cards$0.ReviewInput | null): $CancellablePromise<cards$0.Card> {
+    return $Call.ByID(3012119832, input);
 }
 
 /**
  * SelectMediaFiles selects local media for a card draft.
  */
-export function SelectMediaFiles(kind: string): $CancellablePromise<$models.SelectedMedia[] | null> {
+export function SelectMediaFiles(kind: string): $CancellablePromise<media$0.Selection[] | null> {
     return $Call.ByID(2266179524, kind);
 }
 
@@ -129,6 +135,6 @@ export function ToggleFloatingReview(): $CancellablePromise<void> {
 /**
  * UpdateCard updates card content while preserving retained item schedules.
  */
-export function UpdateCard(input: $models.UpdateCardInput | null): $CancellablePromise<$models.Card> {
+export function UpdateCard(input: cards$0.UpdateInput | null): $CancellablePromise<cards$0.Card> {
     return $Call.ByID(3646724196, input);
 }

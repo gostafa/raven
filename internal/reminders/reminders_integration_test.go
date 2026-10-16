@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
-	storage "raven/internal/library"
+	cardapi "raven/api/cards"
+	contentapi "raven/api/content"
+	folderapi "raven/api/folders"
+	reviewapi "raven/api/reviews"
 	"raven/internal/library/adapters/boltstore"
 	"raven/internal/library/adapters/scheduling"
 	"raven/internal/reminders"
@@ -15,14 +18,14 @@ import (
 
 func TestReminderSnapshotGroupsDueItemsAndFindsNextDeadline(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	item := func(id string, due time.Time, acknowledged bool) storage.ContentItem {
-		value := storage.ContentItem{ID: id, Schedule: storage.Schedule{Due: due}}
+	item := func(id string, due time.Time, acknowledged bool) contentapi.Item {
+		value := contentapi.Item{ID: id, Schedule: reviewapi.Schedule{Due: due}}
 		if acknowledged {
 			value.LastNotifiedDue = due.UnixMilli()
 		}
 		return value
 	}
-	cards := []storage.Card{{ID: "card", FolderID: "folder", Items: []storage.ContentItem{
+	cards := []cardapi.Card{{ID: "card", FolderID: "folder", Items: []contentapi.Item{
 		item(
 			"overdue",
 			now.Add(-time.Hour),
@@ -67,13 +70,11 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	folder, _ := store.CreateFolder(storage.CreateFolderInput{Title: "Due"})
-	card, err := store.CreateCard(
-		storage.CreateCardInput{
-			FolderID: folder.ID,
-			Items:    []storage.ItemDraft{{Kind: "text", Text: "one"}, {Kind: "text", Text: "two"}},
-		},
-	)
+	folder, _ := store.CreateFolder(&folderapi.CreateInput{Title: "Due"})
+	card, err := store.CreateCard(&cardapi.CreateInput{
+		FolderID: folder.ID,
+		Items:    []contentapi.Draft{{Kind: "text", Text: "one"}, {Kind: "text", Text: "two"}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,11 +118,18 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 		t.Fatal("restart repeated an alert")
 	}
 	// A new schedule must become eligible for a fresh alert.
-	updated, err := store.ReviewItem(folder.ID, card.ID, card.Items[0].ID, 4)
+	updated, err := store.ReviewItem(
+		&cardapi.ReviewInput{
+			FolderID: folder.ID,
+			CardID:   card.ID,
+			ItemID:   card.Items[0].ID,
+			Rating:   4,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, _ = reminders.Snapshot([]storage.Card{updated}, updated.Items[0].Schedule.Due)
+	pending, _ = reminders.Snapshot([]cardapi.Card{updated}, updated.Items[0].Schedule.Due)
 	if len(pending) != 1 || pending[0].ItemID != card.Items[0].ID {
 		t.Fatal("new due occurrence suppressed")
 	}
@@ -131,9 +139,9 @@ func (n *fakeReminderNotifier) RequestAuthorization() error { return nil }
 
 type reminderSource struct{}
 
-func (reminderSource) ListCards() ([]storage.Card, error)         { return nil, nil }
-func (reminderSource) ClaimNotificationPrompt() (bool, error)     { return true, nil }
-func (reminderSource) MarkNotified([]storage.DueOccurrence) error { return nil }
+func (reminderSource) ListCards() ([]cardapi.Card, error)           { return nil, nil }
+func (reminderSource) ClaimNotificationPrompt() (bool, error)       { return true, nil }
+func (reminderSource) MarkNotified([]reviewapi.DueOccurrence) error { return nil }
 
 type blockingNotifier struct {
 	fakeReminderNotifier

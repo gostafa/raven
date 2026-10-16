@@ -7,37 +7,46 @@ import (
 	"testing"
 	"time"
 
+	cardapi "raven/api/cards"
+	contentapi "raven/api/content"
+	folderapi "raven/api/folders"
+	reviewapi "raven/api/reviews"
 	"raven/internal/library"
 )
 
 type fakeScheduler struct{ failure error }
 
-func (s fakeScheduler) Initialize(now time.Time) (library.Schedule, library.ReviewLog, error) {
-	return library.Schedule{
+func (s fakeScheduler) Initialize(now time.Time) (reviewapi.Schedule, reviewapi.Log, error) {
+	return reviewapi.Schedule{
 		Due:        now,
 		LastReview: now,
 		Reps:       1,
-	}, library.ReviewLog{
+	}, reviewapi.Log{
 		Review: now,
 		Rating: 1,
 	}, s.failure
 }
 
 func (s fakeScheduler) Next(
-	before library.Schedule,
+	schedule *reviewapi.Schedule,
 	now time.Time,
 	rating int,
-) (library.Schedule, library.ReviewLog, error) {
+) (reviewapi.Schedule, reviewapi.Log, error) {
+	// A failed scheduler must not mutate the caller's persisted state.
+	if s.failure != nil {
+		schedule.Reps++
+	}
+	before := *schedule
 	before.Due = now.Add(time.Hour)
 	before.LastReview = now
 	before.Reps++
-	return before, library.ReviewLog{Review: now, Rating: int8(rating)}, s.failure
+	return before, reviewapi.Log{Review: now, Rating: int8(rating)}, s.failure
 }
-func (s fakeScheduler) Validate(library.Schedule) error { return s.failure }
+func (s fakeScheduler) Validate(*reviewapi.Schedule) error { return s.failure }
 
 func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	item := library.ContentItem{ID: "item", Kind: "text", Text: "Remember"}
+	item := contentapi.Item{ID: "item", Kind: "text", Text: "Remember"}
 	if err := library.InitializeItem(&item, now, fakeScheduler{}); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +54,7 @@ func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 	failure := errors.New("schedule failed")
 	if err := library.ApplyReview(
 		&item,
-		now,
-		3,
+		&reviewapi.Attempt{At: now, Rating: 3},
 		fakeScheduler{failure: failure},
 	); !errors.Is(
 		err,
@@ -57,10 +65,18 @@ func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 	if !reflect.DeepEqual(item, before) {
 		t.Fatal("failed review mutated item")
 	}
-	if err := library.ApplyReview(&item, now, 5, fakeScheduler{}); err == nil {
+	if err := library.ApplyReview(
+		&item,
+		&reviewapi.Attempt{At: now, Rating: 5},
+		fakeScheduler{},
+	); err == nil {
 		t.Fatal("accepted invalid rating")
 	}
-	if err := library.ApplyReview(&item, now, 3, fakeScheduler{}); err != nil {
+	if err := library.ApplyReview(
+		&item,
+		&reviewapi.Attempt{At: now, Rating: 3},
+		fakeScheduler{},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if item.Schedule.Reps != 2 || len(item.Reviews) != 2 || item.Reviews[1].Automatic {
@@ -70,7 +86,8 @@ func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 
 func TestPreparationReturnsRollbackFilesAndProtectsOwnership(t *testing.T) {
 	imports := 0
-	importer := func(item library.ContentItem, source string) (library.ContentItem, string, error) {
+	importer := func(original *contentapi.Item, source string) (contentapi.Item, string, error) {
+		item := *original
 		imports++
 		item.RelativePath = "media/" + item.ID + ".png"
 		item.OriginalName = source
@@ -79,29 +96,23 @@ func TestPreparationReturnsRollbackFilesAndProtectsOwnership(t *testing.T) {
 		return item, "copied.png", nil
 	}
 	id := func() (string, error) { return "0123456789abcdef0123456789abcdef", nil }
-	_, rollback, err := library.PrepareItems(
-		[]library.ItemDraft{
-			{Kind: "image", SourcePath: "image.png"},
-			{ID: "foreign", Kind: "text", Text: "Changed"},
-		},
-		nil,
-		importer,
-		id,
-	)
+	_, rollback, err := library.PrepareItems([]contentapi.Draft{
+		{Kind: "image", SourcePath: "image.png"},
+		{ID: "foreign", Kind: "text", Text: "Changed"},
+	}, nil, &library.PreparationDependencies{ImportMedia: importer, NewID: id})
 	if err == nil || imports != 1 || !reflect.DeepEqual(rollback, []string{"copied.png"}) {
 		t.Fatalf("rollback=%v imports=%d error=%v", rollback, imports, err)
 	}
-	old := library.ContentItem{
+	old := contentapi.Item{
 		ID:       "owned",
 		Kind:     "text",
 		Text:     "Before",
-		Schedule: library.Schedule{Reps: 4},
+		Schedule: reviewapi.Schedule{Reps: 4},
 	}
 	items, _, err := library.PrepareItems(
-		[]library.ItemDraft{{ID: "owned", Kind: "text", Text: " After "}},
-		[]library.ContentItem{old},
-		importer,
-		id,
+		[]contentapi.Draft{{ID: "owned", Kind: "text", Text: " After "}},
+		[]contentapi.Item{old},
+		&library.PreparationDependencies{ImportMedia: importer, NewID: id},
 	)
 	if err != nil || items[0].Text != "After" || items[0].Schedule.Reps != 4 ||
 		old.Text != "Before" {
@@ -111,18 +122,18 @@ func TestPreparationReturnsRollbackFilesAndProtectsOwnership(t *testing.T) {
 
 func TestHydrationOrdersItemsAndIgnoresAutomaticReviews(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	card := library.Card{Items: []library.ContentItem{
+	card := cardapi.Card{Items: []contentapi.Item{
 		{
 			ID:       "second",
 			Position: 1,
-			Schedule: library.Schedule{Due: now.Add(time.Hour)},
-			Reviews:  []library.ItemReview{{Log: library.ReviewLog{Review: now}, Automatic: true}},
+			Schedule: reviewapi.Schedule{Due: now.Add(time.Hour)},
+			Reviews:  []contentapi.Review{{Log: reviewapi.Log{Review: now}, Automatic: true}},
 		},
 		{
 			ID:       "first",
 			Position: 0,
-			Schedule: library.Schedule{Due: now},
-			Reviews:  []library.ItemReview{{Log: library.ReviewLog{Review: now.Add(-time.Hour)}}},
+			Schedule: reviewapi.Schedule{Due: now},
+			Reviews:  []contentapi.Review{{Log: reviewapi.Log{Review: now.Add(-time.Hour)}}},
 		},
 	}}
 	result, err := library.Hydrate(&card)
@@ -134,7 +145,7 @@ func TestHydrationOrdersItemsAndIgnoresAutomaticReviews(t *testing.T) {
 
 func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	folder, err := library.NormalizeFolder(
-		&library.CreateFolderInput{
+		&folderapi.CreateInput{
 			Title:       " Ideas ",
 			Description: " Notes ",
 			Tags:        []string{" One ", "one", "", "Two"},
@@ -144,11 +155,11 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 		!reflect.DeepEqual(folder.Tags, []string{"One", "Two"}) {
 		t.Fatalf("normalization: %+v %v", folder, err)
 	}
-	if _, err := library.NormalizeFolder(&library.CreateFolderInput{}); err == nil {
+	if _, err := library.NormalizeFolder(&folderapi.CreateInput{}); err == nil {
 		t.Fatal("accepted empty title")
 	}
 	id := "0123456789abcdef0123456789abcdef"
-	valid := library.ContentItem{
+	valid := contentapi.Item{
 		ID:           id,
 		Kind:         "image",
 		OriginalName: "image.png",
@@ -159,15 +170,15 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	if err := library.ValidateItem(&valid); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*library.ContentItem){
-		func(item *library.ContentItem) { item.ID = "" },
-		func(item *library.ContentItem) { item.Position = -1 },
-		func(item *library.ContentItem) { item.Kind = "invalid" },
-		func(item *library.ContentItem) { item.Text = "unexpected" },
-		func(item *library.ContentItem) { item.OriginalName = "" },
-		func(item *library.ContentItem) { item.ByteSize = 0 },
-		func(item *library.ContentItem) { item.MIMEType = "audio/wav" },
-		func(item *library.ContentItem) { item.RelativePath = "../image.png" },
+	for _, mutate := range []func(*contentapi.Item){
+		func(item *contentapi.Item) { item.ID = "" },
+		func(item *contentapi.Item) { item.Position = -1 },
+		func(item *contentapi.Item) { item.Kind = "invalid" },
+		func(item *contentapi.Item) { item.Text = "unexpected" },
+		func(item *contentapi.Item) { item.OriginalName = "" },
+		func(item *contentapi.Item) { item.ByteSize = 0 },
+		func(item *contentapi.Item) { item.MIMEType = "audio/wav" },
+		func(item *contentapi.Item) { item.RelativePath = "../image.png" },
 	} {
 		invalid := valid
 		mutate(&invalid)
@@ -175,16 +186,16 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 			t.Fatalf("accepted invalid media: %+v", invalid)
 		}
 	}
-	text := library.ContentItem{ID: "text", Kind: "text", Text: "Remember"}
+	text := contentapi.Item{ID: "text", Kind: "text", Text: "Remember"}
 	if err := library.ValidateItem(&text); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*library.ContentItem){
-		func(item *library.ContentItem) { item.Text = " " },
-		func(item *library.ContentItem) { item.RelativePath = "media/file.png" },
-		func(item *library.ContentItem) { item.MIMEType = "image/png" },
-		func(item *library.ContentItem) { item.OriginalName = "file.png" },
-		func(item *library.ContentItem) { item.ByteSize = 1 },
+	for _, mutate := range []func(*contentapi.Item){
+		func(item *contentapi.Item) { item.Text = " " },
+		func(item *contentapi.Item) { item.RelativePath = "media/file.png" },
+		func(item *contentapi.Item) { item.MIMEType = "image/png" },
+		func(item *contentapi.Item) { item.OriginalName = "file.png" },
+		func(item *contentapi.Item) { item.ByteSize = 1 },
 	} {
 		invalid := text
 		mutate(&invalid)
@@ -208,17 +219,24 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	id := "0123456789abcdef0123456789abcdef"
 	failure := errors.New("dependency failed")
 	newID := func() (string, error) { return id, nil }
-	importer := func(item library.ContentItem, _ string) (library.ContentItem, string, error) {
+	importer := func(original *contentapi.Item, _ string) (contentapi.Item, string, error) {
+		item := *original
 		return item, "", failure
 	}
-	if _, _, err := library.PrepareItems(nil, nil, importer, newID); err == nil {
+	if _, _, err := library.PrepareItems(
+		nil,
+		nil,
+		&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
+	); err == nil {
 		t.Fatal("accepted empty content")
 	}
 	if _, _, err := library.PrepareItems(
-		[]library.ItemDraft{{Kind: "text", Text: "remember"}},
+		[]contentapi.Draft{{Kind: "text", Text: "remember"}},
 		nil,
-		importer,
-		func() (string, error) { return "", failure },
+		&library.PreparationDependencies{
+			ImportMedia: importer,
+			NewID:       func() (string, error) { return "", failure },
+		},
 	); !errors.Is(
 		err,
 		failure,
@@ -226,42 +244,47 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := library.PrepareItems(
-		[]library.ItemDraft{{Kind: "image", SourcePath: "image.png"}},
+		[]contentapi.Draft{{Kind: "image", SourcePath: "image.png"}},
 		nil,
-		importer,
-		newID,
+		&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
 	); !errors.Is(
 		err,
 		failure,
 	) {
 		t.Fatal(err)
 	}
-	for _, draft := range []library.ItemDraft{{Kind: "text", Text: "remember", SourcePath: "invalid"}, {Kind: "image", Text: "unexpected"}, {Kind: "text", Text: " "}} {
+	for _, draft := range []contentapi.Draft{{Kind: "text", Text: "remember", SourcePath: "invalid"}, {Kind: "image", Text: "unexpected"}, {Kind: "text", Text: " "}} {
 		if _, _, err := library.PrepareItems(
-			[]library.ItemDraft{draft},
+			[]contentapi.Draft{draft},
 			nil,
-			importer,
-			newID,
+			&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
 		); err == nil {
 			t.Fatalf("accepted draft: %+v", draft)
 		}
 	}
-	previous := []library.ContentItem{{ID: id, Kind: "text", Text: "before"}}
-	media := []library.ContentItem{{
+	previous := []contentapi.Item{{ID: id, Kind: "text", Text: "before"}}
+	media := []contentapi.Item{{
 		ID: id, Kind: "image", OriginalName: "image.png", MIMEType: "image/png",
 		RelativePath: "media/" + id + ".png", ByteSize: 1,
 	}}
 	if _, _, err := library.PrepareItems(
-		[]library.ItemDraft{{ID: id, Kind: "image", Text: "unexpected"}}, media, importer, newID,
-	); err == nil || !strings.Contains(err.Error(), "media cannot contain text") {
+		[]contentapi.Draft{{ID: id, Kind: "image", Text: "unexpected"}},
+		media,
+		&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
+	); err == nil ||
+		!strings.Contains(err.Error(), "media cannot contain text") {
 		t.Fatalf("accepted text on retained media: %v", err)
 	}
-	for _, drafts := range [][]library.ItemDraft{
+	for _, drafts := range [][]contentapi.Draft{
 		{{ID: id, Kind: "image"}},
 		{{ID: id, Kind: "text", Text: "after", SourcePath: "invalid"}},
 		{{ID: id, Kind: "text", Text: "after"}, {ID: id, Kind: "text", Text: "duplicate"}},
 	} {
-		if _, _, err := library.PrepareItems(drafts, previous, importer, newID); err == nil {
+		if _, _, err := library.PrepareItems(
+			drafts,
+			previous,
+			&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
+		); err == nil {
 			t.Fatal("accepted invalid ownership or duplicate")
 		}
 	}
@@ -276,11 +299,11 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	) {
 		t.Fatal(err)
 	}
-	if _, err := library.Hydrate(&library.Card{}); err == nil {
+	if _, err := library.Hydrate(&cardapi.Card{}); err == nil {
 		t.Fatal("accepted empty card")
 	}
 	if _, err := library.Hydrate(
-		&library.Card{Items: []library.ContentItem{{Position: 1}}},
+		&cardapi.Card{Items: []contentapi.Item{{Position: 1}}},
 	); err == nil {
 		t.Fatal("accepted unordered content")
 	}

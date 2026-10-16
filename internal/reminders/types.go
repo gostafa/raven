@@ -8,13 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"raven/internal/library"
+	cardapi "raven/api/cards"
+	reviewapi "raven/api/reviews"
 )
 
 type (
 	// Store acknowledges notification delivery for unchanged item schedules.
 	Store interface {
-		MarkNotified(occurrences []library.DueOccurrence) error
+		MarkNotified(occurrences []reviewapi.DueOccurrence) error
 	}
 
 	// Notifier provides notification authorization and reminder delivery.
@@ -27,7 +28,7 @@ type (
 	// Source provides persisted schedules and notification prompt state.
 	Source interface {
 		Store
-		ListCards() ([]library.Card, error)
+		ListCards() ([]cardapi.Card, error)
 		ClaimNotificationPrompt() (bool, error)
 	}
 
@@ -52,7 +53,7 @@ type (
 
 	reminderSnapshot struct {
 		now     time.Time
-		pending []library.DueOccurrence
+		pending []reviewapi.DueOccurrence
 		delay   time.Duration
 	}
 )

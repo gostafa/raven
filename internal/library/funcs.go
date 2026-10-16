@@ -4,27 +4,32 @@
 package library
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
+
+	cardapi "raven/api/cards"
+	contentapi "raven/api/content"
+	folderapi "raven/api/folders"
+	reviewapi "raven/api/reviews"
 )
 
 // ValidateItem checks structural and kind-specific content invariants.
-func ValidateItem(item *ContentItem) error {
+func ValidateItem(item *contentapi.Item) error {
 	if item.ID == "" || item.Position < zero {
 		return errInvalidContentItem
 	}
 
-	var err error
+	validate := validateMedia
 
 	if item.Kind == textKind {
-		err = validateText(item)
-	} else {
-		err = validateMedia(item)
+		validate = validateText
 	}
 
+	err := validate(item)
 	if err != nil {
 		return fmt.Errorf("validate content item: %w", err)
 	}
@@ -32,7 +37,7 @@ func ValidateItem(item *ContentItem) error {
 	return nil
 }
 
-func validateText(item *ContentItem) error {
+func validateText(item *contentapi.Item) error {
 	if strings.TrimSpace(item.Text) == "" || hasMediaMetadata(item) {
 		return errInvalidTextItem
 	}
@@ -40,12 +45,12 @@ func validateText(item *ContentItem) error {
 	return nil
 }
 
-func hasMediaMetadata(item *ContentItem) bool {
+func hasMediaMetadata(item *contentapi.Item) bool {
 	return item.RelativePath != "" || item.MIMEType != "" || item.OriginalName != "" ||
 		item.ByteSize != zero
 }
 
-func validateMedia(item *ContentItem) error {
+func validateMedia(item *contentapi.Item) error {
 	if !isMediaKind(item.Kind) {
 		return errInvalidContentKind
 	}
@@ -62,13 +67,13 @@ func validateMedia(item *ContentItem) error {
 	return nil
 }
 
-func validMediaMetadata(item *ContentItem) bool {
+func validMediaMetadata(item *contentapi.Item) bool {
 	return item.Text == "" && item.OriginalName != "" && item.ByteSize > zero
 }
 
 func isMediaKind(kind string) bool { return kind == "audio" || kind == "image" || kind == "video" }
 
-func validateMediaLocation(item *ContentItem) error {
+func validateMediaLocation(item *contentapi.Item) error {
 	if !mediaLocationMatches(item) {
 		return errInvalidMediaItem
 	}
@@ -76,7 +81,7 @@ func validateMediaLocation(item *ContentItem) error {
 	return nil
 }
 
-func mediaLocationMatches(item *ContentItem) bool {
+func mediaLocationMatches(item *contentapi.Item) bool {
 	return strings.HasPrefix(item.MIMEType, item.Kind+"/") &&
 		ValidMediaPath(item.RelativePath, item.ID)
 }
@@ -128,15 +133,15 @@ func videoMediaType(extension string) string {
 }
 
 // NormalizeFolder trims metadata and removes duplicate or blank tags.
-func NormalizeFolder(input *CreateFolderInput) (Folder, error) {
-	folder := Folder{
+func NormalizeFolder(input *folderapi.CreateInput) (folderapi.Folder, error) {
+	folder := folderapi.Folder{
 		ID:          "",
 		Title:       strings.TrimSpace(input.Title),
 		Description: strings.TrimSpace(input.Description),
 		Tags:        normalizeTags(input.Tags),
 	}
 	if folder.Title == "" {
-		return Folder{}, errEnterAFolderTitle
+		return folderapi.Folder{}, errEnterAFolderTitle
 	}
 
 	return folder, nil
@@ -162,12 +167,12 @@ func normalizeTags(tags []string) []string {
 }
 
 // Hydrate orders card items and computes aggregate scheduling timestamps.
-func Hydrate(input *Card) (Card, error) {
+func Hydrate(input *cardapi.Card) (cardapi.Card, error) {
 	card := *input
 
 	err := orderItems(&card)
 	if err != nil {
-		return Card{}, fmt.Errorf("hydrate card: %w", err)
+		return cardapi.Card{}, fmt.Errorf("hydrate card: %w", err)
 	}
 
 	aggregateSchedule(&card)
@@ -175,10 +180,10 @@ func Hydrate(input *Card) (Card, error) {
 	return card, nil
 }
 
-func orderItems(card *Card) error {
-	sort.Slice(
+func orderItems(card *cardapi.Card) error {
+	slices.SortFunc(
 		card.Items,
-		func(first, second int) bool { return card.Items[first].Position < card.Items[second].Position },
+		func(first, second contentapi.Item) int { return cmp.Compare(first.Position, second.Position) },
 	)
 
 	for position := range card.Items {
@@ -194,7 +199,7 @@ func orderItems(card *Card) error {
 	return nil
 }
 
-func aggregateSchedule(card *Card) {
+func aggregateSchedule(card *cardapi.Card) {
 	card.DueAt = zero
 	card.LastReviewed = zero
 
@@ -204,14 +209,14 @@ func aggregateSchedule(card *Card) {
 	}
 }
 
-func updateDue(card *Card, item *ContentItem) {
+func updateDue(card *cardapi.Card, item *contentapi.Item) {
 	dueMilli := item.Schedule.Due.UnixMilli()
 	if card.DueAt == zero || dueMilli < card.DueAt {
 		card.DueAt = dueMilli
 	}
 }
 
-func updateLastReview(card *Card, reviews []ItemReview) {
+func updateLastReview(card *cardapi.Card, reviews []contentapi.Review) {
 	for index := range reviews {
 		review := &reviews[index]
 		if !review.Automatic {
@@ -221,48 +226,49 @@ func updateLastReview(card *Card, reviews []ItemReview) {
 }
 
 // InitializeItem creates the initial schedule and automatic review record.
-func InitializeItem(item *ContentItem, now time.Time, scheduler Scheduler) error {
+func InitializeItem(item *contentapi.Item, now time.Time, scheduler Scheduler) error {
 	schedule, log, err := scheduler.Initialize(now)
 	if err != nil {
 		return fmt.Errorf("initialize item schedule: %w", err)
 	}
 
 	item.Schedule = schedule
-	item.Reviews = []ItemReview{{Log: log, Automatic: true}}
+	item.Reviews = []contentapi.Review{{Log: log, Automatic: true}}
 	item.LastNotifiedDue = zero
 
 	return nil
 }
 
 // ApplyReview advances a schedule after a validated user rating.
-func ApplyReview(item *ContentItem, now time.Time, rating int, scheduler Scheduler) error {
-	if rating < minimumRating || rating > maximumRating {
+func ApplyReview(item *contentapi.Item, attempt *reviewapi.Attempt, scheduler Scheduler) error {
+	if attempt.Rating < minimumRating || attempt.Rating > maximumRating {
 		return errInvalidReviewRating
 	}
 
-	schedule, log, err := scheduler.Next(item.Schedule, now, rating)
+	current := item.Schedule
+
+	schedule, log, err := scheduler.Next(&current, attempt.At, attempt.Rating)
 	if err != nil {
 		return fmt.Errorf("advance item schedule: %w", err)
 	}
 
 	item.Schedule = schedule
-	item.Reviews = append(item.Reviews, ItemReview{Log: log, Automatic: false})
+	item.Reviews = append(item.Reviews, contentapi.Review{Log: log, Automatic: false})
 
 	return nil
 }
 
 // PrepareItems validates drafts and returns newly imported files for rollback.
 func PrepareItems(
-	drafts []ItemDraft,
-	previous []ContentItem,
-	importMedia func(ContentItem, string) (ContentItem, string, error),
-	newID func() (string, error),
-) ([]ContentItem, []string, error) {
+	drafts []contentapi.Draft,
+	previous []contentapi.Item,
+	dependencies *PreparationDependencies,
+) ([]contentapi.Item, []string, error) {
 	preparation := itemPreparation{
 		previous:    indexItems(previous),
 		seen:        make(map[string]bool),
-		importMedia: importMedia,
-		newID:       newID,
+		importMedia: dependencies.ImportMedia,
+		newID:       dependencies.NewID,
 		imported:    []string{},
 	}
 
@@ -274,8 +280,8 @@ func PrepareItems(
 	return items, preparation.imported, nil
 }
 
-func indexItems(items []ContentItem) map[string]ContentItem {
-	result := make(map[string]ContentItem, len(items))
+func indexItems(items []contentapi.Item) map[string]contentapi.Item {
+	result := make(map[string]contentapi.Item, len(items))
 	for index := range items {
 		result[items[index].ID] = items[index]
 	}
@@ -283,8 +289,10 @@ func indexItems(items []ContentItem) map[string]ContentItem {
 	return result
 }
 
-func (preparation *itemPreparation) prepareAll(drafts []ItemDraft) ([]ContentItem, error) {
-	items := make([]ContentItem, zero, len(drafts))
+func (preparation *itemPreparation) prepareAll(
+	drafts []contentapi.Draft,
+) ([]contentapi.Item, error) {
+	items := make([]contentapi.Item, zero, len(drafts))
 	for index := range drafts {
 		item, err := preparation.prepare(&drafts[index], index)
 		if err != nil {
@@ -301,17 +309,20 @@ func (preparation *itemPreparation) prepareAll(drafts []ItemDraft) ([]ContentIte
 	return items, nil
 }
 
-func (preparation *itemPreparation) prepare(draft *ItemDraft, position int) (ContentItem, error) {
+func (preparation *itemPreparation) prepare(
+	draft *contentapi.Draft,
+	position int,
+) (contentapi.Item, error) {
 	item, err := preparation.resolve(draft)
 	if err != nil {
-		return ContentItem{}, fmt.Errorf("resolve draft: %w", err)
+		return contentapi.Item{}, fmt.Errorf("resolve draft: %w", err)
 	}
 
 	item.Position = position
 
 	err = applyDraft(&item, draft)
 	if err != nil {
-		return ContentItem{}, fmt.Errorf("apply draft: %w", err)
+		return contentapi.Item{}, fmt.Errorf("apply draft: %w", err)
 	}
 
 	preparation.seen[item.ID] = true
@@ -319,47 +330,41 @@ func (preparation *itemPreparation) prepare(draft *ItemDraft, position int) (Con
 	return item, nil
 }
 
-func (preparation *itemPreparation) resolve(draft *ItemDraft) (ContentItem, error) {
-	if draft.ID != "" {
-		result2, forwardErr3 := preparation.retain(draft)
-		if forwardErr3 != nil {
-			return result2, fmt.Errorf("resolve: %w", forwardErr3)
-		}
+func (preparation *itemPreparation) resolve(draft *contentapi.Draft) (contentapi.Item, error) {
+	resolve := preparation.create
 
-		return result2, nil
+	if draft.ID != "" {
+		resolve = preparation.retain
 	}
 
-	item, err := preparation.create(draft)
+	item, err := resolve(draft)
 	if err != nil {
-		return ContentItem{}, fmt.Errorf("create draft content: %w", err)
+		return contentapi.Item{}, fmt.Errorf("resolve draft content: %w", err)
 	}
 
 	return item, nil
 }
 
-func (preparation *itemPreparation) retain(draft *ItemDraft) (ContentItem, error) {
+func (preparation *itemPreparation) retain(draft *contentapi.Draft) (contentapi.Item, error) {
 	item, exists := preparation.previous[draft.ID]
 	if !exists || preparation.seen[draft.ID] {
-		return ContentItem{}, errInvalidExistingItemOrOwnership
+		return contentapi.Item{}, errInvalidExistingItemOrOwnership
 	}
 
 	if item.Kind != draft.Kind || draft.SourcePath != "" {
-		return ContentItem{}, errInvalidExistingItemOrOwnership
+		return contentapi.Item{}, errInvalidExistingItemOrOwnership
 	}
 
 	return item, nil
 }
 
-func (preparation *itemPreparation) create(draft *ItemDraft) (ContentItem, error) {
-	var item ContentItem
-
+func (preparation *itemPreparation) create(draft *contentapi.Draft) (contentapi.Item, error) {
 	id, err := preparation.newID()
 	if err != nil {
-		return item, fmt.Errorf("create item identifier: %w", err)
+		return contentapi.Item{}, fmt.Errorf("create item identifier: %w", err)
 	}
 
-	item.ID = id
-	item.Kind = draft.Kind
+	item := newDraftItem(id, draft.Kind)
 
 	if draft.Kind == textKind {
 		return item, nil
@@ -373,13 +378,22 @@ func (preparation *itemPreparation) create(draft *ItemDraft) (ContentItem, error
 	return result3, nil
 }
 
+func newDraftItem(id, kind string) contentapi.Item {
+	var item contentapi.Item
+
+	item.ID = id
+	item.Kind = kind
+
+	return item
+}
+
 func (preparation *itemPreparation) importItem(
-	item *ContentItem,
+	item *contentapi.Item,
 	source string,
-) (ContentItem, error) {
-	imported, path, err := preparation.importMedia(*item, source)
+) (contentapi.Item, error) {
+	imported, path, err := preparation.importMedia(item, source)
 	if err != nil {
-		return ContentItem{}, fmt.Errorf("import draft media: %w", err)
+		return contentapi.Item{}, fmt.Errorf("import draft media: %w", err)
 	}
 
 	preparation.imported = append(preparation.imported, path)
@@ -387,7 +401,7 @@ func (preparation *itemPreparation) importItem(
 	return imported, nil
 }
 
-func applyDraft(item *ContentItem, draft *ItemDraft) error {
+func applyDraft(item *contentapi.Item, draft *contentapi.Draft) error {
 	err := applyDraftContent(item, draft)
 	if err != nil {
 		return fmt.Errorf("apply content: %w", err)
@@ -401,24 +415,24 @@ func applyDraft(item *ContentItem, draft *ItemDraft) error {
 	return nil
 }
 
-func applyDraftContent(item *ContentItem, draft *ItemDraft) error {
-	if draft.Kind == textKind {
-		forwardErr5 := applyTextDraft(item, draft)
-		if forwardErr5 != nil {
-			return fmt.Errorf("apply draft content: %w", forwardErr5)
-		}
-
+func applyDraftContent(item *contentapi.Item, draft *contentapi.Draft) error {
+	if draft.Kind != textKind && draft.Text == "" {
 		return nil
 	}
 
-	if draft.Text != "" {
+	if draft.Kind != textKind {
 		return errMediaCannotContainText
+	}
+
+	err := applyTextDraft(item, draft)
+	if err != nil {
+		return fmt.Errorf("apply draft content: %w", err)
 	}
 
 	return nil
 }
 
-func applyTextDraft(item *ContentItem, draft *ItemDraft) error {
+func applyTextDraft(item *contentapi.Item, draft *contentapi.Draft) error {
 	if draft.SourcePath != "" {
 		return errTextCannotReferenceAFile
 	}

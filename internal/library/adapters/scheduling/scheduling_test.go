@@ -7,7 +7,7 @@ import (
 
 	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
 
-	"raven/internal/library"
+	reviewapi "raven/api/reviews"
 )
 
 type failingEngine struct{ failure error }
@@ -28,10 +28,10 @@ func TestEngineFailuresPreserveTheirCause(t *testing.T) {
 	if _, _, err := scheduler.Initialize(now); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
-	if _, _, err := scheduler.Next(library.Schedule{}, now, 3); !errors.Is(err, failure) {
+	if _, _, err := scheduler.Next(&reviewapi.Schedule{}, now, 3); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
-	if err := scheduler.Validate(library.Schedule{}); !errors.Is(err, failure) {
+	if err := scheduler.Validate(&reviewapi.Schedule{}); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
 }

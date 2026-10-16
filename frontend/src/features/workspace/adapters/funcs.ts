@@ -29,7 +29,9 @@ export function createRuntime(): AppPorts {
     }))),
     DeleteCard: (folder, card) => call(() => RavenService.DeleteCard(folder, card)),
     ReviewItem: (folder, card, item, rating) =>
-      call(async () => cardFromTransport(await RavenService.ReviewItem(folder, card, item, rating))),
+      call(async () => cardFromTransport(await RavenService.ReviewItem({
+        folder_id: folder, card_id: card, item_id: item, rating,
+      }))),
     SelectMediaFiles: (kind) => call(async () => ((await RavenService.SelectMediaFiles(kind)) ?? []).map(mediaFromTransport)),
     ShowMain: () => call(() => RavenService.ShowMain()),
     HideMain: () => call(() => RavenService.HideMain()),

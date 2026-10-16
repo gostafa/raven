@@ -1,12 +1,8 @@
-import type {
-  Card as TransportCard,
-  ContentItem as TransportItem,
-  Folder as TransportFolder,
-  ItemDraft as TransportDraft,
-  ReviewLog as TransportReview,
-  Schedule as TransportSchedule,
-  SelectedMedia as TransportMedia,
-} from '../../../../../bindings/raven/models';
+import type { Card as TransportCard } from '../../../../../bindings/raven/api/cards/models';
+import type { Item as TransportItem, Draft as TransportDraft } from '../../../../../bindings/raven/api/content/models';
+import type { Folder as TransportFolder } from '../../../../../bindings/raven/api/folders/models';
+import type { Log as TransportReview, Schedule as TransportSchedule } from '../../../../../bindings/raven/api/reviews/models';
+import type { Selection as TransportMedia } from '../../../../../bindings/raven/api/media/models';
 import type { Card } from '../../../cards';
 import type { Folder } from '../../../folders';
 import type { AppPorts } from '../../domain/types';

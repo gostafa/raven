@@ -5,23 +5,24 @@ import (
 	"testing"
 	"time"
 
-	"raven/internal/library"
+	cardapi "raven/api/cards"
+	reviewapi "raven/api/reviews"
 )
 
 type testSource struct {
-	cards                       []library.Card
+	cards                       []cardapi.Card
 	listErr, promptErr, markErr error
 	prompt                      bool
 	marked                      int
 }
 
-func (source *testSource) ListCards() ([]library.Card, error) { return source.cards, source.listErr }
+func (source *testSource) ListCards() ([]cardapi.Card, error) { return source.cards, source.listErr }
 
 func (source *testSource) ClaimNotificationPrompt() (bool, error) {
 	return source.prompt, source.promptErr
 }
 
-func (source *testSource) MarkNotified([]library.DueOccurrence) error {
+func (source *testSource) MarkNotified([]reviewapi.DueOccurrence) error {
 	source.marked++
 	return source.markErr
 }
@@ -71,7 +72,7 @@ func TestDeliveryFailuresAreReportedWithoutFalseAcknowledgments(t *testing.T) {
 				}},
 			}
 			coordinator.deliver(
-				[]library.DueOccurrence{
+				[]reviewapi.DueOccurrence{
 					{FolderID: "folder", CardID: "card", ItemID: "item", Due: 1},
 				},
 			)

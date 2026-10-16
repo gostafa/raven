@@ -29,7 +29,7 @@ func TestBackendTranslatesOptionsAndPreservesFailures(t *testing.T) {
 	native := &fakeAutostart{}
 	backend := New(native)
 	options := autostart.Options{Identifier: "raven", Arguments: []string{"--autostart"}}
-	if err := backend.EnableWithOptions(options); err != nil {
+	if err := backend.EnableWithOptions(&options); err != nil {
 		t.Fatal(err)
 	}
 	if native.options.Identifier != options.Identifier ||
@@ -47,7 +47,7 @@ func TestBackendTranslatesOptionsAndPreservesFailures(t *testing.T) {
 	}
 	failure := errors.New("native registration failed")
 	native.failure = failure
-	if err := backend.EnableWithOptions(options); !errors.Is(err, failure) {
+	if err := backend.EnableWithOptions(&options); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
 	if err := backend.Disable(); !errors.Is(err, failure) {

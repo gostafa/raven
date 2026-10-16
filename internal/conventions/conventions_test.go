@@ -126,7 +126,7 @@ func facadeErrors(sources []source) []error {
 		case *ast.SelectorExpr:
 			if pkg, ok := v.X.(*ast.Ident); ok {
 				path := owner.imports[pkg.Name]
-				if strings.HasPrefix(path, "raven/") ||
+				if (strings.HasPrefix(path, "raven/") && !strings.HasPrefix(path, "raven/api/")) ||
 					strings.Contains(strings.Split(path, "/")[0], ".") {
 					errors = append(errors, fmt.Errorf("facade exposes %s.%s", path, v.Sel.Name))
 				}
@@ -291,6 +291,16 @@ func TestConventionFixtures(t *testing.T) {
 	s, err := parseSource(
 		"types.go",
 		`package main; import "time"; type Card struct{Due time.Time}; type Holder struct{private interface{}}`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errors := facadeErrors([]source{s}); len(errors) > 0 {
+		t.Fatal(errors)
+	}
+	s, err = parseSource(
+		"funcs.go",
+		`package main; import "raven/api/cards"; func Review(input *cards.ReviewInput) (cards.Card, error) { panic("fixture") }`,
 	)
 	if err != nil {
 		t.Fatal(err)

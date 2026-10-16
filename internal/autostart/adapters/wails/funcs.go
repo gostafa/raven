@@ -12,7 +12,7 @@ import (
 )
 
 // EnableWithOptions enables login startup with the supplied application options.
-func (backend Backend) EnableWithOptions(visibility autostart.Options) error {
+func (backend Backend) EnableWithOptions(visibility *autostart.Options) error {
 	forwardErr3 := backend.native.EnableWithOptions(
 		application.AutostartOptions{
 			Identifier: visibility.Identifier,

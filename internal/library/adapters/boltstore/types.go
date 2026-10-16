@@ -6,11 +6,15 @@ package boltstore
 
 import (
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
 
+	cardapi "raven/api/cards"
+	contentapi "raven/api/content"
+	folderapi "raven/api/folders"
 	"raven/internal/library"
 )
 
@@ -25,7 +29,7 @@ type (
 	}
 
 	legacyItem struct {
-		*library.ContentItem
+		*contentapi.Item
 
 		Side string `json:"side"`
 	}
@@ -39,7 +43,7 @@ type (
 		state   schemaState
 	}
 	cardContentReader struct {
-		card      *library.Card
+		card      *cardapi.Card
 		scheduler library.Scheduler
 		schema    string
 	}
@@ -48,10 +52,10 @@ type (
 		storage   *Store
 		folderID  string
 		cardID    string
-		items     []library.ContentItem
+		items     []contentapi.Item
 		imported  []string
-		previous  library.Card
-		card      library.Card
+		previous  cardapi.Card
+		card      cardapi.Card
 		committed bool
 	}
 	cardRating struct {
@@ -60,21 +64,25 @@ type (
 		folderID string
 		cardID   string
 		itemID   string
-		card     library.Card
+		card     cardapi.Card
 		rating   int
 	}
 	cardListing struct {
 		storage     *Store
 		transaction *bolt.Tx
 		folderID    string
-		cards       []library.Card
+		cards       []cardapi.Card
 	}
 	folderListing struct {
 		root    *bolt.Bucket
-		folders []library.Folder
+		folders []folderapi.Folder
 	}
 	legacyText struct {
 		Prompt string `json:"prompt"`
 		Answer string `json:"answer"`
+	}
+	ownedMedia struct {
+		file *os.File
+		item *contentapi.Item
 	}
 )
