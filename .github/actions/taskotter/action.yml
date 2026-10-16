@@ -28,6 +28,10 @@ inputs:
       go-junit-report
       trivy
       rumdl
+      eslint
+      knip
+      prettier
+      typeScript
   js:
     description: JavaScript runtime configuration
     required: false
