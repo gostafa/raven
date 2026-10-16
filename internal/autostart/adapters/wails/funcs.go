@@ -11,6 +11,7 @@ import (
 	"raven/internal/autostart"
 )
 
+// EnableWithOptions enables login startup with the supplied application options.
 func (backend Backend) EnableWithOptions(visibility autostart.Options) error {
 	forwardErr3 := backend.native.EnableWithOptions(
 		application.AutostartOptions{
@@ -25,6 +26,7 @@ func (backend Backend) EnableWithOptions(visibility autostart.Options) error {
 	return nil
 }
 
+// Disable disables login startup registration.
 func (backend Backend) Disable() error {
 	forwardErr := backend.native.Disable()
 	if forwardErr != nil {
@@ -34,6 +36,7 @@ func (backend Backend) Disable() error {
 	return nil
 }
 
+// IsEnabled returns the current operating system login startup state.
 func (backend Backend) IsEnabled() (bool, error) {
 	result, forwardErr2 := backend.native.IsEnabled()
 	if forwardErr2 != nil {
@@ -43,4 +46,5 @@ func (backend Backend) IsEnabled() (bool, error) {
 	return result, nil
 }
 
-func New(native *application.AutostartManager) Backend { return Backend{native: native} }
+// New constructs the adapter with its required runtime dependencies.
+func New(native NativeAutostart) Backend { return Backend{native: native} }

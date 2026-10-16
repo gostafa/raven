@@ -5,5 +5,6 @@ package autostart
 
 const (
 	autostartArgument = "--autostart"
-	ApplicationID     = "app.raven.desktop"
+	// ApplicationID is the operating system identity used for login registration.
+	ApplicationID = "app.raven.desktop"
 )

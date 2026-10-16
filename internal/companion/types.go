@@ -6,7 +6,16 @@ package companion
 
 type (
 	// Rect describes a desktop rectangle in logical pixels.
-	Rect struct{ X, Y, Width, Height int }
+	Rect struct {
+		// X is the horizontal origin in logical pixels.
+		X int
+		// Y is the vertical origin in logical pixels.
+		Y int
+		// Width is the horizontal extent in logical pixels.
+		Width int
+		// Height is the vertical extent in logical pixels.
+		Height int
+	}
 
 	// Windows controls Raven main, widget, and floating review windows.
 	Windows interface {

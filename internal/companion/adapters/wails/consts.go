@@ -11,4 +11,7 @@ const (
 	widgetSize = companion.WidgetSize
 
 	logErrorKey = "error"
+
+	widgetMargin = 24
+	zero         = 0
 )

@@ -13,10 +13,17 @@ import (
 	widgetnative "raven/internal/companion/adapters/native"
 )
 
-func New(app *application.App, main, widget, review *application.WebviewWindow) *Windows {
-	return &Windows{app: app, mainWindow: main, widget: widget, reviewWindow: review}
+// New constructs the adapter with its required runtime dependencies.
+func New(app *application.App, handles WindowSet) *Windows {
+	return &Windows{
+		app:          app,
+		mainWindow:   handles.Main,
+		widget:       handles.Widget,
+		reviewWindow: handles.Review,
+	}
 }
 
+// ConfigureWidget configures platform-specific floating widget behavior.
 func (windows *Windows) ConfigureWidget() {
 	application.InvokeSync(func() {
 		err := widgetnative.Configure(windows.widget)
@@ -30,23 +37,26 @@ func (windows *Windows) ConfigureWidget() {
 	})
 }
 
+// ShowMain shows, restores, and focuses the main library window.
 func (windows *Windows) ShowMain() {
 	windows.mainWindow.Show()
 	windows.mainWindow.Restore()
 	windows.mainWindow.Focus()
 }
 
+// HideMain hides the library and keeps the widget visible.
 func (windows *Windows) HideMain() {
 	windows.widget.Show()
 	windows.mainWindow.Hide()
 }
 
+// ResetWidget repositions the widget within the primary screen.
 func (windows *Windows) ResetWidget() {
 	if screen := windows.app.Screen.GetPrimary(); screen != nil {
 		area := screen.WorkArea
 		windows.widget.SetPosition(
-			area.X+max(0, area.Width-widgetSize-24),
-			area.Y+max(0, area.Height-widgetSize-24),
+			area.X+max(zero, area.Width-widgetSize-widgetMargin),
+			area.Y+max(zero, area.Height-widgetSize-widgetMargin),
 		)
 	}
 
@@ -59,7 +69,7 @@ func (windows *Windows) Quit() {
 	windows.app.Quit()
 }
 
-// ShowReviews opens the main window and requests a review session.
+// PositionFloatingReview repositions the visible review window beside the widget.
 func (windows *Windows) PositionFloatingReview() {
 	if windows.reviewWindow == nil || !windows.reviewWindow.IsVisible() {
 		return
@@ -74,7 +84,7 @@ func (windows *Windows) placeFloatingReview() {
 		screen = windows.app.Screen.GetPrimary()
 	}
 
-	if screen == nil || screen.WorkArea.Width <= 0 || screen.WorkArea.Height <= 0 {
+	if screen == nil || screen.WorkArea.Width <= zero || screen.WorkArea.Height <= zero {
 		return
 	}
 
@@ -89,11 +99,12 @@ func (windows *Windows) placeFloatingReview() {
 	windows.reviewWindow.SetPosition(bounds.X, bounds.Y)
 }
 
+// RequestFloatingReviewClose asks the frontend to close after pending saves finish.
 func (windows *Windows) RequestFloatingReviewClose() {
 	// The frontend owns the saving state and ignores close requests until a
 	// rating finishes. DispatchWailsEvent targets only this window.
 	windows.reviewWindow.DispatchWailsEvent(
-		&application.CustomEvent{Name: "raven:close-floating-review"},
+		&application.CustomEvent{Name: "raven:close-floating-review", Data: nil, Sender: ""},
 	)
 }
 
@@ -109,7 +120,7 @@ func (windows *Windows) ToggleFloatingReview() {
 		windows.placeFloatingReview()
 		windows.reviewWindow.Show()
 		windows.reviewWindow.DispatchWailsEvent(
-			&application.CustomEvent{Name: "raven:open-floating-review"},
+			&application.CustomEvent{Name: "raven:open-floating-review", Data: nil, Sender: ""},
 		)
 		windows.reviewWindow.Focus()
 	})

@@ -10,10 +10,12 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
 
-func New(native *notifications.NotificationService) Notifier {
+// New constructs the adapter with its required runtime dependencies.
+func New(native NativeNotifications) Notifier {
 	return Notifier{native: native}
 }
 
+// CheckNotificationAuthorization reports whether native notifications are authorized.
 func (notifier Notifier) CheckNotificationAuthorization() (bool, error) {
 	result, forwardErr := notifier.native.CheckNotificationAuthorization()
 	if forwardErr != nil {
@@ -23,29 +25,37 @@ func (notifier Notifier) CheckNotificationAuthorization() (bool, error) {
 	return result, nil
 }
 
+// Send delivers a reminder for the supplied number of due items.
 func (notifier Notifier) Send(count int) error {
-	var sound *notifications.NotificationSound
-
-	if runtime.GOOS == "darwin" {
-		sound = &notifications.NotificationSound{Name: "raven.wav"}
-	}
-
-	forwardErr2 := notifier.native.SendNotification(
-		notifications.NotificationOptions{
-			Sound:    sound,
-			ID:       "raven-due",
-			Title:    "Time to review",
-			Body:     fmt.Sprintf("%d items are ready to review in Raven.", count),
-			ThreadID: "raven-reviews",
-		},
-	)
-	if forwardErr2 != nil {
-		return fmt.Errorf("send: %w", forwardErr2)
+	err := notifier.native.SendNotification(reminderOptions(count))
+	if err != nil {
+		return fmt.Errorf("send reminder: %w", err)
 	}
 
 	return nil
 }
 
+func reminderOptions(count int) notifications.NotificationOptions {
+	var options notifications.NotificationOptions
+
+	options.Sound = reminderSound()
+	options.ID = "raven-due"
+	options.Title = "Time to review"
+	options.Body = fmt.Sprintf("%d items are ready to review in Raven.", count)
+	options.ThreadID = "raven-reviews"
+
+	return options
+}
+
+func reminderSound() *notifications.NotificationSound {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+
+	return &notifications.NotificationSound{Name: "raven.wav", Silent: false}
+}
+
+// RequestAuthorization requests native notification authorization.
 func (notifier Notifier) RequestAuthorization() error {
 	_, err := notifier.native.RequestNotificationAuthorization()
 	if err != nil {

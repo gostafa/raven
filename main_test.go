@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
 	bolt "go.etcd.io/bbolt"
 
 	"raven/internal/library"
@@ -68,8 +69,8 @@ func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 		},
 	}
 	for _, pair := range [][2]any{
-		{value, publicCard(value)},
-		{library.Folder{ID: "folder", Title: "Ideas", Tags: []string{}}, publicFolder(library.Folder{ID: "folder", Title: "Ideas", Tags: []string{}})},
+		{value, publicCard(&value)},
+		{library.Folder{ID: "folder", Title: "Ideas", Tags: []string{}}, publicFolder(&library.Folder{ID: "folder", Title: "Ideas", Tags: []string{}})},
 		{[]library.Card(nil), publicCards(nil)},
 	} {
 		before, err := json.Marshal(pair[0])
@@ -94,7 +95,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	service := &RavenService{store: store}
-	folder, err := service.CreateFolder(CreateFolderInput{Title: " Ideas "})
+	folder, err := service.CreateFolder(&CreateFolderInput{Title: " Ideas "})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +104,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 		t.Fatalf("service folders: %+v, error=%v", folders, err)
 	}
 	card, err := service.CreateCard(
-		CreateCardInput{
+		&CreateCardInput{
 			FolderID: folder.ID,
 			Items: []ItemDraft{
 				{Kind: "text", Text: "A question"},
@@ -120,7 +121,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	}
 	due := card.DueAt
 	card, err = service.UpdateCard(
-		UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: []ItemDraft{
+		&UpdateCardInput{FolderID: folder.ID, CardID: card.ID, Items: []ItemDraft{
 			{ID: card.Items[0].ID, Kind: "text", Text: "An edited question"},
 			{ID: card.Items[1].ID, Kind: "text", Text: "An edited answer"},
 		}},
@@ -182,16 +183,16 @@ func TestFolderServiceWithoutStorage(t *testing.T) {
 	if _, err := service.ListFolders(); err == nil {
 		t.Fatal("listing without storage should fail")
 	}
-	if _, err := service.CreateFolder(CreateFolderInput{Title: "Ideas"}); err == nil {
+	if _, err := service.CreateFolder(&CreateFolderInput{Title: "Ideas"}); err == nil {
 		t.Fatal("creating without storage should fail")
 	}
 	if _, err := service.ListCards(); err == nil {
 		t.Fatal("listing cards without storage should fail")
 	}
-	if _, err := service.CreateCard(CreateCardInput{}); err == nil {
+	if _, err := service.CreateCard(&CreateCardInput{}); err == nil {
 		t.Fatal("creating cards without storage should fail")
 	}
-	if _, err := service.UpdateCard(UpdateCardInput{}); err == nil {
+	if _, err := service.UpdateCard(&UpdateCardInput{}); err == nil {
 		t.Fatal("editing without storage should fail")
 	}
 	if _, err := service.ReviewItem("folder", "card", "item", 3); err == nil {
@@ -199,5 +200,97 @@ func TestFolderServiceWithoutStorage(t *testing.T) {
 	}
 	if err := (&lifecycleAdapter{service: service}).ServiceShutdown(); err != nil {
 		t.Fatalf("shutdown without storage: %v", err)
+	}
+}
+
+func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
+	main := mainWindowOptions()
+	if main.Name != "raven" || main.Title != "Raven" || main.URL != "/" || !main.Hidden ||
+		main.Width != 960 ||
+		main.Height != 680 ||
+		main.MinWidth != 620 ||
+		main.MinHeight != 520 {
+		t.Fatalf("main window changed: %+v", main)
+	}
+	if main.Mac.Appearance != application.NSAppearanceNameDarkAqua ||
+		main.Mac.Backdrop != application.MacBackdropTranslucent {
+		t.Fatal("main window appearance changed")
+	}
+	widget := widgetWindowOptions()
+	if widget.Name != "raven-widget" || widget.URL != "/?view=widget" || widget.Hidden ||
+		widget.Width != widgetSize ||
+		widget.MinWidth != widgetSize ||
+		widget.MaxWidth != widgetSize ||
+		widget.Height != widgetSize ||
+		widget.MinHeight != widgetSize ||
+		widget.MaxHeight != widgetSize {
+		t.Fatal("widget geometry changed")
+	}
+	if widget.InitialPosition != application.WindowXY || widget.X != 24 || widget.Y != 100 ||
+		widget.BackgroundType != application.BackgroundTypeTransparent ||
+		!reflect.DeepEqual(widget.BackgroundColour, application.NewRGBA(255, 255, 255, 0)) {
+		t.Fatal("widget background or placement changed")
+	}
+	if widget.Mac.Backdrop != application.MacBackdropTransparent || !widget.Mac.DisableShadow ||
+		widget.Mac.CornerType != application.MacWindowCornerTypeSquare {
+		t.Fatal("widget platform appearance changed")
+	}
+	review := reviewWindowOptions()
+	if review.Name != "raven-review" || review.URL != "/?view=review" || !review.Hidden ||
+		review.Width != reviewWidth ||
+		review.Height != reviewHeight ||
+		review.Mac.Appearance != application.NSAppearanceNameDarkAqua {
+		t.Fatal("review window changed")
+	}
+	for _, window := range []application.WebviewWindowOptions{widget, review} {
+		if !window.Frameless || !window.DisableResize || !window.AlwaysOnTop ||
+			!window.Windows.HiddenOnTaskbar ||
+			window.MaximiseButtonState != application.ButtonDisabled ||
+			window.FullscreenButtonState != application.ButtonDisabled {
+			t.Fatal("floating window interaction changed")
+		}
+		if window.Mac.WindowClass != application.MacWindowClassPanel ||
+			!window.Mac.PanelPreferences.NonActivating ||
+			!window.Mac.PanelPreferences.FloatingPanel ||
+			window.Mac.WindowLevel != application.MacWindowLevelPopUpMenu {
+			t.Fatal("floating panel behavior changed")
+		}
+	}
+	for _, window := range []application.WebviewWindowOptions{main, review} {
+		if !reflect.DeepEqual(window.BackgroundColour, application.NewRGB(0, 0, 0)) {
+			t.Fatal("native black background changed")
+		}
+	}
+	identity := desktopIdentityOptions()
+	if identity.Name != "Raven" ||
+		identity.Description != "A little practice. A little more remembered." ||
+		len(identity.Icon) == 0 {
+		t.Fatal("application identity changed")
+	}
+}
+
+func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
+	store, err := boltstore.Open(filepath.Join(t.TempDir(), "raven.db"), scheduling.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	service := &RavenService{store: store}
+	if _, err := service.CreateFolder(nil); err == nil {
+		t.Fatal("accepted empty folder input")
+	}
+	if _, err := service.CreateCard(nil); err == nil {
+		t.Fatal("accepted empty card input")
+	}
+	if _, err := service.UpdateCard(nil); err == nil {
+		t.Fatal("accepted empty card update")
+	}
+	folders, err := service.ListFolders()
+	if err != nil || len(folders) != 0 {
+		t.Fatalf("invalid inputs wrote records: %+v %v", folders, err)
 	}
 }

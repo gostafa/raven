@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -140,6 +141,9 @@ func TestSelectedSymlinkMayReferToAnotherDirectory(t *testing.T) {
 	}
 	link := filepath.Join(t.TempDir(), "link.png")
 	if err := os.Symlink(path, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink permission is unavailable")
+		}
 		t.Fatal(err)
 	}
 	service := New(nil, nil, nil)

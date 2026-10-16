@@ -149,7 +149,11 @@ func (n *blockingNotifier) RequestAuthorization() error {
 
 func TestCoordinatorShutdownDoesNotWaitForAuthorization(t *testing.T) {
 	notifier := &blockingNotifier{started: make(chan struct{}), release: make(chan struct{})}
-	c := reminders.Start(reminderSource{}, notifier, func() {}, func(string, error) {})
+	c := reminders.Start(
+		reminderSource{},
+		notifier,
+		reminders.Callbacks{Publish: func() {}, Warn: func(string, error) {}},
+	)
 	defer func() { close(notifier.release); c.Stop() }()
 	select {
 	case <-notifier.started:

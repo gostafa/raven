@@ -11,4 +11,7 @@ const (
 	mimeJPEG     = "image/jpeg"
 	mimeOggAudio = "audio/ogg"
 	mimeMP4Video = "video/mp4"
+
+	validateItemErrorFormat = "validate item: %w"
+	zero                    = 0
 )

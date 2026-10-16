@@ -8,4 +8,6 @@ const (
 
 	mediaRoutePrefix = "/media/"
 	logErrorKey      = "error"
+
+	zero = 0
 )

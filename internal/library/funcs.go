@@ -11,8 +11,20 @@ import (
 	"time"
 )
 
+// ValidateItem checks structural and kind-specific content invariants.
 func ValidateItem(item ContentItem) error {
-	err := validateItem(&item)
+	if item.ID == "" || item.Position < zero {
+		return errInvalidContentItem
+	}
+
+	var err error
+
+	if item.Kind == textKind {
+		err = validateText(&item)
+	} else {
+		err = validateMedia(&item)
+	}
+
 	if err != nil {
 		return fmt.Errorf("validate content item: %w", err)
 	}
@@ -20,38 +32,17 @@ func ValidateItem(item ContentItem) error {
 	return nil
 }
 
-func validateItem(item *ContentItem) error {
-	if item.ID == "" || item.Position < 0 {
-		return errInvalidContentItem
-	}
-
-	if item.Kind == textKind {
-		forwardErr := validateText(item)
-		if forwardErr != nil {
-			return fmt.Errorf("validate item: %w", forwardErr)
-		}
-
-		return nil
-	}
-
-	forwardErr2 := validateMedia(item)
-	if forwardErr2 != nil {
-		return fmt.Errorf("validate item: %w", forwardErr2)
+func validateText(item *ContentItem) error {
+	if strings.TrimSpace(item.Text) == "" || hasMediaMetadata(item) {
+		return errInvalidTextItem
 	}
 
 	return nil
 }
 
-func validateText(item *ContentItem) error {
-	if strings.TrimSpace(item.Text) == "" || item.RelativePath != "" {
-		return errInvalidTextItem
-	}
-
-	if item.MIMEType != "" || item.OriginalName != "" || item.ByteSize != 0 {
-		return errInvalidTextItem
-	}
-
-	return nil
+func hasMediaMetadata(item *ContentItem) bool {
+	return item.RelativePath != "" || item.MIMEType != "" || item.OriginalName != "" ||
+		item.ByteSize != zero
 }
 
 func validateMedia(item *ContentItem) error {
@@ -59,16 +50,20 @@ func validateMedia(item *ContentItem) error {
 		return errInvalidContentKind
 	}
 
-	if item.Text != "" || item.OriginalName == "" || item.ByteSize <= 0 {
+	if !validMediaMetadata(item) {
 		return errInvalidMediaItem
 	}
 
-	forwardErr4 := validateMediaLocation(item)
-	if forwardErr4 != nil {
-		return fmt.Errorf("validate media: %w", forwardErr4)
+	err := validateMediaLocation(item)
+	if err != nil {
+		return fmt.Errorf("validate media: %w", err)
 	}
 
 	return nil
+}
+
+func validMediaMetadata(item *ContentItem) bool {
+	return item.Text == "" && item.OriginalName != "" && item.ByteSize > zero
 }
 
 func isMediaKind(kind string) bool { return kind == "audio" || kind == "image" || kind == "video" }
@@ -76,12 +71,14 @@ func isMediaKind(kind string) bool { return kind == "audio" || kind == "image" |
 func validateMediaLocation(item *ContentItem) error {
 	if !strings.HasPrefix(item.MIMEType, item.Kind+"/") ||
 		!ValidMediaPath(item.RelativePath, item.ID) {
+
 		return errInvalidMediaItem
 	}
 
 	return nil
 }
 
+// ValidMediaPath checks that a supported media path belongs to the item identifier.
 func ValidMediaPath(path, id string) bool {
 	if !itemIDPattern.MatchString(id) {
 		return false
@@ -127,6 +124,7 @@ func videoMediaType(extension string) string {
 	}[extension]
 }
 
+// NormalizeFolder trims metadata and removes duplicate or blank tags.
 func NormalizeFolder(input CreateFolderInput) (Folder, error) {
 	folder := Folder{
 		ID:          "",
@@ -145,8 +143,10 @@ func normalizeTags(tags []string) []string {
 	result := []string{}
 	seen := map[string]bool{}
 
-	for _, tag := range tags {
-		normalized := strings.TrimSpace(tag)
+	for tagIndex := range tags {
+		tag := &tags[tagIndex]
+
+		normalized := strings.TrimSpace((*tag))
 		key := strings.ToLower(normalized)
 
 		if normalized != "" && !seen[key] {
@@ -158,6 +158,7 @@ func normalizeTags(tags []string) []string {
 	return result
 }
 
+// Hydrate orders card items and computes aggregate scheduling timestamps.
 func Hydrate(card Card) (Card, error) {
 	err := orderItems(&card)
 	if err != nil {
@@ -181,7 +182,7 @@ func orderItems(card *Card) error {
 		}
 	}
 
-	if len(card.Items) == 0 {
+	if len(card.Items) == zero {
 		return errAddSomethingYouWantToRemember
 	}
 
@@ -189,8 +190,8 @@ func orderItems(card *Card) error {
 }
 
 func aggregateSchedule(card *Card) {
-	card.DueAt = 0
-	card.LastReviewed = 0
+	card.DueAt = zero
+	card.LastReviewed = zero
 
 	for index := range card.Items {
 		updateDue(card, &card.Items[index])
@@ -199,9 +200,9 @@ func aggregateSchedule(card *Card) {
 }
 
 func updateDue(card *Card, item *ContentItem) {
-	due := item.Schedule.Due.UnixMilli()
-	if card.DueAt == 0 || due < card.DueAt {
-		card.DueAt = due
+	dueMilli := item.Schedule.Due.UnixMilli()
+	if card.DueAt == zero || dueMilli < card.DueAt {
+		card.DueAt = dueMilli
 	}
 }
 
@@ -214,6 +215,7 @@ func updateLastReview(card *Card, reviews []ItemReview) {
 	}
 }
 
+// InitializeItem creates the initial schedule and automatic review record.
 func InitializeItem(item *ContentItem, now time.Time, scheduler Scheduler) error {
 	schedule, log, err := scheduler.Initialize(now)
 	if err != nil {
@@ -222,11 +224,12 @@ func InitializeItem(item *ContentItem, now time.Time, scheduler Scheduler) error
 
 	item.Schedule = schedule
 	item.Reviews = []ItemReview{{Log: log, Automatic: true}}
-	item.LastNotifiedDue = 0
+	item.LastNotifiedDue = zero
 
 	return nil
 }
 
+// ApplyReview advances a schedule after a validated user rating.
 func ApplyReview(item *ContentItem, now time.Time, rating int, scheduler Scheduler) error {
 	if rating < minimumRating || rating > maximumRating {
 		return errInvalidReviewRating
@@ -243,6 +246,7 @@ func ApplyReview(item *ContentItem, now time.Time, rating int, scheduler Schedul
 	return nil
 }
 
+// PrepareItems validates drafts and returns newly imported files for rollback.
 func PrepareItems(
 	drafts []ItemDraft,
 	previous []ContentItem,
@@ -275,7 +279,7 @@ func indexItems(items []ContentItem) map[string]ContentItem {
 }
 
 func (preparation *itemPreparation) prepareAll(drafts []ItemDraft) ([]ContentItem, error) {
-	items := make([]ContentItem, 0, len(drafts))
+	items := make([]ContentItem, zero, len(drafts))
 	for index := range drafts {
 		item, err := preparation.prepare(&drafts[index], index)
 		if err != nil {
@@ -285,7 +289,7 @@ func (preparation *itemPreparation) prepareAll(drafts []ItemDraft) ([]ContentIte
 		items = append(items, item)
 	}
 
-	if len(items) == 0 {
+	if len(items) == zero {
 		return nil, errAddSomethingYouWantToRemember
 	}
 
@@ -384,7 +388,7 @@ func applyDraft(item *ContentItem, draft *ItemDraft) error {
 		return fmt.Errorf("apply content: %w", err)
 	}
 
-	err = validateItem(item)
+	err = ValidateItem(*item)
 	if err != nil {
 		return fmt.Errorf("validate prepared content: %w", err)
 	}

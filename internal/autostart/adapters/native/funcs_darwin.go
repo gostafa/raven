@@ -10,6 +10,7 @@ import (
 	"C"
 )
 
+// PrepareLoginDetection registers the native launch classification callback.
 func PrepareLoginDetection(detected func(bool)) {
 	nativeLoginDetected = detected
 	C.ravenPrepareLoginDetection()

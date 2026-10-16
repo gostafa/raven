@@ -53,4 +53,8 @@ var (
 	errIncompleteMigrationBackup  = errors.New("incomplete migration backup")
 	errInvalidLegacyCardOwnership = errors.New("invalid legacy card ownership")
 	errInvalidLegacyCard          = errors.New("invalid legacy card")
+
+	errMediaContentTypeMismatch = errors.New("file contents do not match")
+
+	errInvalidFolderMetadata = errors.New("invalid metadata for folder")
 )

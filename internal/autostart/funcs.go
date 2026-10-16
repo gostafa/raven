@@ -174,6 +174,7 @@ func (controller *Controller) updateMenus() {
 	}
 }
 
+// IsAutostartLaunch reports whether launch arguments request automatic startup.
 func IsAutostartLaunch(args []string) bool { return slices.Contains(args, autostartArgument) }
 
 // ApplicationStarted records that the native application has started.
@@ -225,6 +226,7 @@ func (visibility *Visibility) firstManualLaunch() bool {
 	return !visibility.settled && !visibility.automatic
 }
 
+// New constructs the adapter with its required runtime dependencies.
 func New(backend Backend, debug bool, publish func(bool, bool)) *Controller {
 	return &Controller{
 		backend: backend,
@@ -236,6 +238,7 @@ func New(backend Backend, debug bool, publish func(bool, bool)) *Controller {
 	}
 }
 
+// NewVisibility creates a launch visibility coordinator.
 func NewVisibility(show func()) *Visibility {
 	return &Visibility{
 		show:       show,

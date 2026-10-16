@@ -25,4 +25,55 @@ const (
 	autostartInitializedKey = "autostartInitialized"
 
 	schemaV1 = "1"
+
+	privateFileMode   = 0o600
+	logErrorKey       = "error"
+	mediaHeaderSize   = 512
+	mimePartLimit     = 2
+	isoHeaderSize     = 12
+	isoSignatureStart = 4
+	isoSignatureEnd   = 8
+
+	claimAutostartInitializationErrorFormat = "claim autostart initialization: %w"
+	cleanupMediaErrorFormat                 = "cleanup media: %w"
+	createFolderErrorFormat                 = "create folder: %w"
+	deleteCardErrorFormat                   = "delete card: %w"
+	errorFormat                             = "%w %q"
+	four                                    = 4
+	importMediaErrorFormat                  = "import media: %w"
+	loadCardErrorFormat                     = "load card: %w"
+	markNotifiedErrorFormat                 = "mark notified: %w"
+	mergeLegacyItemsErrorFormat             = "merge legacy items: %w"
+	normalizeRecordErrorFormat              = "normalize record: %w"
+	one                                     = 1
+	putCardErrorFormat                      = "put card: %w"
+	putItemsErrorFormat                     = "put items: %w"
+	reviewItemAtErrorFormat                 = "review item at: %w"
+	reviewItemErrorFormat                   = "review item: %w"
+	saveCardErrorFormat                     = "save card: %w"
+	zero                                    = 0
+
+	legacySourcePath      = "sourcePath"
+	legacyOriginalName    = "originalName"
+	legacyPreviewURL      = "previewURL"
+	legacyByteSize        = "byteSize"
+	legacyMimeType        = "mimeType"
+	legacyRelativePath    = "relativePath"
+	legacyFolderID        = "folderId"
+	legacyCardID          = "cardId"
+	legacyCreatedAt       = "createdAt"
+	legacyDueAt           = "dueAt"
+	legacyLastReviewed    = "lastReviewed"
+	legacyLastNotifiedDue = "lastNotifiedDue"
+	legacyLastReview      = "LastReview"
+	legacyScheduledDays   = "ScheduledDays"
+	legacyRemainingSteps  = "RemainingSteps"
+	legacyDue             = "Due"
+	legacyStability       = "Stability"
+	legacyDifficulty      = "Difficulty"
+	legacyReps            = "Reps"
+	legacyLapses          = "Lapses"
+	legacyState           = "State"
+	legacyReview          = "Review"
+	legacyRating          = "Rating"
 )

@@ -3,6 +3,7 @@
 
 package companion
 
+// Bounds places the floating review window within the available screen area.
 func Bounds(widgetX, widgetY int, area Rect) Rect {
 	width := min(ReviewWidth, area.Width)
 	height := min(ReviewHeight, area.Height)

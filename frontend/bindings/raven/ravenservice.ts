@@ -17,14 +17,14 @@ import * as $models from "./models.js";
 /**
  * CreateCard creates a card and initializes its item schedules.
  */
-export function CreateCard(input: $models.CreateCardInput): $CancellablePromise<$models.Card> {
+export function CreateCard(input: $models.CreateCardInput | null): $CancellablePromise<$models.Card> {
     return $Call.ByID(2101102601, input);
 }
 
 /**
  * CreateFolder creates a folder from editable metadata.
  */
-export function CreateFolder(input: $models.CreateFolderInput): $CancellablePromise<$models.Folder> {
+export function CreateFolder(input: $models.CreateFolderInput | null): $CancellablePromise<$models.Folder> {
     return $Call.ByID(1359139579, input);
 }
 
@@ -129,6 +129,6 @@ export function ToggleFloatingReview(): $CancellablePromise<void> {
 /**
  * UpdateCard updates card content while preserving retained item schedules.
  */
-export function UpdateCard(input: $models.UpdateCardInput): $CancellablePromise<$models.Card> {
+export function UpdateCard(input: $models.UpdateCardInput | null): $CancellablePromise<$models.Card> {
     return $Call.ByID(3646724196, input);
 }

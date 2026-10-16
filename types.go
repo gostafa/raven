@@ -12,6 +12,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
+	"raven/internal/autostart"
 	"raven/internal/companion"
 	"raven/internal/library"
 	"raven/internal/reminders"
@@ -196,5 +197,10 @@ type (
 	}
 
 	// ServiceError exposes a message without retaining an implementation error chain.
-	ServiceError struct{ Message string }
+	ServiceError       struct{ Message string }
+	desktopComposition struct {
+		service    *RavenService
+		visibility *autostart.Visibility
+		startup    *autostart.Controller
+	}
 )

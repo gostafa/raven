@@ -43,14 +43,16 @@ func (service *RavenService) startReminders() {
 	service.reminders = reminders.Start(
 		service.store,
 		notifier,
-		func() { service.app.Event.Emit("raven:schedules-changed") },
-		func(message string, err error) {
-			service.app.Logger.WarnContext(
-				context.Background(),
-				"review reminder unavailable",
-				slog.String(logOperationKey, message),
-				slog.Any(logErrorKey, err),
-			)
+		reminders.Callbacks{
+			Publish: func() { service.app.Event.Emit(ravenSchedulesChanged) },
+			Warn: func(message string, err error) {
+				service.app.Logger.WarnContext(
+					context.Background(),
+					"review reminder unavailable",
+					slog.String(logOperationKey, message),
+					slog.Any(logErrorKey, err),
+				)
+			},
 		},
 	)
 }
@@ -81,7 +83,7 @@ func (lifecycle *lifecycleAdapter) ServiceStartup(
 		if serviceStartupErr != nil {
 			if service.app != nil {
 				service.app.Logger.WarnContext(
-					context.Background(),
+					ctx,
 					"desktop notifications unavailable",
 					slog.Any(logErrorKey, serviceStartupErr),
 				)
@@ -97,7 +99,12 @@ func (lifecycle *lifecycleAdapter) ServiceStartup(
 func (lifecycle *lifecycleAdapter) ServiceShutdown() error {
 	lifecycle.service.stopReminders()
 
-	return lifecycle.service.closeResources()
+	err := lifecycle.service.closeResources()
+	if err != nil {
+		return &ServiceError{Message: err.Error()}
+	}
+
+	return nil
 }
 
 func (service *RavenService) stopReminders() {
@@ -132,7 +139,7 @@ func (service *RavenService) closeResources() error {
 // ListFolders returns folders in creation order.
 func (service *RavenService) ListFolders() ([]Folder, error) {
 	if service.store == nil {
-		return nil, &ServiceError{Message: "folder storage is unavailable"}
+		return nil, &ServiceError{Message: folderStorageIsUnavailable}
 	}
 
 	value, err := service.store.ListFolders()
@@ -144,23 +151,23 @@ func (service *RavenService) ListFolders() ([]Folder, error) {
 }
 
 // CreateFolder creates a folder from editable metadata.
-func (service *RavenService) CreateFolder(input CreateFolderInput) (Folder, error) {
+func (service *RavenService) CreateFolder(input *CreateFolderInput) (Folder, error) {
 	if service.store == nil {
-		return Folder{}, &ServiceError{Message: "folder storage is unavailable"}
+		return Folder{}, &ServiceError{Message: folderStorageIsUnavailable}
 	}
 
-	value, err := service.store.CreateFolder(folderInput(input))
+	value, err := service.store.CreateFolder(folderInput(nonNilInput(input)))
 	if err != nil {
-		return publicFolder(value), &ServiceError{Message: err.Error()}
+		return publicFolder(&value), &ServiceError{Message: err.Error()}
 	}
 
-	return publicFolder(value), nil
+	return publicFolder(&value), nil
 }
 
 // ListCards returns the persisted library cards.
 func (service *RavenService) ListCards() ([]Card, error) {
 	if service.store == nil {
-		return nil, &ServiceError{Message: "card storage is unavailable"}
+		return nil, &ServiceError{Message: cardStorageIsUnavailable}
 	}
 
 	value, err := service.store.ListCards()
@@ -174,7 +181,7 @@ func (service *RavenService) ListCards() ([]Card, error) {
 // DeleteFolder deletes a folder and its content.
 func (service *RavenService) DeleteFolder(folderID string) error {
 	if service.store == nil {
-		return &ServiceError{Message: "folder storage is unavailable"}
+		return &ServiceError{Message: folderStorageIsUnavailable}
 	}
 
 	err := service.store.DeleteFolder(folderID)
@@ -192,7 +199,7 @@ func (service *RavenService) DeleteFolder(folderID string) error {
 // DeleteCard deletes a card from its owning folder.
 func (service *RavenService) DeleteCard(folderID, cardID string) error {
 	if service.store == nil {
-		return &ServiceError{Message: "card storage is unavailable"}
+		return &ServiceError{Message: cardStorageIsUnavailable}
 	}
 
 	err := service.store.DeleteCard(folderID, cardID)
@@ -208,39 +215,39 @@ func (service *RavenService) DeleteCard(folderID, cardID string) error {
 }
 
 // CreateCard creates a card and initializes its item schedules.
-func (service *RavenService) CreateCard(input CreateCardInput) (Card, error) {
+func (service *RavenService) CreateCard(input *CreateCardInput) (Card, error) {
 	if service.store == nil {
-		return Card{}, &ServiceError{Message: "card storage is unavailable"}
+		return Card{}, &ServiceError{Message: cardStorageIsUnavailable}
 	}
 
-	card, err := service.store.CreateCard(createCardInput(input))
+	card, err := service.store.CreateCard(createCardInput(nonNilInput(input)))
 	if err == nil {
 		service.schedulesChanged()
 	}
 
 	if err != nil {
-		return publicCard(card), &ServiceError{Message: err.Error()}
+		return publicCard(&card), &ServiceError{Message: err.Error()}
 	}
 
-	return publicCard(card), nil
+	return publicCard(&card), nil
 }
 
 // UpdateCard updates card content while preserving retained item schedules.
-func (service *RavenService) UpdateCard(input UpdateCardInput) (Card, error) {
+func (service *RavenService) UpdateCard(input *UpdateCardInput) (Card, error) {
 	if service.store == nil {
-		return Card{}, &ServiceError{Message: "card storage is unavailable"}
+		return Card{}, &ServiceError{Message: cardStorageIsUnavailable}
 	}
 
-	card, err := service.store.UpdateCard(updateCardInput(input))
+	card, err := service.store.UpdateCard(updateCardInput(nonNilInput(input)))
 	if err == nil {
 		service.schedulesChanged()
 	}
 
 	if err != nil {
-		return publicCard(card), &ServiceError{Message: err.Error()}
+		return publicCard(&card), &ServiceError{Message: err.Error()}
 	}
 
-	return publicCard(card), nil
+	return publicCard(&card), nil
 }
 
 // ReviewItem records a rating and advances an item schedule.
@@ -249,7 +256,7 @@ func (service *RavenService) ReviewItem(
 	rating int,
 ) (Card, error) {
 	if service.store == nil {
-		return Card{}, &ServiceError{Message: "card storage is unavailable"}
+		return Card{}, &ServiceError{Message: cardStorageIsUnavailable}
 	}
 
 	card, err := service.store.ReviewItem(folderID, cardID, itemID, rating)
@@ -258,10 +265,10 @@ func (service *RavenService) ReviewItem(
 	}
 
 	if err != nil {
-		return publicCard(card), &ServiceError{Message: err.Error()}
+		return publicCard(&card), &ServiceError{Message: err.Error()}
 	}
 
-	return publicCard(card), nil
+	return publicCard(&card), nil
 }
 
 // ShowMain shows and focuses the main library window.
@@ -294,246 +301,385 @@ func (service *RavenService) RefreshReminders() {
 
 func (service *RavenService) schedulesChanged() {
 	if service.app != nil {
-		service.app.Event.Emit("raven:schedules-changed")
+		service.app.Event.Emit(ravenSchedulesChanged)
 	}
 
 	service.RefreshReminders()
 }
 
 func main() {
-	ns := notifications.New()
-	raven := &RavenService{notifier: ns}
-	visibility := autostart.NewVisibility(raven.ShowMain)
+	desktop := newDesktopComposition()
+	desktop.prepare()
+	desktop.run()
+}
 
+func newDesktopComposition() *desktopComposition {
+	service := new(RavenService)
+
+	service.notifier = notifications.New()
+
+	return &desktopComposition{
+		service:    service,
+		visibility: autostart.NewVisibility(service.ShowMain),
+		startup:    nil,
+	}
+}
+
+func (desktop *desktopComposition) prepare() {
+	desktop.prepareLoginDetection()
+	desktop.createApplication()
+	desktop.createWindows()
+	desktop.configureServices()
+	desktop.configureWidgetEvents()
+	desktop.configureClosingHooks()
+	desktop.configureLifecycleEvents()
+	desktop.configureMenus()
+}
+
+func (desktop *desktopComposition) prepareLoginDetection() {
 	loginnative.PrepareLoginDetection(func(nativeAutomatic bool) {
-		// Never wait on the UI thread from inside a Cocoa notification.
-		go visibility.Classify(nativeAutomatic || autostart.IsAutostartLaunch(os.Args[1:]))
+		// Cocoa callbacks must not wait for the UI thread.
+		go desktop.visibility.Classify(
+			nativeAutomatic || autostart.IsAutostartLaunch(os.Args[firstLaunchArgument:]),
+		)
 	})
+}
 
-	app := application.New(application.Options{
-		Name:        "Raven",
-		Description: "A little practice. A little more remembered.",
-		Icon:        appIcon,
-		Services: []application.Service{
-			application.NewService(&lifecycleAdapter{service: raven}),
-			application.NewService(raven),
-		},
-		Assets: application.AssetOptions{
-			Handler:    application.AssetFileServerFS(assets),
-			Middleware: raven.mediaMiddleware,
-		},
-		Mac:     application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false},
-		Windows: application.WindowsOptions{DisableQuitOnLastWindowClosed: true},
-		Linux:   application.LinuxOptions{DisableQuitOnLastWindowClosed: true},
-		SingleInstance: &application.SingleInstanceOptions{
-			UniqueID: autostart.ApplicationID,
-			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
-				visibility.SecondInstance(data.Args)
-			},
-		},
-	})
+func (desktop *desktopComposition) createApplication() {
+	service := desktop.service
+	app := application.New(desktop.applicationOptions())
+	service.notifier.OnNotificationResponse(desktop.notificationResponse)
 
-	ns.OnNotificationResponse(func(result notifications.NotificationResult) {
-		if result.Error == nil &&
-			result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
-			raven.ShowReviews()
-		}
-	})
+	service.app = app
+	desktop.startup = autostart.New(startupwails.New(app.Autostart), app.Env.Info().Debug, nil)
+}
 
-	raven.app = app
+func (desktop *desktopComposition) notificationResponse(result notifications.NotificationResult) {
+	if result.Error == nil &&
+		result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
 
-	startup := autostart.New(startupwails.New(app.Autostart), app.Env.Info().Debug, nil)
-	reportStartupError := func(err error) {
-		if err != nil {
-			app.Logger.ErrorContext(
-				context.Background(),
-				"could not configure login startup",
-				slog.Any(logErrorKey, err),
-			)
-			app.Dialog.Error().
-				SetTitle("Start at login").
-				SetMessage("Raven could not update login startup. You can try again from the Raven menu.\n\n" + err.Error()).
-				Show()
-		}
+		desktop.service.ShowReviews()
 	}
-	refreshStartup := func() {
-		err := startup.Refresh()
-		if err != nil {
-			app.Logger.WarnContext(
-				context.Background(),
-				"could not refresh login startup status",
-				slog.Any(logErrorKey, err),
-			)
-		}
-	}
-	toggleStartup := func(_ *application.Context) {
-		go func() { reportStartupError(startup.Toggle()) }()
-	}
+}
 
-	raven.mainWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name: "raven", Title: "Raven",
-		Width: 960, Height: 680, MinWidth: 620, MinHeight: 520,
-		Hidden:           true,
-		BackgroundColour: application.NewRGB(0, 0, 0),
-		URL:              "/",
-		Mac: application.MacWindow{
-			Appearance: application.NSAppearanceNameDarkAqua,
-			Backdrop:   application.MacBackdropTranslucent,
-		},
-	})
-	raven.widget = app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:                  "raven-widget",
-		Title:                 "Raven widget",
-		Width:                 widgetSize,
-		Height:                widgetSize,
-		MinWidth:              widgetSize,
-		MinHeight:             widgetSize,
-		MaxWidth:              widgetSize,
-		MaxHeight:             widgetSize,
-		Frameless:             true,
-		DisableResize:         true,
-		AlwaysOnTop:           true,
-		MaximiseButtonState:   application.ButtonDisabled,
-		FullscreenButtonState: application.ButtonDisabled,
-		BackgroundType:        application.BackgroundTypeTransparent,
-		BackgroundColour:      application.NewRGBA(255, 255, 255, 0),
-		URL:                   "/?view=widget",
-		InitialPosition:       application.WindowXY,
-		X:                     24,
-		Y:                     100,
-		Windows:               application.WindowsWindow{HiddenOnTaskbar: true},
-		Mac: application.MacWindow{
-			Backdrop:      application.MacBackdropTransparent,
-			CornerType:    application.MacWindowCornerTypeSquare,
-			DisableShadow: true,
-			WindowClass:   application.MacWindowClassPanel,
-			PanelPreferences: application.MacPanelPreferences{
-				NonActivating: true, FloatingPanel: true,
-			},
-			WindowLevel: application.MacWindowLevelPopUpMenu,
-			CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces |
-				application.MacWindowCollectionBehaviorFullScreenAuxiliary |
-				application.MacWindowCollectionBehaviorIgnoresCycle,
-		},
-	})
-	raven.reviewWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:                  "raven-review",
-		Title:                 "Raven review",
-		Width:                 reviewWidth,
-		Height:                reviewHeight,
-		Hidden:                true,
-		Frameless:             true,
-		DisableResize:         true,
-		AlwaysOnTop:           true,
-		MaximiseButtonState:   application.ButtonDisabled,
-		FullscreenButtonState: application.ButtonDisabled,
-		BackgroundColour:      application.NewRGB(0, 0, 0),
-		URL:                   "/?view=review",
-		Windows:               application.WindowsWindow{HiddenOnTaskbar: true},
-		Mac: application.MacWindow{
-			Appearance:  application.NSAppearanceNameDarkAqua,
-			WindowClass: application.MacWindowClassPanel,
-			PanelPreferences: application.MacPanelPreferences{
-				NonActivating: true,
-				FloatingPanel: true,
-			},
-			WindowLevel: application.MacWindowLevelPopUpMenu,
-			CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces |
-				application.MacWindowCollectionBehaviorFullScreenAuxiliary |
-				application.MacWindowCollectionBehaviorIgnoresCycle,
-		},
-	})
-	raven.windows = companionwails.New(app, raven.mainWindow, raven.widget, raven.reviewWindow)
-	raven.media = desktopmedia.New(
-		app,
-		raven.mainWindow,
-		func() http.Handler { return raven.mediaHandler },
+func desktopIdentityOptions() application.Options {
+	var options application.Options
+
+	options.Name = appTitle
+	options.Description = "A little practice. A little more remembered."
+	options.Icon = appIcon
+
+	return options
+}
+
+func (desktop *desktopComposition) applicationOptions() application.Options {
+	options := desktopIdentityOptions()
+
+	options.Services = []application.Service{
+		application.NewService(&lifecycleAdapter{service: desktop.service}),
+		application.NewService(desktop.service),
+	}
+	options.Assets = desktop.assetOptions()
+	options.Windows.DisableQuitOnLastWindowClosed = true
+	options.Linux.DisableQuitOnLastWindowClosed = true
+	options.SingleInstance = desktop.singleInstanceOptions()
+
+	return options
+}
+
+func (desktop *desktopComposition) assetOptions() application.AssetOptions {
+	var options application.AssetOptions
+
+	options.Handler = application.AssetFileServerFS(assets)
+	options.Middleware = desktop.service.mediaMiddleware
+
+	return options
+}
+
+func (desktop *desktopComposition) singleInstanceOptions() *application.SingleInstanceOptions {
+	var options application.SingleInstanceOptions
+
+	options.UniqueID = autostart.ApplicationID
+	options.OnSecondInstanceLaunch = func(data application.SecondInstanceData) { desktop.visibility.SecondInstance(data.Args) }
+
+	return &options
+}
+
+func (desktop *desktopComposition) createWindows() {
+	service := desktop.service
+
+	service.mainWindow = service.app.Window.NewWithOptions(mainWindowOptions())
+	service.widget = service.app.Window.NewWithOptions(widgetWindowOptions())
+	service.reviewWindow = service.app.Window.NewWithOptions(reviewWindowOptions())
+}
+
+func mainWindowBounds() application.WebviewWindowOptions {
+	var options application.WebviewWindowOptions
+
+	options.Width = mainWindowWidth
+	options.Height = mainWindowHeight
+	options.MinWidth = mainWindowMinWidth
+	options.MinHeight = mainWindowMinHeight
+
+	return options
+}
+
+func mainWindowOptions() application.WebviewWindowOptions {
+	options := mainWindowBounds()
+
+	options.Name = appName
+	options.Title = appTitle
+	options.Hidden = true
+	options.BackgroundColour = application.NewRGB(blackChannel, blackChannel, blackChannel)
+	options.URL = "/"
+	options.Mac = mainMacWindowOptions()
+
+	return options
+}
+
+func mainMacWindowOptions() application.MacWindow {
+	var options application.MacWindow
+
+	options.Appearance = application.NSAppearanceNameDarkAqua
+	options.Backdrop = application.MacBackdropTranslucent
+
+	return options
+}
+
+func floatingWindowOptions() application.WebviewWindowOptions {
+	var options application.WebviewWindowOptions
+
+	options.Frameless = true
+	options.DisableResize = true
+	options.AlwaysOnTop = true
+	options.MaximiseButtonState = application.ButtonDisabled
+	options.FullscreenButtonState = application.ButtonDisabled
+	options.Windows.HiddenOnTaskbar = true
+
+	return options
+}
+
+func widgetWindowBounds() application.WebviewWindowOptions {
+	options := floatingWindowOptions()
+
+	options.Width = widgetSize
+	options.Height = widgetSize
+	options.MinWidth = widgetSize
+	options.MinHeight = widgetSize
+	options.MaxWidth = widgetSize
+	options.MaxHeight = widgetSize
+
+	return options
+}
+
+func widgetWindowOptions() application.WebviewWindowOptions {
+	options := widgetWindowBounds()
+
+	options.Name = "raven-widget"
+	options.Title = "Raven widget"
+	options.BackgroundType = application.BackgroundTypeTransparent
+	options.BackgroundColour = application.NewRGBA(
+		whiteChannel,
+		whiteChannel,
+		whiteChannel,
+		blackChannel,
 	)
-	raven.widget.OnWindowEvent(events.Common.WindowShow, func(_ *application.WindowEvent) {
-		raven.configureWidget()
-	})
-	raven.widget.OnWindowEvent(events.Common.WindowDidMove, func(_ *application.WindowEvent) {
-		raven.positionFloatingReview()
-	})
-	raven.reviewWindow.RegisterHook(
+	options.URL = "/?view=widget"
+	options.Mac = widgetMacWindowOptions()
+	placeInitialWidget(&options)
+
+	return options
+}
+
+func placeInitialWidget(options *application.WebviewWindowOptions) {
+	options.InitialPosition = application.WindowXY
+	options.X = initialWidgetX
+	options.Y = initialWidgetY
+}
+
+func floatingMacWindowOptions() application.MacWindow {
+	var options application.MacWindow
+
+	options.WindowClass = application.MacWindowClassPanel
+	options.PanelPreferences.NonActivating = true
+	options.PanelPreferences.FloatingPanel = true
+	options.WindowLevel = application.MacWindowLevelPopUpMenu
+	options.CollectionBehavior = application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorFullScreenAuxiliary | application.MacWindowCollectionBehaviorIgnoresCycle
+
+	return options
+}
+
+func widgetMacWindowOptions() application.MacWindow {
+	options := floatingMacWindowOptions()
+
+	options.Backdrop = application.MacBackdropTransparent
+	options.CornerType = application.MacWindowCornerTypeSquare
+	options.DisableShadow = true
+
+	return options
+}
+
+func reviewMacWindowOptions() application.MacWindow {
+	options := floatingMacWindowOptions()
+
+	options.Appearance = application.NSAppearanceNameDarkAqua
+
+	return options
+}
+
+func reviewWindowOptions() application.WebviewWindowOptions {
+	options := floatingWindowOptions()
+
+	options.Name = "raven-review"
+	options.Title = "Raven review"
+	options.Width = reviewWidth
+	options.Height = reviewHeight
+	options.Hidden = true
+	options.BackgroundColour = application.NewRGB(blackChannel, blackChannel, blackChannel)
+	options.URL = "/?view=review"
+	options.Mac = reviewMacWindowOptions()
+
+	return options
+}
+
+func (desktop *desktopComposition) configureServices() {
+	service := desktop.service
+
+	service.windows = companionwails.New(
+		service.app,
+		companionwails.WindowSet{
+			Main:   service.mainWindow,
+			Widget: service.widget,
+			Review: service.reviewWindow,
+		},
+	)
+	service.media = desktopmedia.New(
+		service.app,
+		service.mainWindow,
+		func() http.Handler { return service.mediaHandler },
+	)
+}
+
+func (desktop *desktopComposition) configureWidgetEvents() {
+	service := desktop.service
+	service.widget.OnWindowEvent(
+		events.Common.WindowShow,
+		func(_ *application.WindowEvent) { service.configureWidget() },
+	)
+	service.widget.OnWindowEvent(
+		events.Common.WindowDidMove,
+		func(_ *application.WindowEvent) { service.positionFloatingReview() },
+	)
+	service.widget.OnWindowEvent(
+		events.Common.WindowDidResize,
+		func(_ *application.WindowEvent) { service.configureWidget() },
+	)
+}
+
+func (desktop *desktopComposition) configureClosingHooks() {
+	service := desktop.service
+	service.reviewWindow.RegisterHook(
 		events.Common.WindowClosing,
-		func(event *application.WindowEvent) {
-			event.Cancel()
-			raven.requestFloatingReviewClose()
-		},
+		func(event *application.WindowEvent) { event.Cancel(); service.requestFloatingReviewClose() },
 	)
-	raven.widget.OnWindowEvent(events.Common.WindowDidResize, func(_ *application.WindowEvent) {
-		raven.configureWidget()
-	})
-
-	// Closing a window leaves the companion alive; explicit Quit still exits.
-	raven.mainWindow.RegisterHook(
+	service.mainWindow.RegisterHook(
 		events.Common.WindowClosing,
-		func(event *application.WindowEvent) {
-			event.Cancel()
-			raven.HideMain()
-		},
+		func(event *application.WindowEvent) { event.Cancel(); service.HideMain() },
 	)
-	raven.widget.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
-		event.Cancel()
-	})
-	app.Event.OnApplicationEvent(
-		events.Common.ApplicationStarted,
-		func(_ *application.ApplicationEvent) {
-			raven.configureWidget()
-			raven.ResetWidget()
-			raven.startReminders()
-			visibility.ApplicationStarted()
-			reportStartupError(startup.Initialize(raven.store))
-		},
+	service.widget.RegisterHook(
+		events.Common.WindowClosing,
+		func(event *application.WindowEvent) { event.Cancel() },
 	)
+}
+
+func (desktop *desktopComposition) configureLifecycleEvents() {
+	app := desktop.service.app
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, desktop.applicationStarted)
 	app.Event.OnApplicationEvent(
 		events.Common.SystemDidWake,
-		func(_ *application.ApplicationEvent) {
-			raven.RefreshReminders()
-			refreshStartup()
-		},
+		func(_ *application.ApplicationEvent) { desktop.service.RefreshReminders(); desktop.refreshStartup() },
 	)
 	app.Event.OnApplicationEvent(
 		events.Mac.ApplicationShouldHandleReopen,
-		func(_ *application.ApplicationEvent) {
-			visibility.RequestOpen()
-		},
+		func(_ *application.ApplicationEvent) { desktop.visibility.RequestOpen() },
 	)
 	app.Event.OnApplicationEvent(
 		events.Mac.ApplicationDidBecomeActive,
-		func(_ *application.ApplicationEvent) { refreshStartup() },
+		func(_ *application.ApplicationEvent) { desktop.refreshStartup() },
 	)
-	raven.mainWindow.OnWindowEvent(
+	desktop.service.mainWindow.OnWindowEvent(
 		events.Common.WindowFocus,
-		func(_ *application.WindowEvent) { refreshStartup() },
+		func(_ *application.WindowEvent) { desktop.refreshStartup() },
 	)
+}
 
+func (desktop *desktopComposition) applicationStarted(_ *application.ApplicationEvent) {
+	service := desktop.service
+	service.configureWidget()
+	service.ResetWidget()
+	service.startReminders()
+	desktop.visibility.ApplicationStarted()
+	desktop.reportStartupError(desktop.startup.Initialize(service.store))
+}
+
+func (desktop *desktopComposition) reportStartupError(err error) {
+	if err == nil {
+		return
+	}
+
+	app := desktop.service.app
+	app.Logger.ErrorContext(
+		context.Background(),
+		"could not configure login startup",
+		slog.Any(logErrorKey, err),
+	)
+	app.Dialog.Error().
+		SetTitle(startupMenuTitle).
+		SetMessage(startupErrorMessage + err.Error()).
+		Show()
+}
+
+func (desktop *desktopComposition) refreshStartup() {
+	err := desktop.startup.Refresh()
+	if err != nil {
+		desktop.service.app.Logger.WarnContext(
+			context.Background(),
+			"could not refresh login startup status",
+			slog.Any(logErrorKey, err),
+		)
+	}
+}
+
+func (desktop *desktopComposition) toggleStartup(_ *application.Context) {
+	go func() { desktop.reportStartupError(desktop.startup.Toggle()) }()
+}
+
+func (desktop *desktopComposition) populateMenu(menu *application.Menu) *application.MenuItem {
+	service := desktop.service
+
+	menu.Add(openMenuTitle).OnClick(func(_ *application.Context) { service.ShowMain() })
+	menu.Add(resetMenuTitle).OnClick(func(_ *application.Context) { service.ResetWidget() })
+	menu.AddSeparator()
+
+	startup := menu.AddCheckbox(startupMenuTitle, false).SetEnabled(false)
+	startup.OnClick(desktop.toggleStartup)
+	menu.AddSeparator()
+	menu.Add(quitMenuTitle).OnClick(func(_ *application.Context) { service.Quit() })
+
+	return startup
+}
+
+func (desktop *desktopComposition) configureMenus() {
+	app := desktop.service.app
 	menu := app.ContextMenu.New()
-	menu.Add("Open Raven").OnClick(func(_ *application.Context) { raven.ShowMain() })
-	menu.Add(resetMenuTitle).OnClick(func(_ *application.Context) { raven.ResetWidget() })
-	menu.AddSeparator()
-
-	widgetStartup := menu.AddCheckbox("Start at login", false).SetEnabled(false)
-	widgetStartup.OnClick(toggleStartup)
-	menu.AddSeparator()
-	menu.Add("Quit Raven").OnClick(func(_ *application.Context) { raven.Quit() })
-	app.ContextMenu.Add("raven", menu)
+	widgetStartup := desktop.populateMenu(menu.Menu)
+	app.ContextMenu.Add(appName, menu)
 
 	trayMenu := app.Menu.New()
-	trayMenu.Add("Open Raven").OnClick(func(_ *application.Context) { raven.ShowMain() })
-	trayMenu.Add(resetMenuTitle).
-		OnClick(func(_ *application.Context) { raven.ResetWidget() })
-	trayMenu.AddSeparator()
-
-	trayStartup := trayMenu.AddCheckbox("Start at login", false).SetEnabled(false)
-	trayStartup.OnClick(toggleStartup)
-	trayMenu.AddSeparator()
-	trayMenu.Add("Quit Raven").OnClick(func(_ *application.Context) { raven.Quit() })
-
+	trayStartup := desktop.populateMenu(trayMenu)
 	tray := app.SystemTray.New().SetIcon(appIcon).SetMenu(trayMenu)
-	tray.SetTooltip("Raven")
-	startup.SetPublisher(func(checked, available bool) {
+	tray.SetTooltip(appTitle)
+	desktop.startup.SetPublisher(func(checked, available bool) {
 		application.InvokeSync(func() {
 			widgetStartup.SetChecked(checked).SetEnabled(available)
 			trayStartup.SetChecked(checked).SetEnabled(available)
@@ -541,40 +687,42 @@ func main() {
 			tray.SetMenu(trayMenu)
 		})
 	})
+}
 
-	err := app.Run()
+func (desktop *desktopComposition) run() {
+	err := desktop.service.app.Run()
 	if err != nil {
-		app.Logger.ErrorContext(
+		desktop.service.app.Logger.ErrorContext(
 			context.Background(),
 			"application stopped",
 			slog.Any(logErrorKey, err),
 		)
-		os.Exit(1)
+		os.Exit(startupFailureExitCode)
 	}
 }
 
 // Error returns the public service error message.
 func (failure *ServiceError) Error() string { return failure.Message }
 
-func mapValues[From, To any](values []From, convert func(From) To) []To {
+func mapValues[From, To any](values []From, convert func(*From) To) []To {
 	if values == nil {
 		return nil
 	}
 
-	result := make([]To, 0, len(values))
-	for _, value := range values {
-		result = append(result, convert(value))
+	result := make([]To, zero, len(values))
+	for index := range values {
+		result = append(result, convert(&values[index]))
 	}
 
 	return result
 }
-func publicFolder(value library.Folder) Folder      { return Folder(value) }
+func publicFolder(value *library.Folder) Folder     { return Folder(*value) }
 func publicFolders(value []library.Folder) []Folder { return mapValues(value, publicFolder) }
-func publicReview(value library.ItemReview) ItemReview {
+func publicReview(value *library.ItemReview) ItemReview {
 	return ItemReview{Log: ReviewLog(value.Log), Automatic: value.Automatic}
 }
 
-func publicItem(value library.ContentItem) ContentItem {
+func publicItem(value *library.ContentItem) ContentItem {
 	return ContentItem{
 		Schedule:        Schedule(value.Schedule),
 		Reviews:         mapValues(value.Reviews, publicReview),
@@ -592,7 +740,7 @@ func publicItem(value library.ContentItem) ContentItem {
 	}
 }
 
-func publicCard(value library.Card) Card {
+func publicCard(value *library.Card) Card {
 	return Card{
 		ID:           value.ID,
 		FolderID:     value.FolderID,
@@ -605,19 +753,19 @@ func publicCard(value library.Card) Card {
 func publicCards(value []library.Card) []Card { return mapValues(value, publicCard) }
 
 func folderInput(
-	value CreateFolderInput,
+	value *CreateFolderInput,
 ) library.CreateFolderInput {
-	return library.CreateFolderInput(value)
+	return library.CreateFolderInput(*value)
 }
-func itemInput(value ItemDraft) library.ItemDraft { return library.ItemDraft(value) }
-func createCardInput(value CreateCardInput) library.CreateCardInput {
+func itemInput(value *ItemDraft) library.ItemDraft { return library.ItemDraft(*value) }
+func createCardInput(value *CreateCardInput) library.CreateCardInput {
 	return library.CreateCardInput{
 		FolderID: value.FolderID,
 		Items:    mapValues(value.Items, itemInput),
 	}
 }
 
-func updateCardInput(value UpdateCardInput) library.UpdateCardInput {
+func updateCardInput(value *UpdateCardInput) library.UpdateCardInput {
 	return library.UpdateCardInput{
 		FolderID: value.FolderID,
 		CardID:   value.CardID,
@@ -625,7 +773,7 @@ func updateCardInput(value UpdateCardInput) library.UpdateCardInput {
 	}
 }
 
-func publicMedia(value library.SelectedMedia) SelectedMedia { return SelectedMedia(value) }
+func publicMedia(value *library.SelectedMedia) SelectedMedia { return SelectedMedia(*value) }
 
 // SelectMediaFiles selects local media for a card draft.
 func (service *RavenService) SelectMediaFiles(kind string) ([]SelectedMedia, error) {
@@ -663,3 +811,11 @@ func (service *RavenService) ToggleFloatingReview() { service.windows.ToggleFloa
 
 // HideFloatingReview hides the floating review window.
 func (service *RavenService) HideFloatingReview() { service.windows.HideFloatingReview() }
+
+func nonNilInput[Value any](value *Value) *Value {
+	if value == nil {
+		return new(Value)
+	}
+
+	return value
+}

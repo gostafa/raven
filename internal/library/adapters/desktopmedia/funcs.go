@@ -18,6 +18,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"raven/internal/library"
+	"raven/internal/library/adapters/filesystem"
 )
 
 // New creates a native picker and an isolated preview registry.
@@ -91,7 +92,7 @@ func (picker *Picker) describePaths(
 	paths []string,
 	filter string,
 ) ([]library.SelectedMedia, error) {
-	selected := make([]library.SelectedMedia, 0, len(paths))
+	selected := make([]library.SelectedMedia, zero, len(paths))
 	for index := range paths {
 		value, err := picker.describePath(paths[index], filter)
 		if err != nil {
@@ -127,7 +128,7 @@ func (picker *Picker) describePath(path, filter string) (library.SelectedMedia, 
 }
 
 func validateSelection(info os.FileInfo, path, filter string) error {
-	if !info.Mode().IsRegular() || info.Size() == 0 {
+	if !info.Mode().IsRegular() || info.Size() == zero {
 		return errSelectANonemptyMediaFile
 	}
 
@@ -197,7 +198,7 @@ func (picker *Picker) servePreviewPath(
 	request *http.Request,
 	path string,
 ) {
-	file, err := openSelectedFile(path)
+	file, err := filesystem.OpenSelected(path)
 	if err != nil {
 		http.NotFound(writer, request)
 
@@ -206,20 +207,6 @@ func (picker *Picker) servePreviewPath(
 	defer picker.closePreview(request.Context(), file)
 
 	picker.servePreviewFile(writer, request, file)
-}
-
-func openSelectedFile(path string) (*os.File, error) {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return nil, fmt.Errorf("resolve selected media path: %w", err)
-	}
-
-	file, err := os.OpenInRoot(filepath.Dir(resolved), filepath.Base(resolved))
-	if err != nil {
-		return nil, fmt.Errorf("open selected media: %w", err)
-	}
-
-	return file, nil
 }
 
 func (picker *Picker) closePreview(ctx context.Context, file *os.File) {

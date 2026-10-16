@@ -1660,3 +1660,116 @@ func TestRecordDecoderRejectsMalformedAndAmbiguousData(t *testing.T) {
 		}
 	}
 }
+
+func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
+	store := openTestStore(t)
+	path, content := mediaFixture(t, ".png")
+	source, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := source.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	item := library.ContentItem{ID: strings.Repeat("a", 32), Kind: "image"}
+	if err = inspectImportedMedia(source, path, &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.ByteSize != int64(len(content)) || item.MIMEType != "image/png" {
+		t.Fatalf("unexpected imported metadata: %+v", item)
+	}
+	item.ByteSize++
+	if _, err = store.persistMedia(
+		source,
+		&item,
+	); !errors.Is(
+		err,
+		errSelectedFileChangedDuringImportTryAgain,
+	) {
+		t.Fatalf("expected changed-file rejection, got %v", err)
+	}
+	entries, err := os.ReadDir(store.mediaDir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("failed import left files: %v, %v", entries, err)
+	}
+
+	closed, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.CreateTemp(t.TempDir(), "copy-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = copyMediaFile(target, closed); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("expected read failure, got %v", err)
+	}
+	if err = target.Close(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("copy failure left destination open: %v", err)
+	}
+	if err = inspectImportedMedia(closed, path, &item); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("expected stat failure, got %v", err)
+	}
+	if _, err = store.commitMedia(
+		filepath.Join(t.TempDir(), "missing"),
+		store.mediaPath(item.RelativePath),
+	); err == nil {
+		t.Fatal("missing staged file committed")
+	}
+}
+
+func TestStoredContentIsValidatedWhenRead(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*library.ContentItem)
+	}{
+		{"item ownership", func(item *library.ContentItem) { item.ID = strings.Repeat("b", 32) }},
+		{"card ownership", func(item *library.ContentItem) { item.CardID = "other" }},
+		{"folder ownership", func(item *library.ContentItem) { item.FolderID = "other" }},
+		{"content structure", func(item *library.ContentItem) { item.Text = "" }},
+		{"missing due", func(item *library.ContentItem) { item.Schedule.Due = time.Time{} }},
+		{
+			"missing review time",
+			func(item *library.ContentItem) { item.Schedule.LastReview = time.Time{} },
+		},
+		{"missing history", func(item *library.ContentItem) { item.Reviews = nil }},
+		{"invalid schedule", func(item *library.ContentItem) { item.Schedule.State = -1 }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			store := openTestStore(t)
+			folder, err := store.CreateFolder(library.CreateFolderInput{Title: "Stored validation"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			card, err := store.CreateCard(
+				library.CreateCardInput{FolderID: folder.ID, Items: textItems("content")},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := card.Items[0]
+			test.mutate(&item)
+			data, err := json.Marshal(item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = store.db.Update(func(tx *bolt.Tx) error {
+				return tx.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID)).
+					Bucket([]byte(itemsBucket)).
+					Bucket([]byte(card.ID)).Put([]byte(card.Items[0].ID), data)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cards, readErr := store.ListCards(); readErr == nil || cards != nil {
+				t.Fatalf("invalid stored content returned: %+v, %v", cards, readErr)
+			}
+		})
+	}
+}

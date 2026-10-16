@@ -130,3 +130,148 @@ func TestHydrationOrdersItemsAndIgnoresAutomaticReviews(t *testing.T) {
 		t.Fatalf("card=%+v error=%v", result, err)
 	}
 }
+
+func TestFolderNormalizationAndContentValidation(t *testing.T) {
+	folder, err := library.NormalizeFolder(
+		library.CreateFolderInput{
+			Title:       " Ideas ",
+			Description: " Notes ",
+			Tags:        []string{" One ", "one", "", "Two"},
+		},
+	)
+	if err != nil || folder.Title != "Ideas" || folder.Description != "Notes" ||
+		!reflect.DeepEqual(folder.Tags, []string{"One", "Two"}) {
+		t.Fatalf("normalization: %+v %v", folder, err)
+	}
+	if _, err := library.NormalizeFolder(library.CreateFolderInput{}); err == nil {
+		t.Fatal("accepted empty title")
+	}
+	id := "0123456789abcdef0123456789abcdef"
+	valid := library.ContentItem{
+		ID:           id,
+		Kind:         "image",
+		OriginalName: "image.png",
+		MIMEType:     "image/png",
+		RelativePath: "media/" + id + ".png",
+		ByteSize:     1,
+	}
+	if err := library.ValidateItem(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*library.ContentItem){
+		func(item *library.ContentItem) { item.ID = "" },
+		func(item *library.ContentItem) { item.Position = -1 },
+		func(item *library.ContentItem) { item.Kind = "invalid" },
+		func(item *library.ContentItem) { item.Text = "unexpected" },
+		func(item *library.ContentItem) { item.OriginalName = "" },
+		func(item *library.ContentItem) { item.ByteSize = 0 },
+		func(item *library.ContentItem) { item.MIMEType = "audio/wav" },
+		func(item *library.ContentItem) { item.RelativePath = "../image.png" },
+	} {
+		invalid := valid
+		mutate(&invalid)
+		if err := library.ValidateItem(invalid); err == nil {
+			t.Fatalf("accepted invalid media: %+v", invalid)
+		}
+	}
+	text := library.ContentItem{ID: "text", Kind: "text", Text: "Remember"}
+	if err := library.ValidateItem(text); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*library.ContentItem){
+		func(item *library.ContentItem) { item.Text = " " },
+		func(item *library.ContentItem) { item.RelativePath = "media/file.png" },
+		func(item *library.ContentItem) { item.MIMEType = "image/png" },
+		func(item *library.ContentItem) { item.OriginalName = "file.png" },
+		func(item *library.ContentItem) { item.ByteSize = 1 },
+	} {
+		invalid := text
+		mutate(&invalid)
+		if err := library.ValidateItem(invalid); err == nil {
+			t.Fatal("accepted invalid text")
+		}
+	}
+	for _, extension := range []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".flac", ".mp4", ".m4v", ".webm", ".ogv", ".mov"} {
+		if library.MediaType(extension) == "" ||
+			!library.ValidMediaPath("media/"+id+extension, id) {
+			t.Fatalf("lost supported media %s", extension)
+		}
+	}
+	if library.MediaType(".svg") != "" || library.ValidMediaPath("media/"+id+".svg", id) ||
+		library.ValidMediaPath("media/bad.png", "bad") {
+		t.Fatal("accepted unsupported media path")
+	}
+}
+
+func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	failure := errors.New("dependency failed")
+	newID := func() (string, error) { return id, nil }
+	importer := func(item library.ContentItem, _ string) (library.ContentItem, string, error) {
+		return item, "", failure
+	}
+	if _, _, err := library.PrepareItems(nil, nil, importer, newID); err == nil {
+		t.Fatal("accepted empty content")
+	}
+	if _, _, err := library.PrepareItems(
+		[]library.ItemDraft{{Kind: "text", Text: "remember"}},
+		nil,
+		importer,
+		func() (string, error) { return "", failure },
+	); !errors.Is(
+		err,
+		failure,
+	) {
+		t.Fatal(err)
+	}
+	if _, _, err := library.PrepareItems(
+		[]library.ItemDraft{{Kind: "image", SourcePath: "image.png"}},
+		nil,
+		importer,
+		newID,
+	); !errors.Is(
+		err,
+		failure,
+	) {
+		t.Fatal(err)
+	}
+	for _, draft := range []library.ItemDraft{{Kind: "text", Text: "remember", SourcePath: "invalid"}, {Kind: "image", Text: "unexpected"}, {Kind: "text", Text: " "}} {
+		if _, _, err := library.PrepareItems(
+			[]library.ItemDraft{draft},
+			nil,
+			importer,
+			newID,
+		); err == nil {
+			t.Fatalf("accepted draft: %+v", draft)
+		}
+	}
+	previous := []library.ContentItem{{ID: id, Kind: "text", Text: "before"}}
+	for _, drafts := range [][]library.ItemDraft{
+		{{ID: id, Kind: "image"}},
+		{{ID: id, Kind: "text", Text: "after", SourcePath: "invalid"}},
+		{{ID: id, Kind: "text", Text: "after"}, {ID: id, Kind: "text", Text: "duplicate"}},
+	} {
+		if _, _, err := library.PrepareItems(drafts, previous, importer, newID); err == nil {
+			t.Fatal("accepted invalid ownership or duplicate")
+		}
+	}
+	item := previous[0]
+	if err := library.InitializeItem(
+		&item,
+		time.Now(),
+		fakeScheduler{failure: failure},
+	); !errors.Is(
+		err,
+		failure,
+	) {
+		t.Fatal(err)
+	}
+	if _, err := library.Hydrate(library.Card{}); err == nil {
+		t.Fatal("accepted empty card")
+	}
+	if _, err := library.Hydrate(
+		library.Card{Items: []library.ContentItem{{Position: 1}}},
+	); err == nil {
+		t.Fatal("accepted unordered content")
+	}
+}

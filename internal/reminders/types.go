@@ -5,8 +5,8 @@
 package reminders
 
 import (
-	"context"
 	"sync"
+	"time"
 
 	"raven/internal/library"
 )
@@ -33,9 +33,26 @@ type (
 
 	// Coordinator reconciles review reminders until stopped.
 	Coordinator struct {
-		cancel   context.CancelFunc
-		changed  chan struct{}
-		done     chan struct{}
-		stopOnce sync.Once
+		source    Source
+		notifier  Notifier
+		callbacks Callbacks
+		stopping  chan struct{}
+		changed   chan struct{}
+		done      chan struct{}
+		stopOnce  sync.Once
+	}
+
+	// Callbacks publishes schedule changes and reports reminder failures.
+	Callbacks struct {
+		// Publish announces that the current schedule snapshot is available.
+		Publish func()
+		// Warn reports an operation and its failure without stopping reconciliation.
+		Warn func(string, error)
+	}
+
+	reminderSnapshot struct {
+		now     time.Time
+		pending []library.DueOccurrence
+		delay   time.Duration
 	}
 )
