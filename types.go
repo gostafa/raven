@@ -46,7 +46,14 @@ type (
 		ByteSize int64 `json:"byte_size"`
 	}
 
-	lifecycleAdapter struct{ service *RavenService }
+	lifecycleAdapter struct {
+		service   *RavenService
+		openStore func() (storageSession, error)
+	}
+	storageSession struct {
+		repository library.Repository
+		media      http.Handler
+	}
 
 	// Folder contains the metadata of a library folder.
 	Folder struct {

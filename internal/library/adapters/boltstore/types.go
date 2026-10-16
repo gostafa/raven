@@ -25,8 +25,9 @@ type (
 	}
 
 	legacyItem struct {
+		*library.ContentItem
+
 		Side string `json:"side"`
-		library.ContentItem
 	}
 	schemaState struct {
 		version  string
@@ -52,6 +53,25 @@ type (
 		previous  library.Card
 		card      library.Card
 		committed bool
+	}
+	cardRating struct {
+		now      time.Time
+		storage  *Store
+		folderID string
+		cardID   string
+		itemID   string
+		card     library.Card
+		rating   int
+	}
+	cardListing struct {
+		storage     *Store
+		transaction *bolt.Tx
+		folderID    string
+		cards       []library.Card
+	}
+	folderListing struct {
+		root    *bolt.Bucket
+		folders []library.Folder
 	}
 	legacyText struct {
 		Prompt string `json:"prompt"`

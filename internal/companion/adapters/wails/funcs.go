@@ -15,20 +15,37 @@ import (
 
 // New constructs the adapter with its required runtime dependencies.
 func New(app *application.App, handles WindowSet) *Windows {
-	return &Windows{
-		app:          app,
-		mainWindow:   handles.Main,
-		widget:       handles.Widget,
-		reviewWindow: handles.Review,
+	windows := &Windows{
+		mainWindow:      handles.Main,
+		widget:          handles.Widget,
+		reviewWindow:    nil,
+		reviewPlacement: nil,
+		nativeWidget:    handles.Widget,
+		configureNative: widgetnative.Configure,
+		invoke:          application.InvokeSync,
+		primaryScreen:   app.Screen.GetPrimary,
+		quit:            app.Quit,
+		logger:          app.Logger,
+	}
+	windows.bindReview(handles.Review)
+
+	return windows
+}
+
+func (windows *Windows) bindReview(review *application.WebviewWindow) {
+	windows.reviewWindow, windows.reviewPlacement = nil, nil
+
+	if review != nil {
+		windows.reviewWindow, windows.reviewPlacement = review, review
 	}
 }
 
 // ConfigureWidget configures platform-specific floating widget behavior.
 func (windows *Windows) ConfigureWidget() {
-	application.InvokeSync(func() {
-		err := widgetnative.Configure(windows.widget)
+	windows.invoke(func() {
+		err := windows.configureNative(windows.nativeWidget)
 		if err != nil {
-			windows.app.Logger.ErrorContext(
+			windows.logger.ErrorContext(
 				context.Background(),
 				"could not configure raven widget",
 				slog.Any(logErrorKey, err),
@@ -52,7 +69,7 @@ func (windows *Windows) HideMain() {
 
 // ResetWidget repositions the widget within the primary screen.
 func (windows *Windows) ResetWidget() {
-	if screen := windows.app.Screen.GetPrimary(); screen != nil {
+	if screen := windows.primaryScreen(); screen != nil {
 		area := screen.WorkArea
 		windows.widget.SetPosition(
 			area.X+max(zero, area.Width-widgetSize-widgetMargin),
@@ -66,7 +83,7 @@ func (windows *Windows) ResetWidget() {
 
 // Quit is intentionally separate from closing the main window.
 func (windows *Windows) Quit() {
-	windows.app.Quit()
+	windows.quit()
 }
 
 // PositionFloatingReview repositions the visible review window beside the widget.
@@ -79,10 +96,7 @@ func (windows *Windows) PositionFloatingReview() {
 }
 
 func (windows *Windows) placeFloatingReview() {
-	screen, err := windows.widget.GetScreen()
-	if err != nil || screen == nil {
-		screen = windows.app.Screen.GetPrimary()
-	}
+	screen := windows.widgetScreen()
 
 	if screen == nil || screen.WorkArea.Width <= zero || screen.WorkArea.Height <= zero {
 		return
@@ -93,10 +107,19 @@ func (windows *Windows) placeFloatingReview() {
 	bounds := companion.Bounds(
 		horizontal,
 		vertical,
-		companion.Rect{X: area.X, Y: area.Y, Width: area.Width, Height: area.Height},
+		&companion.Rect{X: area.X, Y: area.Y, Width: area.Width, Height: area.Height},
 	)
-	windows.reviewWindow.SetSize(bounds.Width, bounds.Height)
-	windows.reviewWindow.SetPosition(bounds.X, bounds.Y)
+	windows.reviewPlacement.SetSize(bounds.Width, bounds.Height)
+	windows.reviewPlacement.SetPosition(bounds.X, bounds.Y)
+}
+
+func (windows *Windows) widgetScreen() *application.Screen {
+	screen, err := windows.widget.GetScreen()
+	if err != nil || screen == nil {
+		return windows.primaryScreen()
+	}
+
+	return screen
 }
 
 // RequestFloatingReviewClose asks the frontend to close after pending saves finish.
@@ -110,7 +133,7 @@ func (windows *Windows) RequestFloatingReviewClose() {
 
 // ToggleFloatingReview opens the companion card without showing the library.
 func (windows *Windows) ToggleFloatingReview() {
-	application.InvokeSync(func() {
+	windows.invoke(func() {
 		if windows.reviewWindow.IsVisible() {
 			windows.RequestFloatingReviewClose()
 

@@ -206,7 +206,7 @@ func (picker *Picker) servePreviewPath(
 	}
 	defer picker.closePreview(request.Context(), file)
 
-	picker.servePreviewFile(writer, request, file)
+	servePreviewFile(writer, request, file)
 }
 
 func (picker *Picker) closePreview(ctx context.Context, file *os.File) {
@@ -216,7 +216,7 @@ func (picker *Picker) closePreview(ctx context.Context, file *os.File) {
 	}
 }
 
-func (picker *Picker) servePreviewFile(
+func servePreviewFile(
 	writer http.ResponseWriter,
 	request *http.Request,
 	file *os.File,

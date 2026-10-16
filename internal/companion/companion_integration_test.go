@@ -26,7 +26,7 @@ func TestFloatingReviewBounds(t *testing.T) {
 		{"widget outside work area", 1800, 1100, primary, companion.Rect{X: 1020, Y: 355, Width: 420, Height: 520}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := companion.Bounds(test.x, test.y, test.area)
+			got := companion.Bounds(test.x, test.y, &test.area)
 			if got != test.want {
 				t.Fatalf("got %+v, want %+v", got, test.want)
 			}

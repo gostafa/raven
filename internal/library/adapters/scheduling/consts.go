@@ -6,6 +6,4 @@ package scheduling
 const (
 	minimumRating = 1
 	maximumRating = 4
-
-	one = 1
 )

@@ -5,7 +5,6 @@ package wails
 
 import (
 	"fmt"
-	"runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
@@ -45,14 +44,6 @@ func reminderOptions(count int) notifications.NotificationOptions {
 	options.ThreadID = "raven-reviews"
 
 	return options
-}
-
-func reminderSound() *notifications.NotificationSound {
-	if runtime.GOOS != "darwin" {
-		return nil
-	}
-
-	return &notifications.NotificationSound{Name: "raven.wav", Silent: false}
 }
 
 // RequestAuthorization requests native notification authorization.

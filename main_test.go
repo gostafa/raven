@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,6 +38,56 @@ func TestFacadeOwnsErrorContract(t *testing.T) {
 	if errors.Is(err, cause) || errors.Is(err, bolt.ErrDatabaseNotOpen) ||
 		errors.Unwrap(err) != nil {
 		t.Fatal("facade retained an implementation error chain")
+	}
+}
+
+func TestStartupInstallsStorageAndMediaTogether(t *testing.T) {
+	store, err := boltstore.Open(filepath.Join(t.TempDir(), "startup.db"), scheduling.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := new(RavenService)
+	lifecycle := lifecycleAdapter{
+		service: service,
+		openStore: func() (storageSession, error) {
+			return storageSession{repository: store, media: store.MediaHandler()}, nil
+		},
+	}
+	t.Cleanup(func() {
+		if closeErr := lifecycle.ServiceShutdown(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if err = lifecycle.ServiceStartup(
+		context.Background(),
+		application.ServiceOptions{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if service.store != store || service.mediaHandler == nil {
+		t.Fatal("startup did not install storage and its media handler")
+	}
+	if _, err = service.CreateFolder(&CreateFolderInput{Title: "Startup"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartupFailureKeepsFacadeErrorAndExistingState(t *testing.T) {
+	cause := fmt.Errorf("database unavailable: %w", bolt.ErrDatabaseNotOpen)
+	repository := failingRepository{failure: cause}
+	handler := http.NewServeMux()
+	service := &RavenService{store: repository, mediaHandler: handler}
+	lifecycle := lifecycleAdapter{
+		service:   service,
+		openStore: func() (storageSession, error) { return storageSession{}, cause },
+	}
+	err := lifecycle.ServiceStartup(context.Background(), application.ServiceOptions{})
+	var public *ServiceError
+	if !errors.As(err, &public) || public.Message != cause.Error() || errors.Unwrap(err) != nil {
+		t.Fatalf("startup exposed an implementation error: %v", err)
+	}
+	if service.store != repository || service.mediaHandler != handler {
+		t.Fatal("failed startup changed installed resources")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1771,5 +1772,43 @@ func TestStoredContentIsValidatedWhenRead(t *testing.T) {
 				t.Fatalf("invalid stored content returned: %+v, %v", cards, readErr)
 			}
 		})
+	}
+}
+
+func TestCardReadFailureDoesNotReturnPartialResults(t *testing.T) {
+	store := openTestStore(t)
+	folder, err := store.CreateFolder(library.CreateFolderInput{Title: "Partial reads"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 2; index++ {
+		if _, err = store.CreateCard(
+			library.CreateCardInput{FolderID: folder.ID, Items: textItems("valid")},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cards, err := store.ListCards()
+	if err != nil || len(cards) != 2 {
+		t.Fatalf("cards=%v error=%v", cards, err)
+	}
+	err = store.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(foldersBucket)).
+			Bucket([]byte(folder.ID)).
+			Bucket([]byte(cardsBucket)).
+			Put([]byte(cards[1].ID), []byte("invalid"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cards, readErr := store.ListCards(); readErr == nil || cards != nil {
+		t.Fatalf("returned partial cards after corruption: %v, %v", cards, readErr)
+	}
+}
+
+func TestRecordEncoderRejectsNonFiniteScheduleValues(t *testing.T) {
+	item := library.ContentItem{Schedule: library.Schedule{Stability: math.NaN()}}
+	if _, err := encodeRecord(item); err == nil {
+		t.Fatal("encoded non-finite schedule")
 	}
 }

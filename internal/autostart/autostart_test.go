@@ -270,3 +270,37 @@ func TestLaunchVisibilityConcurrentStartup(t *testing.T) {
 		t.Fatalf("normal launch opened %d times", shows.Load())
 	}
 }
+
+func TestConstructedControllerReportsStatusFailuresAndUsesNewPublisher(t *testing.T) {
+	failure := errors.New("status unavailable")
+	backend := &fakeAutostart{statusErr: failure}
+	controller := New(backend, false, nil)
+	var published [][2]bool
+	controller.SetPublisher(func(checked, available bool) {
+		published = append(published, [2]bool{checked, available})
+	})
+	if err := controller.Initialize(&fakeAutostartSettings{}); !errors.Is(err, failure) {
+		t.Fatalf("expected initialization read failure, got %v", err)
+	}
+	if err := controller.Refresh(); !errors.Is(err, failure) {
+		t.Fatalf("expected refresh failure, got %v", err)
+	}
+	if backend.enables != 0 || len(published) != 2 {
+		t.Fatalf("unexpected registration or publications: %+v, %v", backend, published)
+	}
+	backend.statusErr = nil
+	backend.enabled = true
+	if err := controller.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if published[len(published)-1] != [2]bool{true, true} {
+		t.Fatal("new publisher did not receive the observed state")
+	}
+	shows := 0
+	visibility := NewVisibility(func() { shows++ })
+	visibility.Classify(false)
+	visibility.ApplicationStarted()
+	if shows != 1 {
+		t.Fatal("constructed visibility did not open the first manual launch")
+	}
+}

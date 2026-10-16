@@ -12,7 +12,7 @@ import (
 )
 
 // ValidateItem checks structural and kind-specific content invariants.
-func ValidateItem(item ContentItem) error {
+func ValidateItem(item *ContentItem) error {
 	if item.ID == "" || item.Position < zero {
 		return errInvalidContentItem
 	}
@@ -20,9 +20,9 @@ func ValidateItem(item ContentItem) error {
 	var err error
 
 	if item.Kind == textKind {
-		err = validateText(&item)
+		err = validateText(item)
 	} else {
-		err = validateMedia(&item)
+		err = validateMedia(item)
 	}
 
 	if err != nil {
@@ -69,13 +69,16 @@ func validMediaMetadata(item *ContentItem) bool {
 func isMediaKind(kind string) bool { return kind == "audio" || kind == "image" || kind == "video" }
 
 func validateMediaLocation(item *ContentItem) error {
-	if !strings.HasPrefix(item.MIMEType, item.Kind+"/") ||
-		!ValidMediaPath(item.RelativePath, item.ID) {
-
+	if !mediaLocationMatches(item) {
 		return errInvalidMediaItem
 	}
 
 	return nil
+}
+
+func mediaLocationMatches(item *ContentItem) bool {
+	return strings.HasPrefix(item.MIMEType, item.Kind+"/") &&
+		ValidMediaPath(item.RelativePath, item.ID)
 }
 
 // ValidMediaPath checks that a supported media path belongs to the item identifier.
@@ -125,7 +128,7 @@ func videoMediaType(extension string) string {
 }
 
 // NormalizeFolder trims metadata and removes duplicate or blank tags.
-func NormalizeFolder(input CreateFolderInput) (Folder, error) {
+func NormalizeFolder(input *CreateFolderInput) (Folder, error) {
 	folder := Folder{
 		ID:          "",
 		Title:       strings.TrimSpace(input.Title),
@@ -159,7 +162,9 @@ func normalizeTags(tags []string) []string {
 }
 
 // Hydrate orders card items and computes aggregate scheduling timestamps.
-func Hydrate(card Card) (Card, error) {
+func Hydrate(input *Card) (Card, error) {
+	card := *input
+
 	err := orderItems(&card)
 	if err != nil {
 		return Card{}, fmt.Errorf("hydrate card: %w", err)
@@ -388,7 +393,7 @@ func applyDraft(item *ContentItem, draft *ItemDraft) error {
 		return fmt.Errorf("apply content: %w", err)
 	}
 
-	err = ValidateItem(*item)
+	err = ValidateItem(item)
 	if err != nil {
 		return fmt.Errorf("validate prepared content: %w", err)
 	}

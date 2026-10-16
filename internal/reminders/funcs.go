@@ -38,15 +38,11 @@ func (snapshot *reminderSnapshot) add(card *library.Card, item *library.ContentI
 		return
 	}
 
-	snapshot.pending = append(
-		snapshot.pending,
-		library.DueOccurrence{
-			FolderID: card.FolderID,
-			CardID:   card.ID,
-			ItemID:   item.ID,
-			Due:      dueMillis,
-		},
-	)
+	occurrence := library.DueOccurrence{
+		FolderID: card.FolderID, CardID: card.ID, ItemID: item.ID, Due: dueMillis,
+	}
+
+	snapshot.pending = append(snapshot.pending, occurrence)
 }
 
 // Deliver sends an authorized reminder before acknowledging unchanged schedules.

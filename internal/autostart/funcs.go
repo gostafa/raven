@@ -29,50 +29,40 @@ func (controller *Controller) Initialize(settings Settings) error {
 }
 
 func (controller *Controller) initializeRegistration(settings Settings) error {
+	first, err := controller.prepareRegistration(settings)
+	if err != nil {
+		return fmt.Errorf("prepare login startup: %w", err)
+	}
+
+	if first && !controller.enabled {
+		err = controller.setEnabled(true)
+		if err != nil {
+			return fmt.Errorf("enable login startup on first launch: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (controller *Controller) prepareRegistration(settings Settings) (bool, error) {
 	first, err := settings.ClaimAutostartInitialization()
 	if err != nil {
-		return fmt.Errorf("claim login startup initialization: %w", err)
+		return false, fmt.Errorf("claim login startup initialization: %w", err)
 	}
 
 	controller.ready = true
 
 	err = controller.readStatus()
 	if err != nil {
-		return fmt.Errorf("initialize login startup status: %w", err)
+		return false, fmt.Errorf("initialize login startup status: %w", err)
 	}
 
-	forwardErr2 := controller.enableFirstLaunch(first)
-	if forwardErr2 != nil {
-		return fmt.Errorf("initialize registration: %w", forwardErr2)
-	}
-
-	return nil
-}
-
-func (controller *Controller) enableFirstLaunch(first bool) error {
-	if !first || controller.enabled {
-		return nil
-	}
-
-	err := controller.setEnabled(true)
-	if err != nil {
-		return fmt.Errorf("enable login startup on first launch: %w", err)
-	}
-
-	return nil
+	return first, nil
 }
 
 // Toggle changes login startup registration using the current OS state.
 func (controller *Controller) Toggle() error {
-	controller.mu.Lock()
-	defer controller.mu.Unlock()
-	defer controller.updateMenus()
-
-	if controller.debug || !controller.ready {
-		return nil
-	}
-
-	err := controller.toggleRegistration()
+	err := controller.whenReady(controller.toggleRegistration)
 	if err != nil {
 		return fmt.Errorf("toggle login startup: %w", err)
 	}
@@ -96,6 +86,15 @@ func (controller *Controller) toggleRegistration() error {
 
 // Refresh refreshes the observed login startup state.
 func (controller *Controller) Refresh() error {
+	err := controller.whenReady(controller.readStatus)
+	if err != nil {
+		return fmt.Errorf("refresh login startup: %w", err)
+	}
+
+	return nil
+}
+
+func (controller *Controller) whenReady(operation func() error) error {
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
 	defer controller.updateMenus()
@@ -104,9 +103,9 @@ func (controller *Controller) Refresh() error {
 		return nil
 	}
 
-	err := controller.readStatus()
+	err := operation()
 	if err != nil {
-		return fmt.Errorf("refresh login startup: %w", err)
+		return fmt.Errorf("update login startup state: %w", err)
 	}
 
 	return nil

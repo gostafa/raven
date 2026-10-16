@@ -29,11 +29,13 @@ const (
 	privateFileMode   = 0o600
 	logErrorKey       = "error"
 	mediaHeaderSize   = 512
-	mimePartLimit     = 2
+	mediaItemPart     = 2
+	mediaRouteParts   = 3
 	isoHeaderSize     = 12
 	isoSignatureStart = 4
 	isoSignatureEnd   = 8
 
+	migrateFolderRecordsErrorFormat         = "migrate folder records: %w"
 	claimAutostartInitializationErrorFormat = "claim autostart initialization: %w"
 	cleanupMediaErrorFormat                 = "cleanup media: %w"
 	createFolderErrorFormat                 = "create folder: %w"

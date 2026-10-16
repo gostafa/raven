@@ -3,6 +3,7 @@ package library_test
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,7 +125,7 @@ func TestHydrationOrdersItemsAndIgnoresAutomaticReviews(t *testing.T) {
 			Reviews:  []library.ItemReview{{Log: library.ReviewLog{Review: now.Add(-time.Hour)}}},
 		},
 	}}
-	result, err := library.Hydrate(card)
+	result, err := library.Hydrate(&card)
 	if err != nil || result.Items[0].ID != "first" || result.DueAt != now.UnixMilli() ||
 		result.LastReviewed != now.Add(-time.Hour).UnixMilli() {
 		t.Fatalf("card=%+v error=%v", result, err)
@@ -133,7 +134,7 @@ func TestHydrationOrdersItemsAndIgnoresAutomaticReviews(t *testing.T) {
 
 func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	folder, err := library.NormalizeFolder(
-		library.CreateFolderInput{
+		&library.CreateFolderInput{
 			Title:       " Ideas ",
 			Description: " Notes ",
 			Tags:        []string{" One ", "one", "", "Two"},
@@ -143,7 +144,7 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 		!reflect.DeepEqual(folder.Tags, []string{"One", "Two"}) {
 		t.Fatalf("normalization: %+v %v", folder, err)
 	}
-	if _, err := library.NormalizeFolder(library.CreateFolderInput{}); err == nil {
+	if _, err := library.NormalizeFolder(&library.CreateFolderInput{}); err == nil {
 		t.Fatal("accepted empty title")
 	}
 	id := "0123456789abcdef0123456789abcdef"
@@ -155,7 +156,7 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 		RelativePath: "media/" + id + ".png",
 		ByteSize:     1,
 	}
-	if err := library.ValidateItem(valid); err != nil {
+	if err := library.ValidateItem(&valid); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*library.ContentItem){
@@ -170,12 +171,12 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	} {
 		invalid := valid
 		mutate(&invalid)
-		if err := library.ValidateItem(invalid); err == nil {
+		if err := library.ValidateItem(&invalid); err == nil {
 			t.Fatalf("accepted invalid media: %+v", invalid)
 		}
 	}
 	text := library.ContentItem{ID: "text", Kind: "text", Text: "Remember"}
-	if err := library.ValidateItem(text); err != nil {
+	if err := library.ValidateItem(&text); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*library.ContentItem){
@@ -187,7 +188,7 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	} {
 		invalid := text
 		mutate(&invalid)
-		if err := library.ValidateItem(invalid); err == nil {
+		if err := library.ValidateItem(&invalid); err == nil {
 			t.Fatal("accepted invalid text")
 		}
 	}
@@ -246,6 +247,15 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		}
 	}
 	previous := []library.ContentItem{{ID: id, Kind: "text", Text: "before"}}
+	media := []library.ContentItem{{
+		ID: id, Kind: "image", OriginalName: "image.png", MIMEType: "image/png",
+		RelativePath: "media/" + id + ".png", ByteSize: 1,
+	}}
+	if _, _, err := library.PrepareItems(
+		[]library.ItemDraft{{ID: id, Kind: "image", Text: "unexpected"}}, media, importer, newID,
+	); err == nil || !strings.Contains(err.Error(), "media cannot contain text") {
+		t.Fatalf("accepted text on retained media: %v", err)
+	}
 	for _, drafts := range [][]library.ItemDraft{
 		{{ID: id, Kind: "image"}},
 		{{ID: id, Kind: "text", Text: "after", SourcePath: "invalid"}},
@@ -266,11 +276,11 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	) {
 		t.Fatal(err)
 	}
-	if _, err := library.Hydrate(library.Card{}); err == nil {
+	if _, err := library.Hydrate(&library.Card{}); err == nil {
 		t.Fatal("accepted empty card")
 	}
 	if _, err := library.Hydrate(
-		library.Card{Items: []library.ContentItem{{Position: 1}}},
+		&library.Card{Items: []library.ContentItem{{Position: 1}}},
 	); err == nil {
 		t.Fatal("accepted unordered content")
 	}

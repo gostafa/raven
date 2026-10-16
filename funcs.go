@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -40,20 +41,22 @@ func (service *RavenService) startReminders() {
 		notifier = reminderwails.New(service.notifier)
 	}
 
-	service.reminders = reminders.Start(
-		service.store,
-		notifier,
-		reminders.Callbacks{
-			Publish: func() { service.app.Event.Emit(ravenSchedulesChanged) },
-			Warn: func(message string, err error) {
-				service.app.Logger.WarnContext(
-					context.Background(),
-					"review reminder unavailable",
-					slog.String(logOperationKey, message),
-					slog.Any(logErrorKey, err),
-				)
-			},
-		},
+	service.reminders = reminders.Start(service.store, notifier, service.reminderCallbacks())
+}
+
+func (service *RavenService) reminderCallbacks() reminders.Callbacks {
+	return reminders.Callbacks{
+		Publish: func() { service.app.Event.Emit(ravenSchedulesChanged) },
+		Warn:    service.reportReminderFailure,
+	}
+}
+
+func (service *RavenService) reportReminderFailure(message string, err error) {
+	service.app.Logger.WarnContext(
+		context.Background(),
+		"review reminder unavailable",
+		slog.String(logOperationKey, message),
+		slog.Any(logErrorKey, err),
 	)
 }
 
@@ -63,37 +66,56 @@ func (lifecycle *lifecycleAdapter) ServiceStartup(
 	ctx context.Context,
 	options application.ServiceOptions,
 ) error {
-	service := lifecycle.service
-
-	path, err := boltstore.DefaultPath()
+	session, err := lifecycle.openStore()
 	if err != nil {
 		return &ServiceError{Message: err.Error()}
+	}
+
+	lifecycle.service.store = session.repository
+	lifecycle.service.mediaHandler = session.media
+	lifecycle.service.startNotifications(ctx, &options)
+
+	return nil
+}
+
+func openServiceStore() (storageSession, error) {
+	path, err := boltstore.DefaultPath()
+	if err != nil {
+		return storageSession{}, fmt.Errorf("locate library: %w", err)
 	}
 
 	store, err := boltstore.Open(path, scheduling.New())
 	if err != nil {
-		return &ServiceError{Message: err.Error()}
+		return storageSession{}, fmt.Errorf("open library: %w", err)
 	}
 
-	service.store = store
-	service.mediaHandler = store.MediaHandler()
+	return storageSession{repository: store, media: store.MediaHandler()}, nil
+}
 
-	if service.notifier != nil {
-		serviceStartupErr := service.notifier.ServiceStartup(ctx, options)
-		if serviceStartupErr != nil {
-			if service.app != nil {
-				service.app.Logger.WarnContext(
-					ctx,
-					"desktop notifications unavailable",
-					slog.Any(logErrorKey, serviceStartupErr),
-				)
-			}
-
-			service.notifier = nil
-		}
+func (service *RavenService) startNotifications(
+	ctx context.Context,
+	options *application.ServiceOptions,
+) {
+	if service.notifier == nil {
+		return
 	}
 
-	return nil
+	err := service.notifier.ServiceStartup(ctx, *options)
+	if err != nil {
+		service.reportNotificationFailure(ctx, err)
+
+		service.notifier = nil
+	}
+}
+
+func (service *RavenService) reportNotificationFailure(ctx context.Context, err error) {
+	if service.app != nil {
+		service.app.Logger.WarnContext(
+			ctx,
+			"desktop notifications unavailable",
+			slog.Any(logErrorKey, err),
+		)
+	}
 }
 
 func (lifecycle *lifecycleAdapter) ServiceShutdown() error {
@@ -310,7 +332,16 @@ func (service *RavenService) schedulesChanged() {
 func main() {
 	desktop := newDesktopComposition()
 	desktop.prepare()
-	desktop.run()
+
+	err := desktop.run()
+	if err != nil {
+		desktop.service.app.Logger.ErrorContext(
+			context.Background(),
+			"application stopped",
+			slog.Any(logErrorKey, err),
+		)
+		os.Exit(startupFailureExitCode)
+	}
 }
 
 func newDesktopComposition() *desktopComposition {
@@ -355,9 +386,11 @@ func (desktop *desktopComposition) createApplication() {
 }
 
 func (desktop *desktopComposition) notificationResponse(result notifications.NotificationResult) {
-	if result.Error == nil &&
-		result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
+	if result.Error != nil {
+		return
+	}
 
+	if result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
 		desktop.service.ShowReviews()
 	}
 }
@@ -376,7 +409,9 @@ func (desktop *desktopComposition) applicationOptions() application.Options {
 	options := desktopIdentityOptions()
 
 	options.Services = []application.Service{
-		application.NewService(&lifecycleAdapter{service: desktop.service}),
+		application.NewService(
+			&lifecycleAdapter{service: desktop.service, openStore: openServiceStore},
+		),
 		application.NewService(desktop.service),
 	}
 	options.Assets = desktop.assetOptions()
@@ -400,7 +435,9 @@ func (desktop *desktopComposition) singleInstanceOptions() *application.SingleIn
 	var options application.SingleInstanceOptions
 
 	options.UniqueID = autostart.ApplicationID
-	options.OnSecondInstanceLaunch = func(data application.SecondInstanceData) { desktop.visibility.SecondInstance(data.Args) }
+	options.OnSecondInstanceLaunch = func(data application.SecondInstanceData) {
+		desktop.visibility.SecondInstance(data.Args)
+	}
 
 	return &options
 }
@@ -504,7 +541,9 @@ func floatingMacWindowOptions() application.MacWindow {
 	options.PanelPreferences.NonActivating = true
 	options.PanelPreferences.FloatingPanel = true
 	options.WindowLevel = application.MacWindowLevelPopUpMenu
-	options.CollectionBehavior = application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorFullScreenAuxiliary | application.MacWindowCollectionBehaviorIgnoresCycle
+	options.CollectionBehavior = application.MacWindowCollectionBehaviorCanJoinAllSpaces |
+		application.MacWindowCollectionBehaviorFullScreenAuxiliary |
+		application.MacWindowCollectionBehaviorIgnoresCycle
 
 	return options
 }
@@ -689,16 +728,13 @@ func (desktop *desktopComposition) configureMenus() {
 	})
 }
 
-func (desktop *desktopComposition) run() {
+func (desktop *desktopComposition) run() error {
 	err := desktop.service.app.Run()
 	if err != nil {
-		desktop.service.app.Logger.ErrorContext(
-			context.Background(),
-			"application stopped",
-			slog.Any(logErrorKey, err),
-		)
-		os.Exit(startupFailureExitCode)
+		return fmt.Errorf("run desktop application: %w", err)
 	}
+
+	return nil
 }
 
 // Error returns the public service error message.
