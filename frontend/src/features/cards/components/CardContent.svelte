@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte';
   import type { Card } from '../domain/types';
   import { orderedItems } from '../domain/funcs';
-  import { mediaURL } from '../adapters/funcs';
+  import { mediaURL } from '../adapters/vars';
   import { stopMedia } from '../../ui';
 
   let { card, compact = false }: { card: Card; compact?: boolean } = $props();

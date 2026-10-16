@@ -17,6 +17,7 @@ Keep Raven's monochrome palette and dark sidebar during future design, content, 
 
 - Use ports and adapters architecture, organized by feature. Keep each backend feature's domain rules, application use cases, ports, and adapters together under `internal/`; reuse existing layers when extending a feature.
 - Keep domain logic independent of adapters and third-party libraries. Application code depends on domain contracts and ports; adapters implement those ports. Wire concrete adapters at the composition boundary during application startup.
+- Every outbound adapter must explicitly implement a specific, named port owned by its consumer. Declare Go conformance with compile-time interface assertions in `vars.go`; use `implements`, `satisfies`, or a port-typed factory/function in TypeScript. Keep ports independent of concrete adapters and third-party types. Helpers inside an adapter share its port; Svelte UI adapters use typed props and callbacks as their contracts.
 - Keep Raven's Wails services as the public facade. Put implementation details in `internal/` and expose only the contracts frontend consumers need.
 
 ## Go Package Files

@@ -11,10 +11,10 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
-	"raven/internal/autostart"
-	"raven/internal/companion"
-	"raven/internal/library/ports"
-	"raven/internal/reminders"
+	"raven/internal/features/autostart"
+	"raven/internal/features/companion"
+	"raven/internal/features/library/ports"
+	"raven/internal/features/reminders"
 )
 
 type (

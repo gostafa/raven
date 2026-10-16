@@ -108,10 +108,11 @@ Wails 3 is currently beta. TypeScript 7.0.2 is the latest release, but svelte-ch
 
 - `funcs.go`: startup composition, native menus, lifecycle wiring, and the Wails facade.
 - `types.go`: facade-owned transport contracts and private application state.
-- `internal/`: library, reminders, autostart, and companion features with owned ports and concrete adapters.
+- `internal/features/`: library, reminders, autostart, and companion features with owned ports and concrete adapters.
+- `internal/shared/`: reusable infrastructure, including selected-file access shared by media adapters.
 - `frontend/src/main.ts` and `App.svelte`: adapter composition and selection of the workspace, widget, or floating review.
 - `frontend/src/features/`: folders, cards, reviews, workspace, companion, and shared UI, with explicit public entry points and frontend-owned contracts.
-- `internal/conventions/` and `frontend/tests/conventions.test.mjs`: filename and dependency-boundary checks, including public Go API types.
+- `internal/tooling/conventions/` and `frontend/tests/conventions.test.mjs`: filename and dependency-boundary checks, including public Go API types.
 - `frontend/public/style.css`: shared workspace theme tokens.
 - `raven.svg`: original supplied logo; copied to `frontend/public/raven.svg`.
 - `build/appicon.png`, `build/darwin/icons.icns`, `build/windows/icon.ico`: icons rendered from the supplied SVG.

@@ -4,7 +4,7 @@
 package main
 
 import (
-	"raven/internal/companion"
+	"raven/internal/features/companion"
 )
 
 const (

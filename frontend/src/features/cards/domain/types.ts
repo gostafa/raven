@@ -66,8 +66,9 @@ export interface CardPort {
   UpdateCard(input: { folderId: string; cardId: string; items: ItemDraft[] }): Promise<Card>;
   DeleteCard(folderId: string, cardId: string): Promise<void>;
 }
+export type MediaURLPort = (item: ContentItem) => string;
 export interface MediaPort {
-  mediaURL(item: ContentItem): string;
+  mediaURL: MediaURLPort;
   SelectMediaFiles(kind: MediaKind): Promise<SelectedMedia[]>;
   newKey(): string;
 }

@@ -18,9 +18,9 @@ import (
 	cardapi "raven/api/cards"
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
-	"raven/internal/library/adapters/boltstore"
-	"raven/internal/library/adapters/scheduling"
-	"raven/internal/library/ports"
+	"raven/internal/features/library/adapters/boltstore"
+	"raven/internal/features/library/adapters/scheduling"
+	"raven/internal/features/library/ports"
 )
 
 type failingRepository struct {

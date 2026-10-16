@@ -18,16 +18,17 @@ import (
 	cardapi "raven/api/cards"
 	folderapi "raven/api/folders"
 	mediaapi "raven/api/media"
-	"raven/internal/autostart"
-	loginnative "raven/internal/autostart/adapters/native"
-	startupwails "raven/internal/autostart/adapters/wails"
-	companionwails "raven/internal/companion/adapters/wails"
-	"raven/internal/library/adapters/boltstore"
-	"raven/internal/library/adapters/desktopmedia"
-	"raven/internal/library/adapters/scheduling"
-	"raven/internal/library/ports"
-	"raven/internal/reminders"
-	reminderwails "raven/internal/reminders/adapters/wails"
+	"raven/internal/features/autostart"
+	loginnative "raven/internal/features/autostart/adapters/native"
+	startupwails "raven/internal/features/autostart/adapters/wails"
+	widgetnative "raven/internal/features/companion/adapters/native"
+	companionwails "raven/internal/features/companion/adapters/wails"
+	"raven/internal/features/library/adapters/boltstore"
+	"raven/internal/features/library/adapters/desktopmedia"
+	"raven/internal/features/library/adapters/scheduling"
+	"raven/internal/features/library/ports"
+	"raven/internal/features/reminders"
+	reminderwails "raven/internal/features/reminders/adapters/wails"
 )
 
 func (service *RavenService) startReminders() {
@@ -315,7 +316,7 @@ func (desktop *desktopComposition) prepare() {
 }
 
 func (desktop *desktopComposition) prepareLoginDetection() {
-	loginnative.PrepareLoginDetection(func(nativeAutomatic bool) {
+	loginnative.New().PrepareLoginDetection(func(nativeAutomatic bool) {
 		// Cocoa callbacks must not wait for the UI thread.
 		go desktop.visibility.Classify(
 			nativeAutomatic || autostart.IsAutostartLaunch(os.Args[firstLaunchArgument:]),
@@ -541,6 +542,7 @@ func (desktop *desktopComposition) configureServices() {
 			Widget: service.widget,
 			Review: service.reviewWindow,
 		},
+		widgetnative.New(service.widget),
 	)
 	service.media = desktopmedia.New(
 		service.app,
