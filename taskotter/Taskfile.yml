@@ -65,6 +65,31 @@ vars:
   RUMDL_EXTRA_ARGS: '{{.RUMDL_EXTRA_ARGS | default ""}}'
   RUMDL_NIX_INSTALLABLE: '{{.RUMDL_NIX_INSTALLABLE | default "nixpkgs#rumdl"}}'
   RUMDL_WINGET_INSTALLABLE: '{{.RUMDL_WINGET_INSTALLABLE | default "rvben.rumdl"}}'
+  ESLINT_TARGETS: '{{.ESLINT_TARGETS | default ""}}'
+  ESLINT_DEFAULT_TARGETS: '{{.ESLINT_DEFAULT_TARGETS | default "src/**/*.{js,jsx,ts,tsx}"}}'
+  ESLINT_CONFIG: '{{.ESLINT_CONFIG | default ""}}'
+  ESLINT_CACHE: '{{.ESLINT_CACHE | default ""}}'
+  ESLINT_DEFAULT_CACHE: '{{.ESLINT_DEFAULT_CACHE | default "true"}}'
+  ESLINT_EXTRA_ARGS: '{{.ESLINT_EXTRA_ARGS | default ""}}'
+  ESLINT_VERSION: '{{.ESLINT_VERSION | default ""}}'
+  KNIP_EXTRA_ARGS: '{{.KNIP_EXTRA_ARGS | default ""}}'
+  KNIP_CONFIG: '{{.KNIP_CONFIG | default ""}}'
+  KNIP_VERSION: '{{.KNIP_VERSION | default ""}}'
+  PRETTIER_TARGETS: '{{.PRETTIER_TARGETS | default ""}}'
+  PRETTIER_DEFAULT_TARGETS: '{{.PRETTIER_DEFAULT_TARGETS | default "."}}'
+  PRETTIER_CONFIG: '{{.PRETTIER_CONFIG | default ""}}'
+  PRETTIER_IGNORE_PATH: '{{.PRETTIER_IGNORE_PATH | default ""}}'
+  PRETTIER_DEFAULT_IGNORE_PATH: '{{.PRETTIER_DEFAULT_IGNORE_PATH | default ".prettierignore"}}'
+  PRETTIER_EXTRA_ARGS: '{{.PRETTIER_EXTRA_ARGS | default ""}}'
+  PRETTIER_VERSION: '{{.PRETTIER_VERSION | default ""}}'
+  TYPESCRIPT_FILE: '{{.TYPESCRIPT_FILE | default "src/index.ts"}}'
+  TYPESCRIPT_OUTFILE: '{{.TYPESCRIPT_OUTFILE | default "dist/index.js"}}'
+  TYPESCRIPT_OUT_DIR: '{{.TYPESCRIPT_OUT_DIR | default "dist"}}'
+  TYPESCRIPT_TSCONFIG: '{{.TYPESCRIPT_TSCONFIG | default "tsconfig.json"}}'
+  TYPESCRIPT_TSX_FLAGS: '{{.TYPESCRIPT_TSX_FLAGS | default ""}}'
+  TYPESCRIPT_TSC_FLAGS: '{{.TYPESCRIPT_TSC_FLAGS | default ""}}'
+  TYPESCRIPT_TRACE_DIR: '{{.TYPESCRIPT_TRACE_DIR | default ".tsc-trace"}}'
+  TYPESCRIPT_VERSION: '{{.TYPESCRIPT_VERSION | default ""}}'
 includes:
   go:
     taskfile: go/Taskfile.yml
@@ -158,6 +183,47 @@ includes:
       RUMDL_EXTRA_ARGS: '{{.RUMDL_EXTRA_ARGS}}'
       RUMDL_NIX_INSTALLABLE: '{{.RUMDL_NIX_INSTALLABLE}}'
       RUMDL_WINGET_INSTALLABLE: '{{.RUMDL_WINGET_INSTALLABLE}}'
+  eslint:
+    taskfile: eslint/Taskfile.yml
+    dir: ..
+    vars:
+      ESLINT_TARGETS: '{{.ESLINT_TARGETS}}'
+      ESLINT_DEFAULT_TARGETS: '{{.ESLINT_DEFAULT_TARGETS}}'
+      ESLINT_CONFIG: '{{.ESLINT_CONFIG}}'
+      ESLINT_CACHE: '{{.ESLINT_CACHE}}'
+      ESLINT_DEFAULT_CACHE: '{{.ESLINT_DEFAULT_CACHE}}'
+      ESLINT_EXTRA_ARGS: '{{.ESLINT_EXTRA_ARGS}}'
+      ESLINT_VERSION: '{{.ESLINT_VERSION}}'
+  knip:
+    taskfile: knip/Taskfile.yml
+    dir: ..
+    vars:
+      KNIP_EXTRA_ARGS: '{{.KNIP_EXTRA_ARGS}}'
+      KNIP_CONFIG: '{{.KNIP_CONFIG}}'
+      KNIP_VERSION: '{{.KNIP_VERSION}}'
+  prettier:
+    taskfile: prettier/Taskfile.yml
+    dir: ..
+    vars:
+      PRETTIER_TARGETS: '{{.PRETTIER_TARGETS}}'
+      PRETTIER_DEFAULT_TARGETS: '{{.PRETTIER_DEFAULT_TARGETS}}'
+      PRETTIER_CONFIG: '{{.PRETTIER_CONFIG}}'
+      PRETTIER_IGNORE_PATH: '{{.PRETTIER_IGNORE_PATH}}'
+      PRETTIER_DEFAULT_IGNORE_PATH: '{{.PRETTIER_DEFAULT_IGNORE_PATH}}'
+      PRETTIER_EXTRA_ARGS: '{{.PRETTIER_EXTRA_ARGS}}'
+      PRETTIER_VERSION: '{{.PRETTIER_VERSION}}'
+  typescript:
+    taskfile: typescript/Taskfile.yml
+    dir: ..
+    vars:
+      TYPESCRIPT_FILE: '{{.TYPESCRIPT_FILE}}'
+      TYPESCRIPT_OUTFILE: '{{.TYPESCRIPT_OUTFILE}}'
+      TYPESCRIPT_OUT_DIR: '{{.TYPESCRIPT_OUT_DIR}}'
+      TYPESCRIPT_TSCONFIG: '{{.TYPESCRIPT_TSCONFIG}}'
+      TYPESCRIPT_TSX_FLAGS: '{{.TYPESCRIPT_TSX_FLAGS}}'
+      TYPESCRIPT_TSC_FLAGS: '{{.TYPESCRIPT_TSC_FLAGS}}'
+      TYPESCRIPT_TRACE_DIR: '{{.TYPESCRIPT_TRACE_DIR}}'
+      TYPESCRIPT_VERSION: '{{.TYPESCRIPT_VERSION}}'
 tasks:
   ci:
     desc: Run ci for synced TaskOtter modules
@@ -167,12 +233,37 @@ tasks:
       - task: yamllint:ci
       - task: zizmor:ci
       - task: rumdl:ci
+      - task: eslint:ci
+      - task: knip:ci
+      - task: typescript:ci
   ci:fix:
     desc: Run ci:fix for synced TaskOtter modules
     cmds:
       - task: golangci-lint:ci:fix
       - task: yamlfix:ci:fix
       - task: rumdl:ci:fix
+      - task: eslint:ci:fix
+      - task: knip:ci:fix
+      - task: prettier:ci:fix
+  config:init:
+    desc: Run config:init for synced TaskOtter modules
+    cmds:
+      - task: yamllint:config:init
+      - task: eslint:config:init
+      - task: knip:config:init
+      - task: prettier:config:init
+      - task: typescript:config:init
+  fmt:check:
+    desc: Run fmt:check for synced TaskOtter modules
+    cmds:
+      - task: golangci-lint:fmt:check
+      - task: prettier:fmt:check
+  help:
+    desc: Run help for synced TaskOtter modules
+    cmds:
+      - task: eslint:help
+      - task: knip:help
+      - task: prettier:help
   install:
     desc: Run install for synced TaskOtter modules
     cmds:
@@ -186,6 +277,24 @@ tasks:
       - task: go-junit-report:install
       - task: trivy:install
       - task: rumdl:install
+      - task: eslint:install
+      - task: knip:install
+      - task: prettier:install
+      - task: typescript:install
+  install:undo:
+    desc: Run install:undo for synced TaskOtter modules
+    cmds:
+      - task: eslint:install:undo
+      - task: knip:install:undo
+      - task: prettier:install:undo
+      - task: typescript:install:undo
+  upgrade:
+    desc: Run upgrade for synced TaskOtter modules
+    cmds:
+      - task: eslint:upgrade
+      - task: knip:upgrade
+      - task: prettier:upgrade
+      - task: typescript:upgrade
   verify:
     desc: Run verify for synced TaskOtter modules
     cmds:
@@ -204,6 +313,10 @@ tasks:
       - task: go-junit-report:version
       - task: trivy:version
       - task: rumdl:version
+      - task: eslint:version
+      - task: knip:version
+      - task: prettier:version
+      - task: typescript:version
   which:
     desc: Run which for synced TaskOtter modules
     cmds:
