@@ -5,4 +5,5 @@ package application
 
 const (
 	autostartArgument = "--autostart"
+	requestBuffer     = 1
 )

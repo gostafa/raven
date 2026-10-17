@@ -14,12 +14,10 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
-	"raven/internal/features/autostart/adapters/launch"
 	autostart "raven/internal/features/autostart/application"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
-	"raven/internal/features/desktop/ports"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
 	mediawails "raven/internal/shared/desktopmedia/adapters/wails"
 	"raven/internal/shared/lifetime"
@@ -28,23 +26,35 @@ import (
 func TestNativeDesktopProvidersAndLifecycle(t *testing.T) {
 	settings := configurationFixture()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	requests := launch.New()
+	requests := autostart.NewRequests()
 	runtime := lifetime.New()
 	t.Cleanup(runtime.Cancel)
 	app := newApplication(appParams{
 		Media:      mediawails.NewRegistry(&mediawails.Dependencies{}, &mediawails.Settings{}),
 		Visibility: requests.Visibility(),
 		Logger:     logger,
-		Assets: ports.Assets{
+		Assets: Assets{
 			Files: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("Raven")}},
 		},
 	}, settings)
 	lifecycle := fxtest.NewLifecycle(t)
 	desktop := newDesktop(desktopParams{
-		App: app, Handles: newWindows(app, settings), Lifecycle: lifecycle,
-		Runtime: runtime, Requests: requests, Visibility: requests.Visibility(),
-		Startup:       autostart.New(nil, true, settings.ApplicationID),
-		Notifications: reminderwails.NewRuntime(notifications.New(), logger, settings.LogErrorKey),
+		App:        app,
+		Handles:    newWindows(app, settings),
+		Lifecycle:  lifecycle,
+		Runtime:    runtime,
+		Requests:   requests,
+		Visibility: requests.Visibility(),
+		Startup: autostart.New(
+			nil,
+			nil,
+			&autostart.Configuration{Debug: true, ApplicationID: settings.ApplicationID()},
+		),
+		Notifications: reminderwails.NewRuntime(
+			notifications.New(),
+			logger,
+			settings.LogErrorKey(),
+		),
 	}, settings)
 	configureDesktop(desktop)
 	lifecycle.RequireStart()
@@ -162,7 +172,7 @@ func TestDesktopRequestWorkerUsesIndependentLifetime(t *testing.T) {
 		&desktopwails.Dependencies{Configuration: desktopConfiguration(configurationFixture())},
 	)
 	graph := fxtest.New(t, fx.Invoke(func(lc fx.Lifecycle) {
-		lc.Append(desktopLifecycle(desktop, runtime, launch.New()))
+		lc.Append(desktopLifecycle(desktop, runtime, autostart.NewRequests()))
 	}))
 	graph.RequireStart()
 	if runtime.Context().Err() != nil {
@@ -174,10 +184,10 @@ func TestDesktopRequestWorkerUsesIndependentLifetime(t *testing.T) {
 	}
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }

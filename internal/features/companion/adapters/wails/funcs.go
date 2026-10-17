@@ -5,11 +5,10 @@ package wails
 
 import (
 	"context"
+	"image"
 	"log/slog"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
-
-	companion "raven/internal/features/companion/domain"
 )
 
 // New constructs the adapter with its required runtime dependencies.
@@ -109,10 +108,10 @@ func (windows *Windows) placeFloatingReview() {
 	bounds := windows.settings.Layout.Bounds(
 		horizontal,
 		vertical,
-		&companion.Rect{X: area.X, Y: area.Y, Width: area.Width, Height: area.Height},
+		new(image.Rect(area.X, area.Y, area.X+area.Width, area.Y+area.Height)),
 	)
-	windows.reviewPlacement.SetSize(bounds.Width, bounds.Height)
-	windows.reviewPlacement.SetPosition(bounds.X, bounds.Y)
+	windows.reviewPlacement.SetSize(bounds.Dx(), bounds.Dy())
+	windows.reviewPlacement.SetPosition(bounds.Min.X, bounds.Min.Y)
 }
 
 func (windows *Windows) widgetScreen() *application.Screen {

@@ -15,16 +15,17 @@ import (
 )
 
 func TestStoreLifecycleAndConsumerBindings(t *testing.T) {
-	settings, err := (configyaml.Loader{}).Load()
+	snapshot, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
+	settings := snapshot.Settings
 	lifecycle := fxtest.NewLifecycle(t)
 	path := filepath.Join(t.TempDir(), "raven.db")
 	result := newStore(storeParams{
 		Path:      DatabasePath(path),
 		Lifecycle: lifecycle,
-		Batch:     cffbatch.New(), Scheduler: scheduling.New(&settings.Library),
+		Batch:     cffbatch.New(), Scheduler: scheduling.New(new(settings.Library())),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}, settings)
 	if result.Store != result.Repository || result.Store != result.Reminders ||

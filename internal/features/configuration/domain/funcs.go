@@ -10,8 +10,8 @@ import (
 )
 
 // Validate rejects incomplete settings before any native or persistence resources open.
-func (settings *Settings) Validate() error {
-	values := settings.requiredStrings()
+func Validate(settings Settings) error {
+	values := requiredStrings(settings)
 
 	for name := range values {
 		if strings.TrimSpace(values[name]) == "" {
@@ -19,7 +19,7 @@ func (settings *Settings) Validate() error {
 		}
 	}
 
-	err := settings.validateValues()
+	err := validateValues(settings)
 	if err != nil {
 		return fmt.Errorf(validationErrorFormat, err)
 	}
@@ -27,25 +27,25 @@ func (settings *Settings) Validate() error {
 	return nil
 }
 
-func (settings *Settings) requiredStrings() map[string]string {
+func requiredStrings(settings Settings) map[string]string {
 	return map[string]string{
-		"application_id":          settings.ApplicationID,
-		"log_error_key":           settings.LogErrorKey,
-		"log_operation_key":       settings.LogOperationKey,
-		"preferences_storage_key": settings.PreferencesStorageKey,
-		"schedules_changed":       settings.SchedulesChanged,
-		"show_reviews":            settings.ShowReviews,
-		"open_floating_review":    settings.OpenFloatingReview,
-		"close_floating_review":   settings.CloseFloatingReview,
-		"library.text_kind":       settings.Library.TextKind,
-		"library.mime_jpeg":       settings.Library.MIMEJPEG,
-		"library.mime_ogg_audio":  settings.Library.MIMEOggAudio,
-		"library.mime_mp4_video":  settings.Library.MIMEMP4Video,
+		"application_id":          settings.ApplicationID(),
+		"log_error_key":           settings.LogErrorKey(),
+		"log_operation_key":       settings.LogOperationKey(),
+		"preferences_storage_key": settings.PreferencesStorageKey(),
+		"schedules_changed":       settings.SchedulesChanged(),
+		"show_reviews":            settings.ShowReviews(),
+		"open_floating_review":    settings.OpenFloatingReview(),
+		"close_floating_review":   settings.CloseFloatingReview(),
+		"library.text_kind":       settings.Library().TextKind,
+		"library.mime_jpeg":       settings.Library().MIMEJPEG,
+		"library.mime_ogg_audio":  settings.Library().MIMEOggAudio,
+		"library.mime_mp4_video":  settings.Library().MIMEMP4Video,
 	}
 }
 
-func (settings *Settings) validateValues() error {
-	values := settings.geometry()
+func validateValues(settings Settings) error {
+	values := geometry(settings)
 
 	for name := range values {
 		if values[name] <= zero {
@@ -53,7 +53,7 @@ func (settings *Settings) validateValues() error {
 		}
 	}
 
-	err := settings.validateContracts()
+	err := validateContracts(settings)
 	if err != nil {
 		return fmt.Errorf(validationErrorFormat, err)
 	}
@@ -61,17 +61,17 @@ func (settings *Settings) validateValues() error {
 	return nil
 }
 
-func (settings *Settings) geometry() map[string]int {
+func geometry(settings Settings) map[string]int {
 	return map[string]int{
-		"layout.widget_size":   settings.Layout.WidgetSize,
-		"layout.review_width":  settings.Layout.ReviewWidth,
-		"layout.review_height": settings.Layout.ReviewHeight,
-		"layout.review_gap":    settings.Layout.ReviewGap,
+		"layout.widget_size":   settings.Layout().WidgetSize,
+		"layout.review_width":  settings.Layout().ReviewWidth,
+		"layout.review_height": settings.Layout().ReviewHeight,
+		"layout.review_gap":    settings.Layout().ReviewGap,
 	}
 }
 
-func (settings *Settings) validateContracts() error {
-	routes := []string{settings.MediaRoutePrefix, settings.PreviewRoutePrefix}
+func validateContracts(settings Settings) error {
+	routes := []string{settings.MediaRoutePrefix(), settings.PreviewRoutePrefix()}
 
 	for index := range routes {
 		route := routes[index]
@@ -80,7 +80,7 @@ func (settings *Settings) validateContracts() error {
 		}
 	}
 
-	err := settings.validateDistinctValues()
+	err := validateDistinctValues(settings)
 	if err != nil {
 		return fmt.Errorf(validationErrorFormat, err)
 	}
@@ -97,12 +97,12 @@ func validRoute(route string) bool {
 	return routeShape(route) && parsed.Path == route && parsed.RawQuery == ""
 }
 
-func (settings *Settings) validateDistinctValues() error {
-	if routesOverlap(settings.MediaRoutePrefix, settings.PreviewRoutePrefix) {
+func validateDistinctValues(settings Settings) error {
+	if routesOverlap(settings.MediaRoutePrefix(), settings.PreviewRoutePrefix()) {
 		return errOverlappingRoutes
 	}
 
-	err := settings.validateRatings()
+	err := validateRatings(settings)
 	if err != nil {
 		return fmt.Errorf(validationErrorFormat, err)
 	}
@@ -110,16 +110,16 @@ func (settings *Settings) validateDistinctValues() error {
 	return nil
 }
 
-func (settings *Settings) validateRatings() error {
+func validateRatings(settings Settings) error {
 	// FSRS defines four ratings numbered 1 through 4; configuration must preserve that contract.
-	minimumMatches := settings.Library.MinimumRating == fsrsFirstRating
-	maximumMatches := settings.Library.MaximumRating == fsrsLastRating
+	minimumMatches := settings.Library().MinimumRating == fsrsFirstRating
+	maximumMatches := settings.Library().MaximumRating == fsrsLastRating
 
 	if !minimumMatches || !maximumMatches {
 		return errIncompatibleRatings
 	}
 
-	err := settings.validateEvents()
+	err := validateEvents(settings)
 	if err != nil {
 		return fmt.Errorf(validationErrorFormat, err)
 	}
@@ -127,12 +127,12 @@ func (settings *Settings) validateRatings() error {
 	return nil
 }
 
-func (settings *Settings) validateEvents() error {
+func validateEvents(settings Settings) error {
 	seen := make(map[string]bool)
 
 	events := []string{
-		settings.SchedulesChanged, settings.ShowReviews,
-		settings.OpenFloatingReview, settings.CloseFloatingReview,
+		settings.SchedulesChanged(), settings.ShowReviews(),
+		settings.OpenFloatingReview(), settings.CloseFloatingReview(),
 	}
 
 	for index := range events {

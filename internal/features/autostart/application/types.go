@@ -6,24 +6,16 @@ package application
 
 import (
 	"sync"
+
+	"raven/internal/features/autostart/ports"
 )
 
 type (
-	// Backend provides operating system login startup registration.
-	Backend interface {
-		EnableWithOptions(options *Options) error
-		Disable() error
-		IsEnabled() (bool, error)
-	}
-
-	// Settings claims the one-time login startup initialization attempt.
-	Settings interface {
-		ClaimAutostartInitialization() (bool, error)
-	}
 
 	// Controller serializes login startup changes and publishes the observed OS state.
 	Controller struct {
-		backend       Backend
+		backend       ports.Backend
+		settings      ports.Settings
 		publish       func(checked, available bool)
 		applicationID string
 		mu            sync.Mutex
@@ -43,11 +35,18 @@ type (
 		settled    bool
 	}
 
-	// Options describes the application identity and arguments registered at login.
-	Options struct {
-		// Identifier is the operating system application identifier.
-		Identifier string
-		// Arguments contains the arguments supplied on an automatic launch.
-		Arguments []string
+	// Requests decouples launch classification from native window construction.
+	Requests struct {
+		visibility *Visibility
+		pending    chan struct{}
+	}
+
+	// LaunchClassification receives the detected launch kind independently of native callbacks.
+	LaunchClassification interface{ Classify(automatic bool) }
+
+	// Configuration supplies the identity and development mode for login registration.
+	Configuration struct {
+		ApplicationID string
+		Debug         bool
 	}
 )

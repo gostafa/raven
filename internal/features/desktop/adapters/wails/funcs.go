@@ -21,10 +21,10 @@ func NewApplication(deps *ApplicationDependencies) *application.App {
 }
 
 func applicationOptions(deps *ApplicationDependencies) application.Options {
-	options := desktopIdentityOptions(deps.Assets.Icon)
+	options := desktopIdentityOptions(deps.Icon)
 
 	options.Logger = deps.Logger
-	options.Assets.Handler = application.AssetFileServerFS(deps.Assets.Files)
+	options.Assets.Handler = application.AssetFileServerFS(deps.Assets)
 	options.Assets.Middleware = func(next http.Handler) http.Handler { return deps.Media.Middleware(next) }
 	options.Windows.DisableQuitOnLastWindowClosed = true
 	options.Linux.DisableQuitOnLastWindowClosed = true
@@ -54,12 +54,11 @@ func New(deps *Dependencies) *Desktop {
 		widget:        deps.Handles.Widget,
 		reviewWindow:  deps.Handles.Review,
 		windows:       deps.Windows,
-		store:         deps.Settings,
 		visibility:    deps.Visibility,
 		startup:       deps.Startup,
 		reminders:     deps.Reminders,
 		notifications: deps.Notifications,
-		icon:          deps.Assets.Icon,
+		icon:          deps.Icon,
 		subscriptions: nil,
 	}
 }
@@ -317,7 +316,7 @@ func (desktop *Desktop) applicationStarted(_ *application.ApplicationEvent) {
 	service.windows.ResetWidget()
 	service.reminders.Start()
 	desktop.visibility.ApplicationStarted()
-	desktop.reportStartupError(desktop.startup.Initialize(service.store))
+	desktop.reportStartupError(desktop.startup.Initialize())
 }
 
 func (desktop *Desktop) reportStartupError(err error) {

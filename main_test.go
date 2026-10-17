@@ -27,6 +27,7 @@ import (
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
+	desktopports "raven/internal/features/desktop/ports"
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
 	"raven/internal/shared/boltstore/ports"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
@@ -34,6 +35,18 @@ import (
 	"raven/internal/shared/lifetime"
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
+
+func TestExecutableModuleResolvesFeaturePorts(t *testing.T) {
+	if err := fx.ValidateApp(applicationModule, fx.Invoke(func(
+		*RavenService,
+		*desktopwails.Desktop,
+		desktopports.Startup,
+		desktopports.LaunchVisibility,
+	) {
+	})); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type desktopStub struct {
 	failure    error
@@ -141,7 +154,7 @@ func TestFacadeWindowCommandsAndDeletionEvents(t *testing.T) {
 	) {
 		t.Fatal(windows.calls)
 	}
-	if len(events.names) != 1 || events.names[0] != service.configuration.ShowReviews {
+	if len(events.names) != 1 || events.names[0] != service.configuration.ShowReviews() {
 		t.Fatal(events.names)
 	}
 	for _, remove := range []func() error{func() error { return service.DeleteFolder("folder") }, func() error { return service.DeleteCard("folder", "card") }} {
@@ -200,7 +213,7 @@ func TestFacadeOwnsErrorContract(t *testing.T) {
 
 func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 123000000, time.UTC)
-	schedule, log, err := scheduling.New(&configurationFixture().Library).Initialize(now)
+	schedule, log, err := scheduling.New(new(configurationFixture().Library())).Initialize(now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +276,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -328,7 +341,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -402,7 +415,7 @@ func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
 		filepath.Join(t.TempDir(), "raven.db"),
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -431,45 +444,43 @@ func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
 	}
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }
 
 func storeSettingsFixture() *boltstore.Settings {
 	settings := configurationFixture()
 	return &boltstore.Settings{
-		Rules:            settings.Library,
-		MediaRoutePrefix: settings.MediaRoutePrefix,
-		LogErrorKey:      settings.LogErrorKey,
+		Rules:            settings.Library(),
+		MediaRoutePrefix: settings.MediaRoutePrefix(),
+		LogErrorKey:      settings.LogErrorKey(),
 	}
 }
 
 func mediaSettingsFixture() *desktopmedia.Settings {
 	settings := configurationFixture()
 	return &desktopmedia.Settings{
-		MediaRoutePrefix:   settings.MediaRoutePrefix,
-		PreviewRoutePrefix: settings.PreviewRoutePrefix,
-		LogErrorKey:        settings.LogErrorKey,
+		MediaRoutePrefix:   settings.MediaRoutePrefix(),
+		PreviewRoutePrefix: settings.PreviewRoutePrefix(),
+		LogErrorKey:        settings.LogErrorKey(),
 	}
 }
 
 func TestConfigurationFacadeReturnsOwnedFrontendSnapshot(t *testing.T) {
-	settings := configurationFixture()
-	settings.PreferencesStorageKey = "custom.preferences"
-	settings.MediaRoutePrefix = "/saved/"
+	settings := customConfiguration{Settings: configurationFixture()}
 	service := &RavenService{configuration: settings}
 	value := service.GetConfiguration()
-	if value.PreferencesStorageKey != settings.PreferencesStorageKey ||
-		value.MediaRoutePrefix != settings.MediaRoutePrefix ||
-		value.TextKind != settings.Library.TextKind ||
-		value.SchedulesChanged != settings.SchedulesChanged ||
-		value.ShowReviews != settings.ShowReviews ||
-		value.OpenFloatingReview != settings.OpenFloatingReview ||
-		value.CloseFloatingReview != settings.CloseFloatingReview {
+	if value.PreferencesStorageKey != settings.PreferencesStorageKey() ||
+		value.MediaRoutePrefix != settings.MediaRoutePrefix() ||
+		value.TextKind != settings.Library().TextKind ||
+		value.SchedulesChanged != settings.SchedulesChanged() ||
+		value.ShowReviews != settings.ShowReviews() ||
+		value.OpenFloatingReview != settings.OpenFloatingReview() ||
+		value.CloseFloatingReview != settings.CloseFloatingReview() {
 		t.Fatal("configuration facade omitted or changed values", value)
 	}
 	value.PreferencesStorageKey = "edited"
@@ -477,3 +488,8 @@ func TestConfigurationFacadeReturnsOwnedFrontendSnapshot(t *testing.T) {
 		t.Fatal("facade returned shared mutable state")
 	}
 }
+
+type customConfiguration struct{ configuration.Settings }
+
+func (customConfiguration) PreferencesStorageKey() string { return "custom.preferences" }
+func (customConfiguration) MediaRoutePrefix() string      { return "/saved/" }

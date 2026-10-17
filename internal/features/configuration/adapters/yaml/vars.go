@@ -6,11 +6,13 @@ package yaml
 import (
 	_ "embed"
 
+	"raven/internal/features/configuration/domain"
 	"raven/internal/features/configuration/ports"
 )
 
 var (
-	_ ports.Loader = Loader{}
+	_ ports.Loader    = Loader{}
+	_ domain.Settings = (*settings)(nil)
 	//go:embed app.yml
 	appDefaults string
 	//go:embed shared.yml

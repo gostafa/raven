@@ -14,6 +14,7 @@ import (
 
 	companionwails "raven/internal/features/companion/adapters/wails"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 	storecomposition "raven/internal/shared/boltstore/composition"
 	storeports "raven/internal/shared/boltstore/ports"
 	batchcomposition "raven/internal/shared/cffbatch/composition"
@@ -24,10 +25,11 @@ import (
 )
 
 func TestModuleSharesRegistryAndWiresSavedMedia(t *testing.T) {
-	settings, err := (configyaml.Loader{}).Load()
+	snapshot, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
+	settings := snapshot.Settings
 	var registry *mediaadapter.Registry
 	var selection mediaports.Selection
 	var routes mediaports.MediaRoutes
@@ -40,7 +42,7 @@ func TestModuleSharesRegistryAndWiresSavedMedia(t *testing.T) {
 		batchcomposition.Module,
 		schedulingcomposition.Module,
 		fx.Supply(
-			settings,
+			fx.Annotate(settings, fx.As(new(configuration.Settings))),
 			slog.New(slog.NewTextHandler(io.Discard, nil)),
 			companionwails.WindowSet{},
 		),
@@ -73,7 +75,7 @@ func TestModuleSharesRegistryAndWiresSavedMedia(t *testing.T) {
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(
 		response,
-		httptest.NewRequest(http.MethodGet, settings.MediaRoutePrefix+"missing", nil),
+		httptest.NewRequest(http.MethodGet, settings.MediaRoutePrefix()+"missing", nil),
 	)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("saved media status = %d", response.Code)

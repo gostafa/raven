@@ -1,6 +1,6 @@
 //go:build windows && !server
 
-package native
+package wails
 
 import (
 	"fmt"
@@ -8,8 +8,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// New constructs native configuration for the floating widget.
-func New(window *application.WebviewWindow) Widget { return Widget{window: window} }
+// NewWidget constructs native configuration for the floating widget.
+func NewWidget(window *application.WebviewWindow) Widget { return Widget{window: window} }
 
 func (widget Widget) Configure() error {
 	handle := uintptr(widget.window.NativeWindow())

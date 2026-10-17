@@ -18,4 +18,7 @@ type (
 		Disable() error
 		IsEnabled() (bool, error)
 	}
+
+	// Detector classifies native login launches.
+	Detector struct{}
 )

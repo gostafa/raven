@@ -7,6 +7,7 @@ import (
 	"go.uber.org/fx"
 
 	reminderwails "raven/internal/features/reminders/adapters/wails"
+	reminders "raven/internal/features/reminders/application"
 	"raven/internal/features/reminders/ports"
 )
 
@@ -15,7 +16,7 @@ import (
 //nolint:gochecknoglobals // Fx modules are immutable dependency registration declarations.
 var Module = fx.Module("reminders", fx.Provide(
 	fx.Annotate(newNative, fx.As(new(reminderwails.NativeRuntime))),
-	fx.Annotate(newNotifications, fx.As(new(ports.Notifications)), fx.As(fx.Self())),
+	fx.Annotate(newNotifications, fx.As(new(reminders.Notifications)), fx.As(fx.Self())),
 	fx.Annotate(newWorker, fx.As(new(ports.Control))),
 	newCallbacks,
 ))

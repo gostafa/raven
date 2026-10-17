@@ -10,19 +10,39 @@ import (
 )
 
 type (
-	// Settings contains the shared values supplied to application consumers.
-	Settings struct {
-		ApplicationID         string           `yaml:"application_id"`
-		LogErrorKey           string           `yaml:"log_error_key"`
-		LogOperationKey       string           `yaml:"log_operation_key"`
-		MediaRoutePrefix      string           `yaml:"media_route_prefix"`
-		PreviewRoutePrefix    string           `yaml:"preview_route_prefix"`
-		PreferencesStorageKey string           `yaml:"preferences_storage_key"`
-		SchedulesChanged      string           `yaml:"schedules_changed"`
-		ShowReviews           string           `yaml:"show_reviews"`
-		OpenFloatingReview    string           `yaml:"open_floating_review"`
-		CloseFloatingReview   string           `yaml:"close_floating_review"`
-		Library               library.Rules    `yaml:"library"`
-		Layout                companion.Layout `yaml:"layout"`
+	// Settings supplies the immutable configuration shared by application consumers.
+	Settings interface {
+		identity
+		logging
+		media
+		events
+		reviews
+	}
+	// identity supplies application and preferences identifiers.
+	identity interface {
+		ApplicationID() string
+		PreferencesStorageKey() string
+	}
+	// logging supplies structured log field names.
+	logging interface {
+		LogErrorKey() string
+		LogOperationKey() string
+	}
+	// media supplies the desktop media route prefixes.
+	media interface {
+		MediaRoutePrefix() string
+		PreviewRoutePrefix() string
+	}
+	// events supplies the frontend event names.
+	events interface {
+		SchedulesChanged() string
+		ShowReviews() string
+		OpenFloatingReview() string
+		CloseFloatingReview() string
+	}
+	// reviews supplies review rules and floating window geometry by value.
+	reviews interface {
+		Library() library.Rules
+		Layout() companion.Layout
 	}
 )

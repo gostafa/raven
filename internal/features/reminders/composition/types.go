@@ -12,7 +12,6 @@ import (
 	desktopports "raven/internal/features/desktop/ports"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
 	reminders "raven/internal/features/reminders/application"
-	reminderports "raven/internal/features/reminders/ports"
 	"raven/internal/shared/lifetime"
 )
 
@@ -31,7 +30,7 @@ type (
 
 		Lifecycle     fx.Lifecycle
 		Source        reminders.Source
-		Notifications reminderports.Notifications
+		Notifications reminders.Notifications
 		Callbacks     reminders.Callbacks
 	}
 	callbacksParams struct {

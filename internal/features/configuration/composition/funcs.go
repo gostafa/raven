@@ -6,19 +6,20 @@ package composition
 import (
 	"fmt"
 
+	"go.uber.org/fx"
+
 	"raven/internal/features/configuration/adapters/yaml"
-	"raven/internal/features/configuration/domain"
+	"raven/internal/features/configuration/application"
 	"raven/internal/features/configuration/ports"
 )
 
-//nolint:ireturn // Composition binds the concrete adapter to the consumer-owned port.
-func newLoader() ports.Loader { return yaml.Loader{} }
+func newLoader() yaml.Loader { return yaml.Loader{} }
 
-func load(loader ports.Loader) (*domain.Settings, error) {
-	settings, err := loader.Load()
+func load(loader ports.Loader) (settingsResult, error) {
+	snapshot, err := application.Load(loader)
 	if err != nil {
-		return nil, fmt.Errorf("load configuration: %w", err)
+		return settingsResult{}, fmt.Errorf("provide configuration: %w", err)
 	}
 
-	return settings, nil
+	return settingsResult{Out: fx.Out{}, Settings: snapshot.Settings}, nil
 }

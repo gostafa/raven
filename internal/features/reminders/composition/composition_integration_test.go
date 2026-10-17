@@ -64,7 +64,7 @@ func modules(path string, n *native, e *events) fx.Option {
 		mediacomposition.Module,
 		schedulingcomposition.Module,
 		batchcomposition.Module,
-		fx.Supply(configurationFixture()),
+		fx.Supply(fx.Annotate(configurationFixture(), fx.As(new(configuration.Settings)))),
 		composition.Module,
 		fx.Provide(
 			lifetime.New,
@@ -151,7 +151,7 @@ func TestLifecycleOrderingReadinessAndLockRelease(t *testing.T) {
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -214,7 +214,7 @@ func TestPartialStartupRollsBackEveryStartedResource(t *testing.T) {
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -240,19 +240,19 @@ func TestDatabaseFailurePreventsNativeStartup(t *testing.T) {
 	graph.RequireStop()
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }
 
 func storeSettingsFixture() *boltstore.Settings {
 	settings := configurationFixture()
 	return &boltstore.Settings{
-		Rules:            settings.Library,
-		MediaRoutePrefix: settings.MediaRoutePrefix,
-		LogErrorKey:      settings.LogErrorKey,
+		Rules:            settings.Library(),
+		MediaRoutePrefix: settings.MediaRoutePrefix(),
+		LogErrorKey:      settings.LogErrorKey(),
 	}
 }

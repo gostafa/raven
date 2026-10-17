@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+
+	"raven/internal/features/autostart/ports"
 )
 
 // Initialize claims initial registration and reconciles the observed startup state.
-func (controller *Controller) Initialize(settings Settings) error {
+func (controller *Controller) Initialize() error {
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
 	defer controller.updateMenus()
@@ -20,7 +22,7 @@ func (controller *Controller) Initialize(settings Settings) error {
 		return nil
 	}
 
-	err := controller.initializeRegistration(settings)
+	err := controller.initializeRegistration()
 	if err != nil {
 		return fmt.Errorf("initialize login startup: %w", err)
 	}
@@ -28,8 +30,8 @@ func (controller *Controller) Initialize(settings Settings) error {
 	return nil
 }
 
-func (controller *Controller) initializeRegistration(settings Settings) error {
-	first, err := controller.prepareRegistration(settings)
+func (controller *Controller) initializeRegistration() error {
+	first, err := controller.prepareRegistration()
 	if err != nil {
 		return fmt.Errorf("prepare login startup: %w", err)
 	}
@@ -46,8 +48,8 @@ func (controller *Controller) initializeRegistration(settings Settings) error {
 	return nil
 }
 
-func (controller *Controller) prepareRegistration(settings Settings) (bool, error) {
-	first, err := settings.ClaimAutostartInitialization()
+func (controller *Controller) prepareRegistration() (bool, error) {
+	first, err := controller.settings.ClaimAutostartInitialization()
 	if err != nil {
 		return false, fmt.Errorf("claim login startup initialization: %w", err)
 	}
@@ -144,7 +146,7 @@ func (controller *Controller) disableRegistration() error {
 }
 
 func (controller *Controller) enableRegistration() error {
-	err := controller.backend.EnableWithOptions(&Options{
+	err := controller.backend.EnableWithOptions(&ports.Options{
 		Identifier: controller.applicationID,
 		Arguments:  []string{autostartArgument},
 	})
@@ -224,12 +226,13 @@ func (visibility *Visibility) firstManualLaunch() bool {
 	return !visibility.settled && !visibility.automatic
 }
 
-// New constructs the adapter with its required runtime dependencies.
-func New(backend Backend, debug bool, applicationID string) *Controller {
+// New constructs login startup policy with its required runtime dependencies.
+func New(backend ports.Backend, settings ports.Settings, configuration *Configuration) *Controller {
 	return &Controller{
 		backend:       backend,
-		applicationID: applicationID,
-		debug:         debug,
+		settings:      settings,
+		applicationID: configuration.ApplicationID,
+		debug:         configuration.Debug,
 		publish:       nil,
 		mu:            sync.Mutex{},
 		ready:         false,
@@ -256,4 +259,38 @@ func (controller *Controller) SetPublisher(publish func(bool, bool)) {
 	defer controller.mu.Unlock()
 
 	controller.publish = publish
+}
+
+// NewRequests creates a coalescing queue that is safe before native windows exist.
+func NewRequests() *Requests {
+	requests := new(Requests)
+
+	requests.pending = make(chan struct{}, requestBuffer)
+
+	requests.visibility = NewVisibility(requests.request)
+
+	return requests
+}
+
+func (requests *Requests) request() {
+	select {
+	case requests.pending <- struct{}{}:
+	default:
+	}
+}
+
+// Visibility returns launch policy shared with the desktop adapter.
+func (requests *Requests) Visibility() *Visibility { return requests.visibility }
+
+// Pending returns coalesced requests to show the main window.
+func (requests *Requests) Pending() <-chan struct{} { return requests.pending }
+
+// PrepareLaunch registers asynchronous native classification before windows exist.
+func PrepareLaunch(detector ports.LoginDetection, visibility LaunchClassification, args []string) {
+	automaticArgument := IsAutostartLaunch(args)
+
+	detector.PrepareLoginDetection(func(automatic bool) {
+		// Cocoa callbacks must not wait for the UI thread.
+		go visibility.Classify(automatic || automaticArgument)
+	})
 }

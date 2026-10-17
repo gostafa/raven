@@ -8,17 +8,24 @@ import (
 	"go.uber.org/fx/fxtest"
 
 	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 	"raven/internal/shared/boltstore/ports"
 	"raven/internal/shared/scheduling/composition"
 )
 
 func TestModuleProvidesConfiguredScheduler(t *testing.T) {
-	settings, err := (configyaml.Loader{}).Load()
+	snapshot, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
+	settings := snapshot.Settings
 	var scheduler ports.Scheduler
-	graph := fxtest.New(t, composition.Module, fx.Supply(settings), fx.Populate(&scheduler))
+	graph := fxtest.New(
+		t,
+		composition.Module,
+		fx.Supply(fx.Annotate(settings, fx.As(new(configuration.Settings)))),
+		fx.Populate(&scheduler),
+	)
 	graph.RequireStart()
 	t.Cleanup(func() { graph.RequireStop() })
 	now := time.Now()
@@ -29,7 +36,7 @@ func TestModuleProvidesConfiguredScheduler(t *testing.T) {
 	if err := scheduler.Validate(&schedule); err != nil {
 		t.Fatal(err)
 	}
-	next, _, err := scheduler.Next(&schedule, now, settings.Library.MinimumRating)
+	next, _, err := scheduler.Next(&schedule, now, settings.Library().MinimumRating)
 	if err != nil {
 		t.Fatal(err)
 	}

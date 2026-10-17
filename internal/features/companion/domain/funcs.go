@@ -3,20 +3,24 @@
 
 package domain
 
+import (
+	"image"
+)
+
 // Bounds places the floating review window within the available screen area.
-func (layout *Layout) Bounds(widgetX, widgetY int, area *Rect) Rect {
-	width := min(layout.ReviewWidth, area.Width)
-	height := min(layout.ReviewHeight, area.Height)
+func (layout *Layout) Bounds(widgetX, widgetY int, area *image.Rectangle) image.Rectangle {
+	width := min(layout.ReviewWidth, area.Dx())
+	height := min(layout.ReviewHeight, area.Dy())
 	horizontal := widgetX - layout.ReviewGap - width
 	right := widgetX + layout.WidgetSize + layout.ReviewGap
 
-	if horizontal < area.X && right+width <= area.X+area.Width {
+	if horizontal < area.Min.X && right+width <= area.Max.X {
 		horizontal = right
 	}
 
-	return Rect{
-		X:     max(area.X, min(horizontal, area.X+area.Width-width)),
-		Y:     max(area.Y, min(widgetY+layout.WidgetSize-height, area.Y+area.Height-height)),
-		Width: width, Height: height,
-	}
+	horizontal = max(area.Min.X, min(horizontal, area.Max.X-width))
+
+	vertical := max(area.Min.Y, min(widgetY+layout.WidgetSize-height, area.Max.Y-height))
+
+	return image.Rect(horizontal, vertical, horizontal+width, vertical+height)
 }

@@ -6,16 +6,15 @@ import (
 	"testing"
 
 	companion "raven/internal/features/companion/domain"
-	"raven/internal/features/configuration/domain"
 	library "raven/internal/shared/boltstore/domain"
 )
 
 func TestEmbeddedDefaultsPreserveExistingContracts(t *testing.T) {
-	settings, err := (Loader{}).Load()
+	snapshot, err := (Loader{}).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := domain.Settings{
+	want := values{
 		ApplicationID:         "app.raven.desktop",
 		LogErrorKey:           "error",
 		LogOperationKey:       "operation",
@@ -37,8 +36,8 @@ func TestEmbeddedDefaultsPreserveExistingContracts(t *testing.T) {
 			MIMEJPEG: "image/jpeg", MIMEOggAudio: "audio/ogg", MIMEMP4Video: "video/mp4",
 		},
 	}
-	if !reflect.DeepEqual(*settings, want) {
-		t.Fatalf("defaults changed: %+v", settings)
+	if !reflect.DeepEqual(snapshot.Settings, &settings{values: want}) {
+		t.Fatalf("defaults changed: %+v", snapshot.Settings)
 	}
 }
 
@@ -71,9 +70,9 @@ func TestAlternateSettingsReachTypedValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Layout.ReviewWidth != 300 ||
-		settings.PreferencesStorageKey != "custom.preferences" ||
-		settings.ShowReviews != "custom:reviews" {
+	if settings.Layout().ReviewWidth != 300 ||
+		settings.PreferencesStorageKey() != "custom.preferences" ||
+		settings.ShowReviews() != "custom:reviews" {
 		t.Fatalf("settings not populated: %+v", settings)
 	}
 }
@@ -82,7 +81,22 @@ func TestLoadReportsEmbeddedParseFailure(t *testing.T) {
 	previous := appDefaults
 	appDefaults = "layout: ["
 	t.Cleanup(func() { appDefaults = previous })
-	if settings, err := (Loader{}).Load(); settings != nil || err == nil {
+	if snapshot, err := (Loader{}).Load(); snapshot.Settings != nil || err == nil {
 		t.Fatal("embedded parse failure was discarded")
+	}
+}
+
+func TestLoadedSettingsReturnOwnedGeometryAndLibraryValues(t *testing.T) {
+	snapshot, err := (Loader{}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := snapshot.Settings
+	layout, rules := settings.Layout(), settings.Library()
+	wantLayout, wantRules := layout, rules
+	layout.WidgetSize++
+	rules.TextKind = "changed"
+	if settings.Layout() != wantLayout || settings.Library() != wantRules {
+		t.Fatal("settings exposed mutable configuration")
 	}
 }

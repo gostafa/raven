@@ -44,7 +44,7 @@ type (
 	}
 	// RavenService exposes Raven operations using injected feature ports.
 	RavenService struct {
-		configuration *configuration.Settings
+		configuration configuration.Settings
 		store         libraryports.Repository
 		media         mediaports.Selection
 		windows       companion.Windows

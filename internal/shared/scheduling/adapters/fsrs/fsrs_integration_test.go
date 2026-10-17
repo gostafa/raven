@@ -10,7 +10,7 @@ import (
 )
 
 func TestSchedulesAdvanceAndValidateAcrossRoundTrips(t *testing.T) {
-	scheduler := scheduling.New(&configurationFixture().Library)
+	scheduler := scheduling.New(new(configurationFixture().Library()))
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	schedule, initial, err := scheduler.Initialize(now)
 	if err != nil {
@@ -52,10 +52,10 @@ func TestSchedulesAdvanceAndValidateAcrossRoundTrips(t *testing.T) {
 	}
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }

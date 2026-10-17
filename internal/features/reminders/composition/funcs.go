@@ -12,7 +12,6 @@ import (
 
 	configuration "raven/internal/features/configuration/domain"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
-	"raven/internal/features/reminders/adapters/worker"
 	reminders "raven/internal/features/reminders/application"
 )
 
@@ -21,9 +20,9 @@ func newNative() *notifications.NotificationService { return notifications.New()
 //nolint:contextcheck // Native notifications must outlive the bounded startup context.
 func newNotifications(
 	params notificationParams,
-	settings *configuration.Settings,
+	settings configuration.Settings,
 ) *reminderwails.Runtime {
-	runtime := reminderwails.NewRuntime(params.Native, params.Logger, settings.LogErrorKey)
+	runtime := reminderwails.NewRuntime(params.Native, params.Logger, settings.LogErrorKey())
 	params.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
 			runtime.Start(params.Runtime.Context())
@@ -36,8 +35,8 @@ func newNotifications(
 	return runtime
 }
 
-func newWorker(params workerParams) *worker.Worker {
-	runtime := worker.New(params.Source, params.Notifications, params.Callbacks)
+func newWorker(params workerParams) *reminders.Worker {
+	runtime := reminders.NewWorker(params.Source, params.Notifications, params.Callbacks)
 	params.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
 			runtime.Enable()
@@ -55,15 +54,15 @@ func newWorker(params workerParams) *worker.Worker {
 	return runtime
 }
 
-func newCallbacks(params callbacksParams, settings *configuration.Settings) reminders.Callbacks {
+func newCallbacks(params callbacksParams, settings configuration.Settings) reminders.Callbacks {
 	return reminders.Callbacks{
-		Publish: func() { params.Events.Emit(settings.SchedulesChanged) },
+		Publish: func() { params.Events.Emit(settings.SchedulesChanged()) },
 		Warn: func(message string, err error) {
 			params.Logger.WarnContext(params.Runtime.Context(), "review reminder unavailable",
 				//nolint:sloglint // Log field names come from validated embedded configuration.
-				slog.String(settings.LogOperationKey, message),
+				slog.String(settings.LogOperationKey(), message),
 				//nolint:sloglint // Log field names come from validated embedded configuration.
-				slog.Any(settings.LogErrorKey, err))
+				slog.Any(settings.LogErrorKey(), err))
 		},
 	}
 }

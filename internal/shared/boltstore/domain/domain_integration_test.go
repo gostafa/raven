@@ -58,7 +58,7 @@ func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 	}
 	before := item
 	failure := errors.New("schedule failed")
-	if err := configurationFixture().Library.ApplyReview(
+	if err := new(configurationFixture().Library()).ApplyReview(
 		&item,
 		&reviewapi.Attempt{At: now, Rating: 3},
 		fakeScheduler{failure: failure},
@@ -71,14 +71,14 @@ func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 	if !reflect.DeepEqual(item, before) {
 		t.Fatal("failed review mutated item")
 	}
-	if err := configurationFixture().Library.ApplyReview(
+	if err := new(configurationFixture().Library()).ApplyReview(
 		&item,
 		&reviewapi.Attempt{At: now, Rating: 5},
 		fakeScheduler{},
 	); err == nil {
 		t.Fatal("accepted invalid rating")
 	}
-	if err := configurationFixture().Library.ApplyReview(
+	if err := new(configurationFixture().Library()).ApplyReview(
 		&item,
 		&reviewapi.Attempt{At: now, Rating: 3},
 		fakeScheduler{},
@@ -102,7 +102,7 @@ func TestPreparationReturnsRollbackFilesAndProtectsOwnership(t *testing.T) {
 		return item, "copied.png", nil
 	}
 	id := func() (string, error) { return "0123456789abcdef0123456789abcdef", nil }
-	_, rollback, err := configurationFixture().Library.PrepareItems(
+	_, rollback, err := new(configurationFixture().Library()).PrepareItems(
 		t.Context(),
 		&library.PreparationInput{Drafts: []contentapi.Draft{
 			{Kind: "image", SourcePath: "image.png"},
@@ -119,7 +119,7 @@ func TestPreparationReturnsRollbackFilesAndProtectsOwnership(t *testing.T) {
 		Text:     "Before",
 		Schedule: reviewapi.Schedule{Reps: 4},
 	}
-	items, _, err := configurationFixture().Library.PrepareItems(
+	items, _, err := new(configurationFixture().Library()).PrepareItems(
 		t.Context(),
 		&library.PreparationInput{
 			Drafts:   []contentapi.Draft{{ID: "owned", Kind: "text", Text: " After "}},
@@ -143,7 +143,7 @@ func TestParallelPreparationDrainsImportsAndCollectsRollbackInOrder(t *testing.T
 		sequence := 0
 		go func() {
 			defer close(done)
-			_, rollback, preparationErr = configurationFixture().Library.PrepareItems(
+			_, rollback, preparationErr = new(configurationFixture().Library()).PrepareItems(
 				t.Context(),
 				&library.PreparationInput{Drafts: []contentapi.Draft{
 					{Kind: "image", SourcePath: "first"},
@@ -180,7 +180,7 @@ func TestParallelPreparationDrainsImportsAndCollectsRollbackInOrder(t *testing.T
 }
 
 func TestParallelPreparationPreservesMixedContentOrder(t *testing.T) {
-	rules := configurationFixture().Library
+	rules := configurationFixture().Library()
 	sequence := 0
 	items, paths, err := rules.PrepareItems(t.Context(), &library.PreparationInput{
 		Drafts: []contentapi.Draft{
@@ -262,7 +262,7 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 		RelativePath: "media/" + id + ".png",
 		ByteSize:     1,
 	}
-	if err := configurationFixture().Library.ValidateItem(&valid); err != nil {
+	if err := new(configurationFixture().Library()).ValidateItem(&valid); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*contentapi.Item){
@@ -277,12 +277,12 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	} {
 		invalid := valid
 		mutate(&invalid)
-		if err := configurationFixture().Library.ValidateItem(&invalid); err == nil {
+		if err := new(configurationFixture().Library()).ValidateItem(&invalid); err == nil {
 			t.Fatalf("accepted invalid media: %+v", invalid)
 		}
 	}
 	text := contentapi.Item{ID: "text", Kind: "text", Text: "Remember"}
-	if err := configurationFixture().Library.ValidateItem(&text); err != nil {
+	if err := new(configurationFixture().Library()).ValidateItem(&text); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*contentapi.Item){
@@ -294,19 +294,19 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	} {
 		invalid := text
 		mutate(&invalid)
-		if err := configurationFixture().Library.ValidateItem(&invalid); err == nil {
+		if err := new(configurationFixture().Library()).ValidateItem(&invalid); err == nil {
 			t.Fatal("accepted invalid text")
 		}
 	}
 	for _, extension := range []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".flac", ".mp4", ".m4v", ".webm", ".ogv", ".mov"} {
-		if configurationFixture().Library.MediaType(extension) == "" ||
-			!configurationFixture().Library.ValidMediaPath("media/"+id+extension, id) {
+		if new(configurationFixture().Library()).MediaType(extension) == "" ||
+			!new(configurationFixture().Library()).ValidMediaPath("media/"+id+extension, id) {
 			t.Fatalf("lost supported media %s", extension)
 		}
 	}
-	if configurationFixture().Library.MediaType(".svg") != "" ||
-		configurationFixture().Library.ValidMediaPath("media/"+id+".svg", id) ||
-		configurationFixture().Library.ValidMediaPath("media/bad.png", "bad") {
+	if new(configurationFixture().Library()).MediaType(".svg") != "" ||
+		new(configurationFixture().Library()).ValidMediaPath("media/"+id+".svg", id) ||
+		new(configurationFixture().Library()).ValidMediaPath("media/bad.png", "bad") {
 		t.Fatal("accepted unsupported media path")
 	}
 }
@@ -319,7 +319,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		item := *original
 		return item, "", failure
 	}
-	if _, _, err := configurationFixture().Library.PrepareItems(
+	if _, _, err := new(configurationFixture().Library()).PrepareItems(
 		t.Context(),
 		&library.PreparationInput{Drafts: nil, Previous: nil},
 		&library.PreparationDependencies{
@@ -330,7 +330,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	); err == nil {
 		t.Fatal("accepted empty content")
 	}
-	if _, _, err := configurationFixture().Library.PrepareItems(
+	if _, _, err := new(configurationFixture().Library()).PrepareItems(
 		t.Context(),
 		&library.PreparationInput{
 			Drafts:   []contentapi.Draft{{Kind: "text", Text: "remember"}},
@@ -347,7 +347,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	) {
 		t.Fatal(err)
 	}
-	if _, _, err := configurationFixture().Library.PrepareItems(
+	if _, _, err := new(configurationFixture().Library()).PrepareItems(
 		t.Context(),
 		&library.PreparationInput{
 			Drafts:   []contentapi.Draft{{Kind: "image", SourcePath: "image.png"}},
@@ -365,7 +365,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, draft := range []contentapi.Draft{{Kind: "text", Text: "remember", SourcePath: "invalid"}, {Kind: "image", Text: "unexpected"}, {Kind: "text", Text: " "}} {
-		if _, _, err := configurationFixture().Library.PrepareItems(
+		if _, _, err := new(configurationFixture().Library()).PrepareItems(
 			t.Context(),
 			&library.PreparationInput{Drafts: []contentapi.Draft{draft}, Previous: nil},
 			&library.PreparationDependencies{
@@ -382,7 +382,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		ID: id, Kind: "image", OriginalName: "image.png", MIMEType: "image/png",
 		RelativePath: "media/" + id + ".png", ByteSize: 1,
 	}}
-	if _, _, err := configurationFixture().Library.PrepareItems(
+	if _, _, err := new(configurationFixture().Library()).PrepareItems(
 		t.Context(),
 		&library.PreparationInput{
 			Drafts:   []contentapi.Draft{{ID: id, Kind: "image", Text: "unexpected"}},
@@ -402,7 +402,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		{{ID: id, Kind: "text", Text: "after", SourcePath: "invalid"}},
 		{{ID: id, Kind: "text", Text: "after"}, {ID: id, Kind: "text", Text: "duplicate"}},
 	} {
-		if _, _, err := configurationFixture().Library.PrepareItems(
+		if _, _, err := new(configurationFixture().Library()).PrepareItems(
 			t.Context(),
 			&library.PreparationInput{Drafts: drafts, Previous: previous},
 			&library.PreparationDependencies{
@@ -435,10 +435,10 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	}
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }

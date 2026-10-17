@@ -1,6 +1,6 @@
 //go:build (!windows && !linux) || server
 
-package native
+package wails
 
 type (
 	// Widget configures the native floating window.

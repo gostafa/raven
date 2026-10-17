@@ -10,7 +10,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	autostart "raven/internal/features/autostart/application"
+	autostartports "raven/internal/features/autostart/ports"
 	reminders "raven/internal/features/reminders/application"
 	libraryports "raven/internal/shared/boltstore/ports"
 )
@@ -23,7 +23,7 @@ var (
 		"library persistence already started",
 	)
 	_ libraryports.Repository = (*Store)(nil)
-	_ autostart.Settings      = (*Store)(nil)
+	_ autostartports.Settings = (*Store)(nil)
 	_ reminders.Source        = (*Store)(nil)
 
 	// Deliberately exclude active formats such as SVG and HTML.

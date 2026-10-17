@@ -1,50 +1,48 @@
 package domain_test
 
 import (
+	"image"
 	"testing"
 
-	companion "raven/internal/features/companion/domain"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 )
 
 func TestFloatingReviewBounds(t *testing.T) {
-	primary := companion.Rect{X: 0, Y: 25, Width: 1440, Height: 850}
-	secondary := companion.Rect{X: -1920, Y: -200, Width: 1920, Height: 1080}
+	primary := image.Rect(0, 25, 1440, 875)
+	secondary := image.Rect(-1920, -200, 0, 880)
 	for _, test := range []struct {
 		name string
 		x, y int
-		area companion.Rect
-		want companion.Rect
+		area image.Rectangle
+		want image.Rectangle
 	}{
-		{"bottom right prefers left", 1368, 803, primary, companion.Rect{X: 936, Y: 331, Width: 420, Height: 520}},
-		{"bottom left flips right", 24, 803, primary, companion.Rect{X: 84, Y: 331, Width: 420, Height: 520}},
-		{"top left clamps vertically", 0, 25, primary, companion.Rect{X: 60, Y: 25, Width: 420, Height: 520}},
-		{"top right clamps vertically", 1392, 25, primary, companion.Rect{X: 960, Y: 25, Width: 420, Height: 520}},
-		{"secondary negative origin", -72, 808, secondary, companion.Rect{X: -504, Y: 336, Width: 420, Height: 520}},
-		{"secondary left edge", -1920, -200, secondary, companion.Rect{X: -1860, Y: -200, Width: 420, Height: 520}},
-		{"small work area shrinks", 200, 200, companion.Rect{X: 10, Y: 30, Width: 300, Height: 400}, companion.Rect{X: 10, Y: 30, Width: 300, Height: 400}},
-		{"neither side fits clamps left", 300, 500, companion.Rect{Width: 700, Height: 800}, companion.Rect{X: 0, Y: 28, Width: 420, Height: 520}},
-		{"widget outside work area", 1800, 1100, primary, companion.Rect{X: 1020, Y: 355, Width: 420, Height: 520}},
+		{"bottom right prefers left", 1368, 803, primary, image.Rect(936, 331, 1356, 851)},
+		{"bottom left flips right", 24, 803, primary, image.Rect(84, 331, 504, 851)},
+		{"top left clamps vertically", 0, 25, primary, image.Rect(60, 25, 480, 545)},
+		{"top right clamps vertically", 1392, 25, primary, image.Rect(960, 25, 1380, 545)},
+		{"secondary negative origin", -72, 808, secondary, image.Rect(-504, 336, -84, 856)},
+		{"secondary left edge", -1920, -200, secondary, image.Rect(-1860, -200, -1440, 320)},
+		{"small work area shrinks", 200, 200, image.Rect(10, 30, 310, 430), image.Rect(10, 30, 310, 430)},
+		{"neither side fits clamps left", 300, 500, image.Rect(0, 0, 700, 800), image.Rect(0, 28, 420, 548)},
+		{"widget outside work area", 1800, 1100, primary, image.Rect(1020, 355, 1440, 875)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := configurationFixture().Layout.Bounds(test.x, test.y, &test.area)
+			got := new(configurationFixture().Layout()).Bounds(test.x, test.y, &test.area)
 			if got != test.want {
 				t.Fatalf("got %+v, want %+v", got, test.want)
 			}
-			if got.X < test.area.X || got.Y < test.area.Y ||
-				got.X+got.Width > test.area.X+test.area.Width ||
-				got.Y+got.Height > test.area.Y+test.area.Height {
+			if !got.In(test.area) {
 				t.Fatalf("panel %+v escapes work area %+v", got, test.area)
 			}
 		})
 	}
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }

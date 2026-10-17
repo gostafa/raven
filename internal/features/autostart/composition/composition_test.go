@@ -6,7 +6,8 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"raven/internal/features/autostart/adapters/launch"
+	autostart "raven/internal/features/autostart/application"
+	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 )
 
@@ -16,7 +17,7 @@ func (native *detector) PrepareLoginDetection(callback func(bool)) { native.call
 
 func TestLaunchDetectionQueuesAnExplicitLaunch(t *testing.T) {
 	native := &detector{}
-	requests := launch.New()
+	requests := autostart.NewRequests()
 	result := newLaunch(launchParams{Detector: native, Requests: requests})
 	if result.Requests != requests || result.Visibility != requests.Visibility() {
 		t.Fatal("launch contracts diverged")
@@ -33,9 +34,17 @@ func TestLaunchDetectionQueuesAnExplicitLaunch(t *testing.T) {
 func TestControllerProvider(t *testing.T) {
 	controller := newController(
 		application.New(application.Options{}),
-		&configuration.Settings{ApplicationID: "raven"},
+		configurationFixture(), nil,
 	)
 	if controller == nil {
 		t.Fatal("missing autostart controller")
 	}
+}
+
+func configurationFixture() configuration.Settings {
+	snapshot, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return snapshot.Settings
 }

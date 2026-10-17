@@ -13,7 +13,6 @@ import (
 	configurationcomposition "raven/internal/features/configuration/composition"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopcomposition "raven/internal/features/desktop/composition"
-	desktopports "raven/internal/features/desktop/ports"
 	remindercomposition "raven/internal/features/reminders/composition"
 	storecomposition "raven/internal/shared/boltstore/composition"
 	batchcomposition "raven/internal/shared/cffbatch/composition"
@@ -32,7 +31,7 @@ var (
 		fx.Provide(newLogger),
 		fx.WithLogger(newFxLogger),
 		fx.Module("raven",
-			fx.Supply(desktopports.Assets{Files: assets, Icon: appIcon}),
+			fx.Supply(desktopcomposition.Assets{Files: assets, Icon: appIcon}),
 			fx.Provide(newService, fx.Annotate(desktopRuntime, fx.As(new(desktopRunner)))),
 			configurationcomposition.Module,
 			storecomposition.Module,

@@ -5,11 +5,11 @@
 package wails
 
 import (
+	"io/fs"
 	"log/slog"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	autostart "raven/internal/features/autostart/application"
 	companionwails "raven/internal/features/companion/adapters/wails"
 	companion "raven/internal/features/companion/domain"
 	"raven/internal/features/desktop/ports"
@@ -31,9 +31,10 @@ type (
 	ApplicationDependencies struct {
 		Configuration *Configuration
 		Media         mediaports.MediaRoutes
-		Visibility    *autostart.Visibility
+		Visibility    ports.LaunchVisibility
 		Logger        *slog.Logger
-		Assets        ports.Assets
+		Assets        fs.FS
+		Icon          []byte
 	}
 	// Dependencies supplies stable runtime contracts to desktop orchestration.
 	Dependencies struct {
@@ -41,12 +42,12 @@ type (
 		App           *application.App
 		Handles       companionwails.WindowSet
 		Windows       companion.Windows
-		Settings      autostart.Settings
-		Visibility    *autostart.Visibility
-		Startup       *autostart.Controller
+		Visibility    ports.LaunchVisibility
+		Startup       ports.Startup
 		Reminders     reminderports.Control
 		Notifications *reminderwails.Runtime
-		Assets        ports.Assets
+		Assets        fs.FS
+		Icon          []byte
 	}
 	// Desktop owns native desktop orchestration for the lifetime of Wails.
 	Desktop struct {
@@ -55,13 +56,12 @@ type (
 		showDialog    func(*application.MessageDialog)
 		windows       companion.Windows
 		reminders     reminderports.Control
-		store         autostart.Settings
 		mainWindow    *application.WebviewWindow
 		widget        *application.WebviewWindow
 		reviewWindow  *application.WebviewWindow
 		app           *application.App
-		visibility    *autostart.Visibility
-		startup       *autostart.Controller
+		visibility    ports.LaunchVisibility
+		startup       ports.Startup
 		notifications *reminderwails.Runtime
 		subscriptions []func()
 		icon          []byte

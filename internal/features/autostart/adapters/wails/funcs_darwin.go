@@ -1,6 +1,6 @@
 //go:build darwin && !ios && !server
 
-package native
+package wails
 
 import (
 	/*

@@ -266,20 +266,20 @@ func TestSelectedSymlinkMayReferToAnotherDirectory(t *testing.T) {
 	}
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }
 
 func mediaSettingsFixture() *Settings {
 	settings := configurationFixture()
 	return &Settings{
-		MediaRoutePrefix:   settings.MediaRoutePrefix,
-		PreviewRoutePrefix: settings.PreviewRoutePrefix,
-		LogErrorKey:        settings.LogErrorKey,
+		MediaRoutePrefix:   settings.MediaRoutePrefix(),
+		PreviewRoutePrefix: settings.PreviewRoutePrefix(),
+		LogErrorKey:        settings.LogErrorKey(),
 	}
 }
 

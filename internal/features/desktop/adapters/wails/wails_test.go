@@ -17,10 +17,10 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	autostart "raven/internal/features/autostart/application"
+	autostartports "raven/internal/features/autostart/ports"
 	companion "raven/internal/features/companion/domain"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
-	"raven/internal/features/desktop/ports"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
 )
 
@@ -50,7 +50,7 @@ type startupBackend struct {
 }
 
 func (backend *startupBackend) IsEnabled() (bool, error) { return backend.enabled, backend.failure }
-func (backend *startupBackend) EnableWithOptions(*autostart.Options) error {
+func (backend *startupBackend) EnableWithOptions(*autostartports.Options) error {
 	backend.enabled = true
 	return nil
 }
@@ -73,24 +73,26 @@ func TestDesktopLifecycleAndNativeRegistrations(t *testing.T) {
 		ApplicationID: "raven.tests",
 		LogErrorKey:   "error",
 		ShowReviews:   "reviews",
-		Layout:        configurationFixture().Layout,
+		Layout:        configurationFixture().Layout(),
 	}
 	app := NewApplication(&ApplicationDependencies{
 		Configuration: settings,
 		Logger:        logger,
 		Media:         mediaRoutes{},
 		Visibility:    visibility,
-		Assets: ports.Assets{
-			Files: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("Raven")}},
-		},
+		Assets:        fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("Raven")}},
 	})
 	handles := NewWindows(app, settings)
 	backend := &startupBackend{}
-	startup := autostart.New(backend, false, settings.ApplicationID)
+	startup := autostart.New(
+		backend,
+		startupSettings{},
+		&autostart.Configuration{ApplicationID: settings.ApplicationID},
+	)
 	reminders := &reminderRecorder{}
 	desktop := New(&Dependencies{
 		Configuration: settings, App: app, Handles: handles, Windows: windows,
-		Visibility: visibility, Startup: startup, Settings: startupSettings{}, Reminders: reminders,
+		Visibility: visibility, Startup: startup, Reminders: reminders,
 		Notifications: reminderwails.NewRuntime(notifications.New(), logger, "error"),
 	})
 	desktop.invoke = func(callback func()) { callback() }
@@ -106,7 +108,7 @@ func TestDesktopLifecycleAndNativeRegistrations(t *testing.T) {
 		&ApplicationDependencies{
 			Configuration: settings,
 			Media:         mediaRoutes{},
-			Assets:        ports.Assets{Files: fstest.MapFS{"index.html": &fstest.MapFile{}}},
+			Assets:        fstest.MapFS{"index.html": &fstest.MapFile{}},
 		},
 	).Assets.Middleware(
 		http.NotFoundHandler(),
@@ -203,7 +205,7 @@ func TestOpenRequestsStopWithRuntime(t *testing.T) {
 }
 
 func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
-	main := mainWindowOptions(&Configuration{Layout: configurationFixture().Layout})
+	main := mainWindowOptions(&Configuration{Layout: configurationFixture().Layout()})
 	if main.Name != "raven" || main.Title != "Raven" || main.URL != "/" || !main.Hidden ||
 		main.Width != 960 ||
 		main.Height != 680 ||
@@ -215,14 +217,14 @@ func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 		main.Mac.Backdrop != application.MacBackdropTranslucent {
 		t.Fatal("main window appearance changed")
 	}
-	widget := widgetWindowOptions(&Configuration{Layout: configurationFixture().Layout})
+	widget := widgetWindowOptions(&Configuration{Layout: configurationFixture().Layout()})
 	if widget.Name != "raven-widget" || widget.URL != "/?view=widget" || widget.Hidden ||
-		widget.Width != configurationFixture().Layout.WidgetSize ||
-		widget.MinWidth != configurationFixture().Layout.WidgetSize ||
-		widget.MaxWidth != configurationFixture().Layout.WidgetSize ||
-		widget.Height != configurationFixture().Layout.WidgetSize ||
-		widget.MinHeight != configurationFixture().Layout.WidgetSize ||
-		widget.MaxHeight != configurationFixture().Layout.WidgetSize {
+		widget.Width != configurationFixture().Layout().WidgetSize ||
+		widget.MinWidth != configurationFixture().Layout().WidgetSize ||
+		widget.MaxWidth != configurationFixture().Layout().WidgetSize ||
+		widget.Height != configurationFixture().Layout().WidgetSize ||
+		widget.MinHeight != configurationFixture().Layout().WidgetSize ||
+		widget.MaxHeight != configurationFixture().Layout().WidgetSize {
 		t.Fatal("widget geometry changed")
 	}
 	if widget.InitialPosition != application.WindowXY || widget.X != 24 || widget.Y != 100 ||
@@ -234,10 +236,10 @@ func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 		widget.Mac.CornerType != application.MacWindowCornerTypeSquare {
 		t.Fatal("widget platform appearance changed")
 	}
-	review := reviewWindowOptions(&Configuration{Layout: configurationFixture().Layout})
+	review := reviewWindowOptions(&Configuration{Layout: configurationFixture().Layout()})
 	if review.Name != "raven-review" || review.URL != "/?view=review" || !review.Hidden ||
-		review.Width != configurationFixture().Layout.ReviewWidth ||
-		review.Height != configurationFixture().Layout.ReviewHeight ||
+		review.Width != configurationFixture().Layout().ReviewWidth ||
+		review.Height != configurationFixture().Layout().ReviewHeight ||
 		review.Mac.Appearance != application.NSAppearanceNameDarkAqua {
 		t.Fatal("review window changed")
 	}
@@ -268,18 +270,18 @@ func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 	}
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }
 
 func TestConfiguredIdentityAndGeometryReachNativeOptions(t *testing.T) {
 	settings := &Configuration{
 		ApplicationID: "custom.desktop",
-		Layout:        configurationFixture().Layout,
+		Layout:        configurationFixture().Layout(),
 	}
 	settings.Layout.WidgetSize = 64
 	settings.Layout.ReviewWidth = 300

@@ -24,7 +24,7 @@ import (
 	libraryports "raven/internal/shared/boltstore/ports"
 )
 
-func newService(deps serviceParams, settings *configuration.Settings) *RavenService {
+func newService(deps serviceParams, settings configuration.Settings) *RavenService {
 	return &RavenService{
 		configuration: settings,
 		store:         deps.Repository,
@@ -214,7 +214,7 @@ func (service *RavenService) Quit() { service.windows.Quit() }
 // ShowReviews opens the library review session.
 func (service *RavenService) ShowReviews() {
 	service.ShowMain()
-	service.events.Emit(service.configuration.ShowReviews)
+	service.events.Emit(service.configuration.ShowReviews())
 }
 
 // RefreshReminders requests reconciliation of persisted review schedules.
@@ -226,7 +226,7 @@ func (service *RavenService) RefreshReminders() {
 
 func (service *RavenService) schedulesChanged() {
 	if service.events != nil {
-		service.events.Emit(service.configuration.SchedulesChanged)
+		service.events.Emit(service.configuration.SchedulesChanged())
 	}
 
 	service.RefreshReminders()
@@ -308,12 +308,12 @@ func (service *RavenService) GetConfiguration() configurationapi.Settings {
 	settings := service.configuration
 
 	return configurationapi.Settings{
-		PreferencesStorageKey: settings.PreferencesStorageKey,
-		MediaRoutePrefix:      settings.MediaRoutePrefix,
-		TextKind:              settings.Library.TextKind,
-		SchedulesChanged:      settings.SchedulesChanged,
-		ShowReviews:           settings.ShowReviews,
-		OpenFloatingReview:    settings.OpenFloatingReview,
-		CloseFloatingReview:   settings.CloseFloatingReview,
+		PreferencesStorageKey: settings.PreferencesStorageKey(),
+		MediaRoutePrefix:      settings.MediaRoutePrefix(),
+		TextKind:              settings.Library().TextKind,
+		SchedulesChanged:      settings.SchedulesChanged(),
+		ShowReviews:           settings.ShowReviews(),
+		OpenFloatingReview:    settings.OpenFloatingReview(),
+		CloseFloatingReview:   settings.CloseFloatingReview(),
 	}
 }

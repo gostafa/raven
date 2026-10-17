@@ -218,21 +218,21 @@ func TestConstructorBindsNativeWindowsAndRuntime(t *testing.T) {
 	windows.PositionFloatingReview()
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }
 
 func windowSettingsFixture() *Settings {
 	settings := configurationFixture()
 	return &Settings{
-		Layout:              settings.Layout,
-		LogErrorKey:         settings.LogErrorKey,
-		OpenFloatingReview:  settings.OpenFloatingReview,
-		CloseFloatingReview: settings.CloseFloatingReview,
+		Layout:              settings.Layout(),
+		LogErrorKey:         settings.LogErrorKey(),
+		OpenFloatingReview:  settings.OpenFloatingReview(),
+		CloseFloatingReview: settings.CloseFloatingReview(),
 	}
 }
 

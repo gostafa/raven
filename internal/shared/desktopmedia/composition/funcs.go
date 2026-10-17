@@ -10,7 +10,7 @@ import (
 	desktopmedia "raven/internal/shared/desktopmedia/adapters/wails"
 )
 
-func newRegistry(params registryParams, settings *configuration.Settings) *desktopmedia.Registry {
+func newRegistry(params registryParams, settings configuration.Settings) *desktopmedia.Registry {
 	return desktopmedia.NewRegistry(
 		&desktopmedia.Dependencies{
 			Saved:  func() http.Handler { return params.Store.MediaHandler() },
@@ -18,9 +18,9 @@ func newRegistry(params registryParams, settings *configuration.Settings) *deskt
 			Batch:  params.Batch,
 		},
 		&desktopmedia.Settings{
-			MediaRoutePrefix:   settings.MediaRoutePrefix,
-			PreviewRoutePrefix: settings.PreviewRoutePrefix,
-			LogErrorKey:        settings.LogErrorKey,
+			MediaRoutePrefix:   settings.MediaRoutePrefix(),
+			PreviewRoutePrefix: settings.PreviewRoutePrefix(),
+			LogErrorKey:        settings.LogErrorKey(),
 		},
 	)
 }

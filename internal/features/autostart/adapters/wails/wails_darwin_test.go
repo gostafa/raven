@@ -1,6 +1,6 @@
 //go:build darwin && !ios && !server
 
-package native
+package wails
 
 import (
 	"reflect"
@@ -10,7 +10,7 @@ import (
 
 func TestPreparingDetectionWaitsForNativeLaunch(t *testing.T) {
 	called := false
-	New().PrepareLoginDetection(func(bool) { called = true })
+	NewDetector().PrepareLoginDetection(func(bool) { called = true })
 	if called {
 		t.Fatal("registration classified launch before Cocoa delivered it")
 	}

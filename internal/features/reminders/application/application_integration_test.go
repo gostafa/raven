@@ -72,7 +72,7 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -123,7 +123,7 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -198,19 +198,19 @@ func TestCoordinatorShutdownDoesNotWaitForAuthorization(t *testing.T) {
 	c.Wake()
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }
 
 func storeSettingsFixture() *boltstore.Settings {
 	settings := configurationFixture()
 	return &boltstore.Settings{
-		Rules:            settings.Library,
-		MediaRoutePrefix: settings.MediaRoutePrefix,
-		LogErrorKey:      settings.LogErrorKey,
+		Rules:            settings.Library(),
+		MediaRoutePrefix: settings.MediaRoutePrefix(),
+		LogErrorKey:      settings.LogErrorKey(),
 	}
 }

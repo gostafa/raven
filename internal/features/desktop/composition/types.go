@@ -6,13 +6,13 @@ package composition
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
 
-	autostart "raven/internal/features/autostart/application"
 	companionwails "raven/internal/features/companion/adapters/wails"
 	companion "raven/internal/features/companion/domain"
 	"raven/internal/features/desktop/ports"
@@ -27,9 +27,9 @@ type (
 		fx.In
 
 		Media      mediaports.MediaRoutes
-		Visibility *autostart.Visibility
+		Visibility ports.LaunchVisibility
 		Logger     *slog.Logger
-		Assets     ports.Assets
+		Assets     Assets
 	}
 	desktopParams struct {
 		fx.In
@@ -39,13 +39,12 @@ type (
 		Lifecycle     fx.Lifecycle
 		Requests      ports.OpenRequests
 		Windows       companion.Windows
-		Settings      autostart.Settings
-		Visibility    *autostart.Visibility
-		Startup       *autostart.Controller
+		Visibility    ports.LaunchVisibility
+		Startup       ports.Startup
 		Notifications *reminderwails.Runtime
 		Runtime       *lifetime.Runtime
 		App           *application.App
-		Assets        ports.Assets
+		Assets        Assets
 	}
 	// Lifecycle is the graph control boundary used by the Wails bridge.
 	Lifecycle interface {
@@ -62,4 +61,10 @@ type (
 		stop     sync.Once
 	}
 	lifecycleError struct{ message string }
+
+	// Assets supplies embedded desktop files and the application icon.
+	Assets struct {
+		Files fs.FS
+		Icon  []byte
+	}
 )

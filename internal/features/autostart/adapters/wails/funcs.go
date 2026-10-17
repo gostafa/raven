@@ -8,11 +8,11 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	autostart "raven/internal/features/autostart/application"
+	autostartports "raven/internal/features/autostart/ports"
 )
 
 // EnableWithOptions enables login startup with the supplied application options.
-func (backend Backend) EnableWithOptions(visibility *autostart.Options) error {
+func (backend Backend) EnableWithOptions(visibility *autostartports.Options) error {
 	forwardErr3 := backend.native.EnableWithOptions(
 		application.AutostartOptions{
 			Identifier: visibility.Identifier,
@@ -48,3 +48,6 @@ func (backend Backend) IsEnabled() (bool, error) {
 
 // New constructs the adapter with its required runtime dependencies.
 func New(native NativeAutostart) Backend { return Backend{native: native} }
+
+// NewDetector constructs native login launch detection.
+func NewDetector() Detector { return Detector{} }

@@ -1200,7 +1200,7 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 		path,
 		&Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    storageLogger(nil),
 			Settings:  *storeSettingsFixture(),
 		},
@@ -1239,7 +1239,7 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 		path,
 		&Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -1274,7 +1274,7 @@ func TestFailedPreparationReleasesManagedDatabase(t *testing.T) {
 		path,
 		&Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    storageLogger(nil),
 			Settings:  *storeSettingsFixture(),
 		},
@@ -2676,7 +2676,7 @@ func openStore(path string) (*Store, error) {
 		path,
 		&Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(&configurationFixture().Library),
+			Scheduler: scheduling.New(new(configurationFixture().Library())),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -3114,20 +3114,20 @@ func TestRecordEncoderRejectsNonFiniteScheduleValues(t *testing.T) {
 	}
 }
 
-func configurationFixture() *configuration.Settings {
+func configurationFixture() configuration.Settings {
 	settings, err := (configyaml.Loader{}).Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings
+	return settings.Settings
 }
 
 func storeSettingsFixture() *Settings {
 	settings := configurationFixture()
 	return &Settings{
-		Rules:            settings.Library,
-		MediaRoutePrefix: settings.MediaRoutePrefix,
-		LogErrorKey:      settings.LogErrorKey,
+		Rules:            settings.Library(),
+		MediaRoutePrefix: settings.MediaRoutePrefix(),
+		LogErrorKey:      settings.LogErrorKey(),
 	}
 }
 

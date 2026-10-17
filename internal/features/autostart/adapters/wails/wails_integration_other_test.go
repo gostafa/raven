@@ -1,16 +1,16 @@
 //go:build !darwin || ios || server
 
-package native_test
+package wails_test
 
 import (
 	"testing"
 
-	"raven/internal/features/autostart/adapters/native"
+	startupwails "raven/internal/features/autostart/adapters/wails"
 )
 
 func TestDetectorClassifiesUnsupportedPlatformsAsManualLaunches(t *testing.T) {
 	calls := 0
-	native.New().PrepareLoginDetection(func(automatic bool) {
+	startupwails.NewDetector().PrepareLoginDetection(func(automatic bool) {
 		calls++
 		if automatic {
 			t.Fatal("unsupported native detection reported an automatic launch")

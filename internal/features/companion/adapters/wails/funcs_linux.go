@@ -1,6 +1,6 @@
 //go:build linux && cgo && !android && !server
 
-package native
+package wails
 
 import (
 	/*
@@ -41,8 +41,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// New constructs native configuration for the floating widget.
-func New(window *application.WebviewWindow) Widget { return Widget{window: window} }
+// NewWidget constructs native configuration for the floating widget.
+func NewWidget(window *application.WebviewWindow) Widget { return Widget{window: window} }
 
 // Configure applies transparent styling to the floating widget's native window.
 func (widget Widget) Configure() error {

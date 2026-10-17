@@ -13,7 +13,7 @@ import (
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
 )
 
-func newStore(params storeParams, settings *configuration.Settings) storeResult {
+func newStore(params storeParams, settings configuration.Settings) storeResult {
 	store := boltstore.New(string(params.Path), storeDependencies(params, settings))
 	params.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error { return store.Start() },
@@ -40,14 +40,14 @@ func defaultPath() (DatabasePath, error) {
 
 func storeDependencies(
 	params storeParams,
-	settings *configuration.Settings,
+	settings configuration.Settings,
 ) *boltstore.Dependencies {
 	return &boltstore.Dependencies{
 		Batch: params.Batch, Scheduler: params.Scheduler, Logger: params.Logger,
 		Settings: boltstore.Settings{
-			Rules:            settings.Library,
-			MediaRoutePrefix: settings.MediaRoutePrefix,
-			LogErrorKey:      settings.LogErrorKey,
+			Rules:            settings.Library(),
+			MediaRoutePrefix: settings.MediaRoutePrefix(),
+			LogErrorKey:      settings.LogErrorKey(),
 		},
 	}
 }

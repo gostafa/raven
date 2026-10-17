@@ -10,24 +10,14 @@ import (
 
 	cardapi "raven/api/cards"
 	reviewapi "raven/api/reviews"
+	"raven/internal/features/reminders/ports"
 )
 
 type (
-	// Store acknowledges notification delivery for unchanged item schedules.
-	Store interface {
-		MarkNotified(occurrences []reviewapi.DueOccurrence) error
-	}
-
-	// Notifier provides notification authorization and reminder delivery.
-	Notifier interface {
-		CheckNotificationAuthorization() (bool, error)
-		Send(count int) error
-		RequestAuthorization() (bool, error)
-	}
 
 	// Source provides persisted schedules and notification prompt state.
 	Source interface {
-		Store
+		ports.Store
 		ListCards() ([]cardapi.Card, error)
 		ClaimNotificationPrompt() (bool, error)
 	}
@@ -35,7 +25,7 @@ type (
 	// Coordinator reconciles review reminders until stopped.
 	Coordinator struct {
 		source    Source
-		notifier  Notifier
+		notifier  ports.Notifier
 		callbacks Callbacks
 		stopping  chan struct{}
 		changed   chan struct{}
@@ -55,5 +45,22 @@ type (
 		now     time.Time
 		pending []reviewapi.DueOccurrence
 		delay   time.Duration
+	}
+
+	// Worker owns one reminder coordinator after both lifecycle and UI readiness.
+	Worker struct {
+		source        Source
+		notifications Notifications
+		callbacks     Callbacks
+		coordinator   *Coordinator
+		mu            sync.Mutex
+		enabled       bool
+		stopped       bool
+	}
+
+	// Notifications combines delivery with the observed native availability.
+	Notifications interface {
+		ports.Notifier
+		Available() bool
 	}
 )

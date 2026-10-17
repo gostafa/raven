@@ -9,7 +9,7 @@ import (
 
 	"go.uber.org/fx"
 
-	autostart "raven/internal/features/autostart/application"
+	autostartports "raven/internal/features/autostart/ports"
 	reminders "raven/internal/features/reminders/application"
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
 	libraryports "raven/internal/shared/boltstore/ports"
@@ -33,6 +33,6 @@ type (
 		Store      *boltstore.Store
 		Repository libraryports.Repository
 		Reminders  reminders.Source
-		Settings   autostart.Settings
+		Settings   autostartports.Settings
 	}
 )

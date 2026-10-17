@@ -7,7 +7,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	autostart "raven/internal/features/autostart/application"
+	autostartports "raven/internal/features/autostart/ports"
 )
 
 type fakeAutostart struct {
@@ -28,7 +28,7 @@ func (native *fakeAutostart) IsEnabled() (bool, error) { return native.enabled, 
 func TestBackendTranslatesOptionsAndPreservesFailures(t *testing.T) {
 	native := &fakeAutostart{}
 	backend := New(native)
-	options := autostart.Options{Identifier: "raven", Arguments: []string{"--autostart"}}
+	options := autostartports.Options{Identifier: "raven", Arguments: []string{"--autostart"}}
 	if err := backend.EnableWithOptions(&options); err != nil {
 		t.Fatal(err)
 	}

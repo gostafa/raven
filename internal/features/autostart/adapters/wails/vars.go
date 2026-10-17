@@ -4,7 +4,11 @@
 package wails
 
 import (
-	autostart "raven/internal/features/autostart/application"
+	autostartports "raven/internal/features/autostart/ports"
 )
 
-var _ autostart.Backend = (*Backend)(nil)
+var (
+	_ autostartports.LoginDetection = Detector{}
+
+	_ autostartports.Backend = (*Backend)(nil)
+)

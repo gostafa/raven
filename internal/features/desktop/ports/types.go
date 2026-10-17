@@ -4,20 +4,24 @@
 // Package ports defines ports contracts for desktop.
 package ports
 
-import (
-	"io/fs"
-)
-
 type (
-	// Assets supplies embedded desktop files and the application icon.
-	Assets struct {
-		Files fs.FS
-		Icon  []byte
-	}
-
 	// Events publishes frontend notifications.
 	Events interface{ Emit(name string) }
 
 	// OpenRequests supplies queued launch visibility effects.
 	OpenRequests interface{ Pending() <-chan struct{} }
+
+	// Startup controls login registration after desktop readiness.
+	Startup interface {
+		Initialize() error
+		Toggle() error
+		Refresh() error
+		SetPublisher(publish func(bool, bool))
+	}
+	// LaunchVisibility reconciles readiness and explicit requests to open the library.
+	LaunchVisibility interface {
+		ApplicationStarted()
+		RequestOpen()
+		SecondInstance(args []string)
+	}
 )

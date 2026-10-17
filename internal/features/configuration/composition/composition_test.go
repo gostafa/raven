@@ -17,21 +17,21 @@ type testLoader struct {
 	failure error
 }
 
-func (loader *testLoader) Load() (*domain.Settings, error) {
+func (loader *testLoader) Load() (ports.Snapshot, error) {
 	loader.calls++
 	if loader.failure != nil {
-		return nil, loader.failure
+		return ports.Snapshot{}, loader.failure
 	}
 	return (yaml.Loader{}).Load()
 }
 
 func TestGraphLoadsOnceAndSharesSnapshot(t *testing.T) {
 	loader := &testLoader{}
-	var first, second *domain.Settings
+	var first, second domain.Settings
 	graph := fxtest.New(t, Module,
 		fx.Replace(fx.Annotate(loader, fx.As(new(ports.Loader)))),
-		fx.Invoke(func(settings *domain.Settings) { first = settings }),
-		fx.Invoke(func(settings *domain.Settings) { second = settings }),
+		fx.Invoke(func(settings domain.Settings) { first = settings }),
+		fx.Invoke(func(settings domain.Settings) { second = settings }),
 	)
 	graph.RequireStart().RequireStop()
 	if loader.calls != 1 || first == nil || first != second {
@@ -43,11 +43,11 @@ func TestLoadPreservesFailureAndDefaultLoaderWorks(t *testing.T) {
 	cause := errors.New("invalid embedded configuration")
 	if settings, err := load(
 		&testLoader{failure: cause},
-	); settings != nil ||
+	); settings.Settings != nil ||
 		!errors.Is(err, cause) {
 		t.Fatal(settings, err)
 	}
-	if settings, err := load(newLoader()); settings == nil || err != nil {
+	if settings, err := load(newLoader()); settings.Settings == nil || err != nil {
 		t.Fatal(settings, err)
 	}
 }

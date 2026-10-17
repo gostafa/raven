@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	_ NativeRuntime               = (*notifications.NotificationService)(nil)
-	_ reminderports.Notifications = (*Runtime)(nil)
-	_ reminders.Notifier          = (*Notifier)(nil)
+	_ NativeRuntime           = (*notifications.NotificationService)(nil)
+	_ reminders.Notifications = (*Runtime)(nil)
+	_ reminderports.Notifier  = (*Notifier)(nil)
 )

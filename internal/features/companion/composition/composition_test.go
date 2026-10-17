@@ -22,7 +22,7 @@ func TestWindowProvidersRetainConfiguration(t *testing.T) {
 			Handles:       handles,
 			Configuration: configuration,
 		},
-		settings,
+		settings.Settings,
 	)
 	if windows == nil {
 		t.Fatal("window provider returned no controller")

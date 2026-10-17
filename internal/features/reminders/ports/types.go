@@ -5,7 +5,7 @@
 package ports
 
 import (
-	reminders "raven/internal/features/reminders/application"
+	reviewapi "raven/api/reviews"
 )
 
 type (
@@ -15,10 +15,14 @@ type (
 		Wake()
 		Stop()
 	}
-
-	// Notifications combines delivery with the observed native availability.
-	Notifications interface {
-		reminders.Notifier
-		Available() bool
+	// Store acknowledges notification delivery for unchanged item schedules.
+	Store interface {
+		MarkNotified(occurrences []reviewapi.DueOccurrence) error
+	}
+	// Notifier provides notification authorization and reminder delivery.
+	Notifier interface {
+		CheckNotificationAuthorization() (bool, error)
+		Send(count int) error
+		RequestAuthorization() (bool, error)
 	}
 )

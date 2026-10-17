@@ -7,7 +7,6 @@ package composition
 import (
 	"go.uber.org/fx"
 
-	"raven/internal/features/autostart/adapters/launch"
 	autostart "raven/internal/features/autostart/application"
 	autostartports "raven/internal/features/autostart/ports"
 	desktopports "raven/internal/features/desktop/ports"
@@ -17,13 +16,13 @@ type (
 	launchResult struct {
 		fx.Out
 
-		Visibility *autostart.Visibility
+		Visibility desktopports.LaunchVisibility
 		Requests   desktopports.OpenRequests
 	}
 	launchParams struct {
 		fx.In
 
 		Detector autostartports.LoginDetection
-		Requests *launch.Requests
+		Requests *autostart.Requests
 	}
 )

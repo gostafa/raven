@@ -1,6 +1,6 @@
 //go:build linux && cgo && !android && !server
 
-package native
+package wails
 
 import (
 	"github.com/wailsapp/wails/v3/pkg/application"

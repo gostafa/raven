@@ -11,6 +11,7 @@ import (
 	cardapi "raven/api/cards"
 	contentapi "raven/api/content"
 	reviewapi "raven/api/reviews"
+	"raven/internal/features/reminders/ports"
 )
 
 // Snapshot returns unacknowledged due items and the next reminder delay.
@@ -52,7 +53,7 @@ func (snapshot *reminderSnapshot) add(card *cardapi.Card, item *contentapi.Item)
 }
 
 // Deliver sends an authorized reminder before acknowledging unchanged schedules.
-func Deliver(store Store, notifier Notifier, pending []reviewapi.DueOccurrence) error {
+func Deliver(store ports.Store, notifier ports.Notifier, pending []reviewapi.DueOccurrence) error {
 	allowed, err := notifier.CheckNotificationAuthorization()
 	if err != nil {
 		return fmt.Errorf("check reminder authorization: %w", err)
@@ -70,7 +71,11 @@ func Deliver(store Store, notifier Notifier, pending []reviewapi.DueOccurrence) 
 	return nil
 }
 
-func deliverAuthorized(store Store, notifier Notifier, pending []reviewapi.DueOccurrence) error {
+func deliverAuthorized(
+	store ports.Store,
+	notifier ports.Notifier,
+	pending []reviewapi.DueOccurrence,
+) error {
 	err := notifier.Send(len(pending))
 	if err != nil {
 		return fmt.Errorf("send review reminder: %w", err)
@@ -99,7 +104,7 @@ func (coordinator *Coordinator) Stop() {
 }
 
 // Start begins reminder reconciliation with the supplied effects.
-func Start(store Source, notifier Notifier, callbacks Callbacks) *Coordinator {
+func Start(store Source, notifier ports.Notifier, callbacks Callbacks) *Coordinator {
 	stopping := make(chan struct{})
 	coordinator := &Coordinator{
 		source:    store,
@@ -191,5 +196,70 @@ func (coordinator *Coordinator) wait(delay time.Duration) bool {
 		return true
 	case <-timer.C:
 		return true
+	}
+}
+
+// NewWorker constructs reconciliation without starting background work.
+func NewWorker(
+	source Source,
+	notifications Notifications,
+	callbacks Callbacks,
+) *Worker {
+	var worker Worker
+
+	worker.source = source
+	worker.notifications = notifications
+	worker.callbacks = callbacks
+
+	return &worker
+}
+
+// Enable permits the readiness event to start reconciliation.
+func (worker *Worker) Enable() {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+
+	worker.enabled = true
+}
+
+// Start begins exactly one coordinator when the native application is ready.
+func (worker *Worker) Start() {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+
+	if !worker.enabled || worker.stopped || worker.coordinator != nil {
+		return
+	}
+
+	var notifier ports.Notifier
+
+	if worker.notifications.Available() {
+		notifier = worker.notifications
+	}
+
+	worker.coordinator = Start(worker.source, notifier, worker.callbacks)
+}
+
+// Wake coalesces reconciliation requests before and after readiness.
+func (worker *Worker) Wake() {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+
+	if worker.coordinator != nil && !worker.stopped {
+		worker.coordinator.Wake()
+	}
+}
+
+// Stop prevents late readiness events and waits for active reconciliation.
+func (worker *Worker) Stop() {
+	worker.mu.Lock()
+
+	worker.stopped = true
+
+	coordinator := worker.coordinator
+	worker.mu.Unlock()
+
+	if coordinator != nil {
+		coordinator.Stop()
 	}
 }

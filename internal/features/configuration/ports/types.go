@@ -11,6 +11,10 @@ import (
 type (
 	// Loader reads and validates application settings.
 	Loader interface {
-		Load() (*domain.Settings, error)
+		Load() (Snapshot, error)
+	}
+	// Snapshot carries a successfully loaded immutable configuration.
+	Snapshot struct {
+		Settings domain.Settings
 	}
 )

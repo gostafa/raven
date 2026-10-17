@@ -8,6 +8,6 @@ import (
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
 
-func newScheduler(settings *configuration.Settings) scheduling.Scheduler {
-	return scheduling.New(&settings.Library)
+func newScheduler(settings configuration.Settings) scheduling.Scheduler {
+	return scheduling.New(new(settings.Library()))
 }

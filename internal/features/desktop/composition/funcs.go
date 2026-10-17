@@ -17,28 +17,29 @@ import (
 	"raven/internal/shared/lifetime"
 )
 
-func newApplication(params appParams, settings *configuration.Settings) *application.App {
+func newApplication(params appParams, settings configuration.Settings) *application.App {
 	return desktopwails.NewApplication(&desktopwails.ApplicationDependencies{
 		Configuration: desktopConfiguration(settings),
-		Assets:        params.Assets,
+		Assets:        params.Assets.Files,
+		Icon:          params.Assets.Icon,
 		Media:         params.Media,
 		Visibility:    params.Visibility,
 		Logger:        params.Logger,
 	})
 }
 
-func newDesktop(params desktopParams, settings *configuration.Settings) *desktopwails.Desktop {
+func newDesktop(params desktopParams, settings configuration.Settings) *desktopwails.Desktop {
 	desktop := desktopwails.New(&desktopwails.Dependencies{
 		Configuration: desktopConfiguration(settings),
 		App:           params.App,
 		Handles:       params.Handles,
 		Windows:       params.Windows,
-		Settings:      params.Settings,
 		Visibility:    params.Visibility,
 		Startup:       params.Startup,
 		Reminders:     params.Reminders,
 		Notifications: params.Notifications,
-		Assets:        params.Assets,
+		Assets:        params.Assets.Files,
+		Icon:          params.Assets.Icon,
 	})
 	params.Lifecycle.Append(desktopLifecycle(desktop, params.Runtime, params.Requests))
 
@@ -149,13 +150,13 @@ func isolate(err error) error {
 
 func (failure *lifecycleError) Error() string { return failure.message }
 
-func desktopConfiguration(settings *configuration.Settings) *desktopwails.Configuration {
+func desktopConfiguration(settings configuration.Settings) *desktopwails.Configuration {
 	return &desktopwails.Configuration{
-		Layout: settings.Layout, ApplicationID: settings.ApplicationID,
-		LogErrorKey: settings.LogErrorKey, ShowReviews: settings.ShowReviews,
+		Layout: settings.Layout(), ApplicationID: settings.ApplicationID(),
+		LogErrorKey: settings.LogErrorKey(), ShowReviews: settings.ShowReviews(),
 	}
 }
 
-func newWindows(app *application.App, settings *configuration.Settings) companionwails.WindowSet {
+func newWindows(app *application.App, settings configuration.Settings) companionwails.WindowSet {
 	return desktopwails.NewWindows(app, desktopConfiguration(settings))
 }

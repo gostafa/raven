@@ -23,15 +23,13 @@ func TestNativeProviderAndConfiguredCallbacks(t *testing.T) {
 	events := &eventRecorder{}
 	runtime := lifetime.New()
 	defer runtime.Cancel()
-	settings := &configuration.Settings{
-		SchedulesChanged: "custom:schedules", LogOperationKey: "operation", LogErrorKey: "failure",
-	}
+	settings := callbackSettings{}
 	callbacks := newCallbacks(callbacksParams{
 		Events: events, Runtime: runtime,
 		Logger: slog.New(slog.NewTextHandler(&output, nil)),
 	}, settings)
 	callbacks.Publish()
-	if events.name != settings.SchedulesChanged {
+	if events.name != settings.SchedulesChanged() {
 		t.Fatal("wrong event")
 	}
 	callbacks.Warn("read schedules", errors.New("storage unavailable"))
@@ -40,3 +38,9 @@ func TestNativeProviderAndConfiguredCallbacks(t *testing.T) {
 		t.Fatalf("missing configured log details: %s", &output)
 	}
 }
+
+type callbackSettings struct{ configuration.Settings }
+
+func (callbackSettings) SchedulesChanged() string { return "custom:schedules" }
+func (callbackSettings) LogOperationKey() string  { return "operation" }
+func (callbackSettings) LogErrorKey() string      { return "failure" }

@@ -11,23 +11,28 @@ import (
 
 	startupwails "raven/internal/features/autostart/adapters/wails"
 	autostart "raven/internal/features/autostart/application"
+	autostartports "raven/internal/features/autostart/ports"
 	configuration "raven/internal/features/configuration/domain"
 )
 
 func newLaunch(params launchParams) launchResult {
 	visibility := params.Requests.Visibility()
-	params.Detector.PrepareLoginDetection(func(automatic bool) {
-		// Cocoa callbacks must not wait for the UI thread.
-		go visibility.Classify(automatic || autostart.IsAutostartLaunch(os.Args[1:]))
-	})
+	autostart.PrepareLaunch(params.Detector, visibility, os.Args[1:])
 
 	return launchResult{Out: fx.Out{}, Visibility: visibility, Requests: params.Requests}
 }
 
-func newController(app *application.App, settings *configuration.Settings) *autostart.Controller {
+func newController(
+	app *application.App,
+	settings configuration.Settings,
+	initialization autostartports.Settings,
+) *autostart.Controller {
 	return autostart.New(
 		startupwails.New(app.Autostart),
-		app.Env.Info().Debug,
-		settings.ApplicationID,
+		initialization,
+		&autostart.Configuration{
+			Debug:         app.Env.Info().Debug,
+			ApplicationID: settings.ApplicationID(),
+		},
 	)
 }
