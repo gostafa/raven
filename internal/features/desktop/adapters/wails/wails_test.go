@@ -1,14 +1,206 @@
 package wails
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/fstest"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
+	autostart "raven/internal/features/autostart/application"
+	companion "raven/internal/features/companion/domain"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
+	"raven/internal/features/desktop/ports"
+	reminderwails "raven/internal/features/reminders/adapters/wails"
 )
+
+type windowRecorder struct {
+	companion.Windows
+	shown                                               atomic.Int32
+	hidden, configured, positioned, reset, closed, quit int
+}
+
+func (windows *windowRecorder) ShowMain()                   { windows.shown.Add(1) }
+func (windows *windowRecorder) HideMain()                   { windows.hidden++ }
+func (windows *windowRecorder) ConfigureWidget()            { windows.configured++ }
+func (windows *windowRecorder) PositionFloatingReview()     { windows.positioned++ }
+func (windows *windowRecorder) ResetWidget()                { windows.reset++ }
+func (windows *windowRecorder) RequestFloatingReviewClose() { windows.closed++ }
+func (windows *windowRecorder) Quit()                       { windows.quit++ }
+
+type reminderRecorder struct{ starts, wakes int }
+
+func (reminders *reminderRecorder) Start() { reminders.starts++ }
+func (reminders *reminderRecorder) Wake()  { reminders.wakes++ }
+func (*reminderRecorder) Stop()            {}
+
+type startupBackend struct {
+	failure error
+	enabled bool
+}
+
+func (backend *startupBackend) IsEnabled() (bool, error) { return backend.enabled, backend.failure }
+func (backend *startupBackend) EnableWithOptions(*autostart.Options) error {
+	backend.enabled = true
+	return nil
+}
+func (backend *startupBackend) Disable() error { backend.enabled = false; return nil }
+
+type startupSettings struct{}
+
+func (startupSettings) ClaimAutostartInitialization() (bool, error) { return false, nil }
+
+type mediaRoutes struct{}
+
+func (mediaRoutes) Middleware(next http.Handler) http.HandlerFunc { return next.ServeHTTP }
+
+func TestDesktopLifecycleAndNativeRegistrations(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	windows := &windowRecorder{}
+	visibility := autostart.NewVisibility(windows.ShowMain)
+	settings := &Configuration{
+		ApplicationID: "raven.tests",
+		LogErrorKey:   "error",
+		ShowReviews:   "reviews",
+		Layout:        configurationFixture().Layout,
+	}
+	app := NewApplication(&ApplicationDependencies{
+		Configuration: settings,
+		Logger:        logger,
+		Media:         mediaRoutes{},
+		Visibility:    visibility,
+		Assets: ports.Assets{
+			Files: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("Raven")}},
+		},
+	})
+	handles := NewWindows(app, settings)
+	backend := &startupBackend{}
+	startup := autostart.New(backend, false, settings.ApplicationID)
+	reminders := &reminderRecorder{}
+	desktop := New(&Dependencies{
+		Configuration: settings, App: app, Handles: handles, Windows: windows,
+		Visibility: visibility, Startup: startup, Settings: startupSettings{}, Reminders: reminders,
+		Notifications: reminderwails.NewRuntime(notifications.New(), logger, "error"),
+	})
+	desktop.invoke = func(callback func()) { callback() }
+	dialogs := 0
+	desktop.showDialog = func(dialog *application.MessageDialog) {
+		dialogs++
+		if dialog.Title != startupMenuTitle || !strings.Contains(dialog.Message, "startup failed") {
+			t.Errorf("wrong startup dialog: %+v", dialog)
+		}
+	}
+	desktop.Configure()
+	if applicationOptions(
+		&ApplicationDependencies{
+			Configuration: settings,
+			Media:         mediaRoutes{},
+			Assets:        ports.Assets{Files: fstest.MapFS{"index.html": &fstest.MapFile{}}},
+		},
+	).Assets.Middleware(
+		http.NotFoundHandler(),
+	) == nil {
+		t.Fatal("missing media middleware")
+	}
+	if len(desktop.subscriptions) != 11 {
+		t.Fatalf("registered %d handlers", len(desktop.subscriptions))
+	}
+	desktop.applicationStarted(nil)
+	desktop.widgetShown(nil)
+	desktop.widgetMoved(nil)
+	for _, closeWindow := range []func(*application.WindowEvent){desktop.reviewClosing, desktop.mainClosing, cancelClosing} {
+		event := application.NewWindowEvent()
+		closeWindow(event)
+		if !event.IsCancelled() {
+			t.Fatal("native close was not canceled")
+		}
+	}
+	desktop.systemWoke(nil)
+	desktop.becameActive(nil)
+	desktop.mainFocused(nil)
+	desktop.reopened(nil)
+	visibility.Classify(true)
+	desktop.openClicked(nil)
+	desktop.resetClicked(nil)
+	desktop.quitClicked(nil)
+	desktop.showReviews()
+	NewEvents(app).Emit("test:event")
+	if windows.configured != 2 || windows.positioned != 1 || windows.hidden != 1 ||
+		windows.closed != 1 ||
+		windows.reset != 2 ||
+		windows.quit != 1 ||
+		windows.shown.Load() != 3 ||
+		reminders.starts != 1 ||
+		reminders.wakes != 1 {
+		t.Fatalf("unexpected window or reminder actions: %+v %+v", windows, reminders)
+	}
+	desktop.reportStartupError(errors.New("startup failed"))
+	backend.failure = errors.New("refresh failed")
+	desktop.refreshStartup()
+	if dialogs != 1 || !strings.Contains(logs.String(), "could not refresh login startup status") {
+		t.Fatal("startup failures were not reported")
+	}
+	backend.failure = nil
+	toggled := make(chan struct{})
+	startup.SetPublisher(func(bool, bool) { close(toggled) })
+	desktop.toggleStartup(nil)
+	select {
+	case <-toggled:
+	case <-time.After(time.Second):
+		t.Fatal("startup menu toggle did not complete")
+	}
+	startup.SetPublisher(nil)
+	desktop.Dispose()
+	desktop.Dispose()
+	if desktop.subscriptions != nil {
+		t.Fatal("retained subscriptions")
+	}
+	desktop.Register(application.NewService(&struct{}{}))
+	desktop.run = func() error { return nil }
+	if err := desktop.Run(); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("event loop failed")
+	desktop.run = func() error { return failure }
+	if err := desktop.Run(); !errors.Is(err, failure) {
+		t.Fatalf("run error: %v", err)
+	}
+	options := singleInstanceOptions(
+		&ApplicationDependencies{Configuration: settings, Visibility: visibility},
+	)
+	options.OnSecondInstanceLaunch(application.SecondInstanceData{Args: []string{"--autostart"}})
+	options.OnSecondInstanceLaunch(application.SecondInstanceData{})
+}
+
+func TestOpenRequestsStopWithRuntime(t *testing.T) {
+	windows := &windowRecorder{}
+	desktop := &Desktop{windows: windows}
+	ctx, cancel := context.WithCancel(t.Context())
+	requests := make(chan struct{})
+	done := make(chan struct{})
+	go func() { desktop.Open(ctx, requests); close(done) }()
+	requests <- struct{}{}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("request loop did not stop")
+	}
+	if windows.shown.Load() != 1 {
+		t.Fatal("request did not show the library")
+	}
+}
 
 func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 	main := mainWindowOptions(&Configuration{Layout: configurationFixture().Layout})

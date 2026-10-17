@@ -341,7 +341,16 @@ func (storage *Store) writeBackup(file *os.File) error {
 	return nil
 }
 
-func writeBackupSnapshot(transaction *bolt.Tx, file *os.File) error {
+func syncAndClose(directory durableFile) error {
+	err := multierr.Append(directory.Sync(), directory.Close())
+	if err != nil {
+		return fmt.Errorf("sync and close directory: %w", err)
+	}
+
+	return nil
+}
+
+func writeBackupSnapshot(transaction snapshot, file *os.File) error {
 	written, err := transaction.WriteTo(file)
 	if err != nil {
 		return fmt.Errorf("copy migration snapshot: %w", err)
@@ -409,7 +418,17 @@ func (migration *schemaMigration) migrateFolder(folder *bolt.Bucket, folderID, v
 		return fmt.Errorf("prepare legacy folder: %w", err)
 	}
 
-	ids, err := legacyCardIDs(folder.Bucket([]byte(cardsBucket)))
+	return errors.Join(
+		migration.migrateFolderCards(prepared, folder.Bucket([]byte(cardsBucket)), folderID),
+	)
+}
+
+func (migration *schemaMigration) migrateFolderCards(
+	prepared *migrationFolder,
+	cards *bolt.Bucket,
+	folderID []byte,
+) error {
+	ids, err := legacyCardIDs(cards)
 	if err != nil {
 		return fmt.Errorf("read legacy card identifiers: %w", err)
 	}
@@ -1128,12 +1147,7 @@ func (storage *Store) cleanupMedia() error {
 		return fmt.Errorf(cleanupMediaErrorFormat, err)
 	}
 
-	err = storage.removeUnreferencedMedia(referencedMedia(storage.settings, cards))
-	if err != nil {
-		return fmt.Errorf(cleanupMediaErrorFormat, err)
-	}
-
-	return nil
+	return errors.Join(storage.removeUnreferencedMedia(referencedMedia(storage.settings, cards)))
 }
 
 func referencedMedia(settings *Settings, cards []cardapi.Card) map[string]bool {
@@ -1161,8 +1175,12 @@ func (storage *Store) removeUnreferencedMedia(referenced map[string]bool) error 
 		return fmt.Errorf(cleanupMediaErrorFormat, err)
 	}
 
+	return errors.Join(storage.cleanMediaEntries(entries, referenced))
+}
+
+func (storage *Store) cleanMediaEntries(entries []os.DirEntry, referenced map[string]bool) error {
 	for index := range entries {
-		err = storage.cleanMediaEntry(entries[index], referenced)
+		err := storage.cleanMediaEntry(entries[index], referenced)
 		if err != nil {
 			return fmt.Errorf(cleanupMediaErrorFormat, err)
 		}
@@ -1419,7 +1437,7 @@ func openDatabase(path string) (*bolt.DB, error) {
 	return db, nil
 }
 
-func newStore(db *bolt.DB, path string, deps *Dependencies) *Store {
+func newStore(db database, path string, deps *Dependencies) *Store {
 	settings := deps.Settings
 
 	return &Store{
@@ -1635,12 +1653,7 @@ func createFolderBucket(root *bolt.Bucket, folder *folderapi.Folder) error {
 		return fmt.Errorf("create folder bucket: %w", err)
 	}
 
-	err = initializeFolder(bucket, folder)
-	if err != nil {
-		return fmt.Errorf("initialize folder: %w", err)
-	}
-
-	return nil
+	return errors.Join(initializeFolder(bucket, folder))
 }
 
 func nextFolderID(root *bolt.Bucket) (string, error) {
@@ -1674,17 +1687,7 @@ func initializeFolder(bucket *bolt.Bucket, folder *folderapi.Folder) error {
 }
 
 func writeFolderMetadata(bucket *bolt.Bucket, folder *folderapi.Folder) error {
-	data, err := encodeRecord(folder)
-	if err != nil {
-		return fmt.Errorf("encode folder metadata: %w", err)
-	}
-
-	err = bucket.Put([]byte(metadataKey), data)
-	if err != nil {
-		return fmt.Errorf("save folder metadata: %w", err)
-	}
-
-	return nil
+	return errors.Join(writeRecord(bucket, []byte(metadataKey), folder))
 }
 
 // DeleteCard deletes an owned card and reconciles its media files.
@@ -1760,7 +1763,7 @@ func (storage *Store) DeleteFolder(folderID string) error {
 func newItemID() (string, error) {
 	var id [16]byte
 
-	count, readErr := rand.Read(id[:])
+	count, readErr := io.ReadFull(rand.Reader, id[:])
 	if readErr != nil {
 		return "", fmt.Errorf("new item i d: %w", readErr)
 	}
@@ -1972,17 +1975,7 @@ func putCard(bucket *bolt.Bucket, card *cardapi.Card) error {
 
 	metadata.Items = nil
 
-	data, err := encodeRecord(&metadata)
-	if err != nil {
-		return fmt.Errorf(putCardErrorFormat, err)
-	}
-
-	forwardErr6 := bucket.Put([]byte(card.ID), data)
-	if forwardErr6 != nil {
-		return fmt.Errorf(putCardErrorFormat, forwardErr6)
-	}
-
-	return nil
+	return errors.Join(writeRecord(bucket, []byte(card.ID), &metadata))
 }
 
 func writeCardBuckets(metadata, items *bolt.Bucket, card *cardapi.Card) error {
@@ -2056,14 +2049,22 @@ func deleteExistingItemBucket(root *bolt.Bucket, cardID string) error {
 }
 
 func writeContentItem(bucket *bolt.Bucket, item *contentapi.Item) error {
-	data, err := encodeRecord(item)
+	return errors.Join(writeRecord(bucket, []byte(item.ID), item))
+}
+
+func writeRecord(
+	bucket *bolt.Bucket,
+	key []byte,
+	value any,
+) error {
+	data, err := encodeRecord(value)
 	if err != nil {
-		return fmt.Errorf("encode content item: %w", err)
+		return fmt.Errorf("encode database record: %w", err)
 	}
 
-	err = bucket.Put([]byte(item.ID), data)
+	err = bucket.Put(key, data)
 	if err != nil {
-		return fmt.Errorf("write content item: %w", err)
+		return fmt.Errorf("write database record: %w", err)
 	}
 
 	return nil
@@ -2527,6 +2528,12 @@ func (review *cardRating) apply(transaction *bolt.Tx) error {
 		return fmt.Errorf(reviewItemAtErrorFormat, err)
 	}
 
+	return errors.Join(review.hydrate())
+}
+
+func (review *cardRating) hydrate() error {
+	var err error
+
 	review.card, err = library.Hydrate(&review.card)
 	if err != nil {
 		return fmt.Errorf(reviewItemAtErrorFormat, err)
@@ -2679,11 +2686,8 @@ func normalizeObject(data json.RawMessage) (json.RawMessage, error) {
 	}
 
 	encoded, err := encodeRecord(result)
-	if err != nil {
-		return nil, fmt.Errorf("encode stored object: %w", err)
-	}
 
-	return encoded, nil
+	return encoded, errors.Join(err)
 }
 
 func normalizeFields(fields map[string]json.RawMessage) (map[string]json.RawMessage, error) {
@@ -2726,11 +2730,8 @@ func normalizeArray(data json.RawMessage) (json.RawMessage, error) {
 	}
 
 	encoded, err := encodeRecord(values)
-	if err != nil {
-		return nil, fmt.Errorf("encode stored array: %w", err)
-	}
 
-	return encoded, nil
+	return encoded, errors.Join(err)
 }
 
 func normalizeElements(values []json.RawMessage) error {

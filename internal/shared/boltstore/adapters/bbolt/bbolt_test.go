@@ -2,10 +2,13 @@ package bbolt
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -29,9 +32,886 @@ import (
 	reviewapi "raven/api/reviews"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
+	libraryports "raven/internal/shared/boltstore/ports"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
+
+type failedEntropy struct{}
+
+func (failedEntropy) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+type failedDatabase struct{ database }
+
+func (failedDatabase) Close() error { return io.ErrUnexpectedEOF }
+
+type shortSnapshot struct{}
+
+func (shortSnapshot) WriteTo(io.Writer) (int64, error) { return 1, nil }
+func (shortSnapshot) Size() int64                      { return 2 }
+
+type failedDurableFile struct{ closed bool }
+
+func (*failedDurableFile) Sync() error       { return io.ErrUnexpectedEOF }
+func (file *failedDurableFile) Close() error { file.closed = true; return os.ErrClosed }
+
+type failedScheduler struct{ libraryports.Scheduler }
+
+func (failedScheduler) Initialize(time.Time) (reviewapi.Schedule, reviewapi.Log, error) {
+	return reviewapi.Schedule{}, reviewapi.Log{}, io.ErrUnexpectedEOF
+}
+
+func TestStorageBoundariesPreserveEncodingEntropyAndDurabilityFailures(t *testing.T) {
+	if err := writeBackupSnapshot(
+		shortSnapshot{},
+		nil,
+	); !errors.Is(
+		err,
+		errIncompleteMigrationBackup,
+	) {
+		t.Fatal(err)
+	}
+	file := &failedDurableFile{}
+	if err := syncAndClose(
+		file,
+	); !errors.Is(err, io.ErrUnexpectedEOF) || !errors.Is(err, os.ErrClosed) ||
+		!file.closed {
+		t.Fatalf("sync and close: %v", err)
+	}
+	if err := (&Store{db: failedDatabase{}}).Close(); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal(err)
+	}
+	if err := writeRecord(nil, nil, make(chan int)); err == nil {
+		t.Fatal("accepted unencodable record")
+	}
+	synced, err := os.CreateTemp(t.TempDir(), "durable-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syncAndClose(synced); err != nil {
+		t.Fatal(err)
+	}
+	entropy := rand.Reader
+	rand.Reader = failedEntropy{}
+	t.Cleanup(func() { rand.Reader = entropy })
+	if _, err := newItemID(); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal(err)
+	}
+	if _, err := legacyTextItems(
+		storeSettingsFixture(),
+		[]byte(`{"prompt":"Prompt","answer":"Answer"}`),
+	); !errors.Is(
+		err,
+		io.ErrUnexpectedEOF,
+	) {
+		t.Fatal(err)
+	}
+}
+
+func TestLegacyCorruptionAndFailedScheduleInitialization(t *testing.T) {
+	if compareLegacyItems(
+		&legacyItem{Side: legacyPromptSide},
+		&legacyItem{Side: legacyAnswerSide},
+	) >= 0 {
+		t.Fatal("legacy prompts must precede answers")
+	}
+	if compareLegacyItems(
+		&legacyItem{Side: legacyAnswerSide},
+		&legacyItem{Side: legacyPromptSide},
+	) <= 0 {
+		t.Fatal("legacy answers must follow prompts")
+	}
+	if compareLegacyItems(
+		&legacyItem{Side: legacyPromptSide, Item: &contentapi.Item{Position: 0}},
+		&legacyItem{Side: legacyPromptSide, Item: &contentapi.Item{Position: 1}},
+	) >= 0 {
+		t.Fatal("legacy items on the same side must retain their order")
+	}
+	store := openTestStore(t)
+	migration := &schemaMigration{
+		storage: store,
+		state:   schemaState{version: schemaV1, existing: true},
+	}
+	for _, data := range []string{"{", `{"prompt":"","answer":"Answer"}`} {
+		if _, err := legacyTextItems(store.settings, []byte(data)); err == nil {
+			t.Fatal("accepted invalid legacy text")
+		}
+	}
+	migration.state.version = "unsupported"
+	if _, err := migration.unscheduledItems(
+		nil,
+		&cardapi.Card{},
+	); !errors.Is(
+		err,
+		errUnsupportedDatabaseSchema,
+	) {
+		t.Fatal(err)
+	}
+	if _, err := mergeLegacyItems(
+		store.settings,
+		nil,
+		&cardapi.Card{},
+	); !errors.Is(
+		err,
+		errMissingLegacyCardContent,
+	) {
+		t.Fatal(err)
+	}
+	card := &cardapi.Card{ID: "card", FolderID: "folder"}
+	for _, data := range []string{"{", `{"id":"wrong"}`, `{"id":"item","folder_id":"folder","card_id":"card","side":"prompt","kind":"text","text":""}`} {
+		if _, err := store.settings.readLegacyItem([]byte("item"), []byte(data), card); err == nil {
+			t.Fatalf("accepted corrupt item %s", data)
+		}
+	}
+	if err := validateLegacyOrder(
+		[]*legacyItem{{Item: &contentapi.Item{Position: 0}, Side: legacyPromptSide}},
+	); !errors.Is(
+		err,
+		errMissingLegacyCardContent,
+	) {
+		t.Fatal(err)
+	}
+	store.scheduler = failedScheduler{}
+	migration.state.version = schemaV1
+	card.Items = []contentapi.Item{{ID: "item", Kind: "text", Text: "Prompt"}}
+	if err := migration.initializeSchedules(card); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal(err)
+	}
+	write := &cardWrite{storage: store, items: card.Items}
+	if err := write.persistPreparedCard(nil, nil); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal(err)
+	}
+}
+
+func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.db.Update(func(transaction *bolt.Tx) error {
+		root := transaction.Bucket([]byte(foldersBucket))
+		folder, err := root.CreateBucket([]byte("legacy"))
+		if err != nil {
+			return err
+		}
+		cards, err := folder.CreateBucket([]byte(cardsBucket))
+		if err != nil {
+			return err
+		}
+		migration := &schemaMigration{
+			storage: store,
+			state:   schemaState{version: schemaV2, existing: true},
+		}
+		if err := migration.migrateFolder(
+			nil,
+			nil,
+			[]byte("invalid"),
+		); !errors.Is(
+			err,
+			errInvalidLegacyFolder,
+		) {
+			t.Errorf("invalid folder: %v", err)
+		}
+		if _, err := migration.prepareFolder(
+			folder,
+			nil,
+		); !errors.Is(
+			err,
+			errMissingLegacyContentBucket,
+		) {
+			t.Errorf("missing legacy content: %v", err)
+		}
+		migration.state.version = schemaV1
+		if err := folder.Put([]byte(itemsBucket), []byte("scalar")); err != nil {
+			return err
+		}
+		if _, err := migration.prepareFolder(
+			folder,
+			nil,
+		); !errors.Is(
+			err,
+			bolt.ErrIncompatibleValue,
+		) {
+			t.Errorf("scalar legacy content: %v", err)
+		}
+		if err := cards.Put([]byte("broken"), []byte("{")); err != nil {
+			return err
+		}
+		if _, err := readLegacyCard(cards, []byte("legacy"), []byte("broken")); err == nil {
+			t.Error("accepted corrupt legacy metadata")
+		}
+		if _, err := legacyTextContent(
+			store.settings,
+			folder,
+			&cardapi.Card{ID: "broken"},
+		); err == nil {
+			t.Error("accepted corrupt legacy text")
+		}
+		if err := folder.Delete([]byte(itemsBucket)); err != nil {
+			return err
+		}
+		items, err := folder.CreateBucket([]byte(itemsBucket))
+		if err != nil {
+			return err
+		}
+		content, err := items.CreateBucket([]byte("broken"))
+		if err != nil {
+			return err
+		}
+		if err := content.Put([]byte("item"), []byte("{")); err != nil {
+			return err
+		}
+		if _, err := mergeLegacyItems(
+			store.settings,
+			content,
+			&cardapi.Card{ID: "broken"},
+		); err == nil {
+			t.Error("accepted corrupt item bucket")
+		}
+		metadata := transaction.Bucket([]byte(metaBucket))
+		if err := metadata.Delete([]byte(schemaKey)); err != nil {
+			return err
+		}
+		if _, err := metadata.CreateBucket([]byte(schemaKey)); err != nil {
+			return err
+		}
+		if err := root.DeleteBucket([]byte("legacy")); err != nil {
+			return err
+		}
+		if err := migration.apply(transaction); !errors.Is(err, bolt.ErrIncompatibleValue) {
+			t.Errorf("schema collision: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
+	store := openTestStore(t)
+	path, _ := mediaFixture(t, ".png")
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	item := &contentapi.Item{ID: strings.Repeat("a", 32), Kind: "image"}
+	store.mediaDir = filepath.Join(t.TempDir(), "missing")
+	if _, _, err := store.importOpenedMedia(file, item, path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if _, err := openDatabase(filepath.Join(path, "child", "raven.db")); err == nil {
+		t.Fatal("accepted file as database parent")
+	}
+	temp, err := os.CreateTemp(t.TempDir(), "staging-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := temp.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := stageMediaFile(temp, file, 0); !errors.Is(err, os.ErrClosed) {
+		t.Fatal(err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	temp, err = os.CreateTemp(t.TempDir(), "staging-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.ByteSize = info.Size()
+	item.RelativePath = "media/item.png"
+	store.mediaDir = t.TempDir()
+	if err := os.Mkdir(filepath.Join(store.mediaDir, "item.png"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.stageAndCommitMedia(temp, file, item); err == nil {
+		t.Fatal("renamed media over directory")
+	}
+	source, err := os.CreateTemp(t.TempDir(), "commit-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "target.png")
+	store.mediaDir = filepath.Join(t.TempDir(), "missing")
+	if runtime.GOOS != "windows" {
+		if _, err := store.commitMedia(source.Name(), target); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("failed commit retained media")
+		}
+	}
+	store.mediaDir = t.TempDir()
+	stale := filepath.Join(store.mediaDir, strings.Repeat("a", 32)+".png")
+	if err := os.WriteFile(stale, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(store.mediaDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.cleanMediaEntry(entries[0], nil); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := store.cleanMediaEntries(entries, nil); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.cleanupMedia(); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+		t.Fatal(err)
+	}
+	if path, err := DefaultPath(); err != nil || path == "" {
+		t.Fatalf("default path=%q error=%v", path, err)
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("AppData", "")
+	if _, err := DefaultPath(); err == nil {
+		t.Fatal("missing user directory accepted")
+	}
+}
+
+func TestMalformedCardContentAndWriteFailures(t *testing.T) {
+	store := openTestStore(t)
+	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Corrupt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCard(
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Update(func(transaction *bolt.Tx) error {
+		parent := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID))
+		metadata, items := parent.Bucket([]byte(cardsBucket)), parent.Bucket([]byte(itemsBucket))
+		if err := initializeFolder(parent, &folder); !errors.Is(err, bolt.ErrBucketExists) {
+			t.Errorf("duplicate content bucket: %v", err)
+		}
+		migration := &schemaMigration{
+			storage: store,
+			state:   schemaState{version: schemaV4, existing: true},
+		}
+		expected := card
+		expected.Items = append(append([]contentapi.Item{}, card.Items...), card.Items[0])
+		if err := migration.verifyCard(
+			transaction,
+			&expected,
+		); !errors.Is(
+			err,
+			errMissingCardContent,
+		) {
+			t.Errorf("missing migrated item: %v", err)
+		}
+		bad := card
+		bad.Items = append([]contentapi.Item{}, card.Items...)
+		bad.Items[0].Schedule.Stability = math.NaN()
+		if err := putItemsInRoot(items, &bad); err == nil {
+			t.Error("accepted unencodable schedule")
+		}
+		bad.Items[0].Schedule = card.Items[0].Schedule
+		bad.Items[0].Position = 3
+		if err := migration.persistCard(
+			&migrationFolder{parent: parent, items: items},
+			&bad,
+		); err == nil {
+			t.Error("accepted invalid migrated order")
+		}
+		if err := (&cardListing{storage: store}).read(transaction); err == nil {
+			t.Error("listed invalid content order")
+		}
+		write := &cardWrite{storage: store, folderID: folder.ID, card: bad}
+		if err := write.writeRecords(transaction, metadata); err == nil {
+			t.Error("accepted invalid saved content order")
+		}
+		if err := writeCardRecords(transaction, metadata, &card); err != nil {
+			return err
+		}
+		if err := metadata.Put([]byte(card.ID), []byte(`{"id":"wrong"}`)); err != nil {
+			return err
+		}
+		if _, err := readCardMetadata(metadata, folder.ID, card.ID); err == nil {
+			t.Error("accepted wrong card ownership")
+		}
+		if err := writeCardRecords(transaction, metadata, &card); err != nil {
+			return err
+		}
+		if err := metadata.Delete([]byte(card.ID)); err != nil {
+			return err
+		}
+		if _, err := metadata.CreateBucket([]byte(card.ID)); err != nil {
+			return err
+		}
+		if err := writeCardBuckets(
+			metadata,
+			items,
+			&card,
+		); !errors.Is(
+			err,
+			bolt.ErrIncompatibleValue,
+		) {
+			t.Errorf("migration metadata bucket: %v", err)
+		}
+		if err := writeCardRecords(
+			transaction,
+			metadata,
+			&card,
+		); !errors.Is(
+			err,
+			bolt.ErrIncompatibleValue,
+		) {
+			t.Errorf("card metadata bucket: %v", err)
+		}
+		if err := deleteOwnedCard(parent, card.ID); !errors.Is(err, bolt.ErrIncompatibleValue) {
+			t.Errorf("metadata deletion: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.View(func(transaction *bolt.Tx) error {
+		write := &cardWrite{storage: store, folderID: "missing"}
+		if err := write.persist(transaction); !errors.Is(err, errFolderNotFoundOrInvalid) {
+			t.Errorf("missing destination: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
+	store := openTestStore(t)
+	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Stages"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCard(
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.View(func(transaction *bolt.Tx) error {
+		parent := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID))
+		metadata, items := parent.Bucket([]byte(cardsBucket)), parent.Bucket([]byte(itemsBucket))
+		migration := &schemaMigration{
+			storage: store,
+			state:   schemaState{version: schemaV4, existing: true},
+		}
+		if err := migration.migrateCard(
+			&migrationFolder{parent: parent, items: items},
+			[]byte(folder.ID),
+			[]byte(card.ID),
+		); !errors.Is(
+			err,
+			bolt.ErrTxNotWritable,
+		) {
+			t.Errorf("read-only migration: %v", err)
+		}
+		write := &cardWrite{storage: store, folderID: folder.ID, cardID: card.ID, items: card.Items}
+		if err := write.persist(transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
+			t.Errorf("read-only prepared card: %v", err)
+		}
+		review := &cardRating{
+			storage:  store,
+			folderID: folder.ID,
+			cardID:   card.ID,
+			itemID:   card.Items[0].ID,
+			rating:   3,
+			now:      card.Items[0].Schedule.Due,
+		}
+		if err := review.apply(transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
+			t.Errorf("read-only review: %v", err)
+		}
+		if err := review.persistItem(transaction, &contentapi.Item{}); err == nil {
+			t.Error("accepted missing reviewed schedule")
+		}
+		if _, err := store.lookupMedia(
+			transaction,
+			[]string{folder.ID, card.ID, "missing"},
+		); !errors.Is(
+			err,
+			errMediaNotFound,
+		) {
+			t.Errorf("missing media: %v", err)
+		}
+		_ = metadata
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&cardRating{}).hydrate(); err == nil {
+		t.Fatal("hydrated an empty reviewed card")
+	}
+	if err := store.db.Update(func(transaction *bolt.Tx) error {
+		root := transaction.Bucket([]byte(foldersBucket))
+		if err := root.Put([]byte("scalar"), []byte("invalid")); err != nil {
+			return err
+		}
+		if err := (&cardListing{storage: store, root: root}).appendFolder(
+			[]byte("scalar"),
+			[]byte("invalid"),
+		); !errors.Is(
+			err,
+			errInvalidFolderBucket,
+		) {
+			t.Errorf("scalar folder: %v", err)
+		}
+		parent := root.Bucket([]byte(folder.ID))
+		metadata := parent.Bucket([]byte(cardsBucket))
+		if err := metadata.Put(
+			[]byte(card.ID),
+			[]byte(
+				fmt.Sprintf(
+					`{"id":%q,"folder_id":%q,"prompt":"Prompt","answer":"Answer"}`,
+					card.ID,
+					folder.ID,
+				),
+			),
+		); err != nil {
+			return err
+		}
+		store.scheduler = failedScheduler{}
+		migration := &schemaMigration{storage: store, state: schemaState{version: schemaV1}}
+		if err := migration.prepareCardContent(
+			parent,
+			&card,
+		); !errors.Is(
+			err,
+			io.ErrUnexpectedEOF,
+		) {
+			t.Errorf("migrated schedule: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := store.db.(*bolt.DB).Begin(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cards := transaction.Bucket([]byte(foldersBucket)).
+		Bucket([]byte(folder.ID)).
+		Bucket([]byte(cardsBucket))
+	if err := transaction.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&schemaMigration{}).migrateFolderCards(
+		nil,
+		cards,
+		nil,
+	); !errors.Is(
+		err,
+		bolt.ErrTxClosed,
+	) {
+		t.Fatalf("closed migration: %v", err)
+	}
+}
+
+func TestPersistentMarkersRejectReadOnlyAndCorruptBuckets(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.db.View(func(transaction *bolt.Tx) error {
+		for _, claim := range []func(*bolt.Tx) (bool, error){claimLoginSetting, claimNotificationSetting} {
+			if _, err := claim(transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
+				t.Errorf("read-only marker: %v", err)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Update(func(transaction *bolt.Tx) error {
+		if err := transaction.DeleteBucket([]byte(metaBucket)); err != nil {
+			return err
+		}
+		if _, err := claimNotificationSetting(transaction); !errors.Is(err, errMissingMetadata) {
+			t.Errorf("missing metadata: %v", err)
+		}
+		settings, err := transaction.CreateBucketIfNotExists([]byte(settingsBucket))
+		if err != nil {
+			return err
+		}
+		_, err = settings.CreateBucket([]byte(autostartInitializedKey))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimAutostartInitialization(); !errors.Is(err, bolt.ErrIncompatibleValue) {
+		t.Fatalf("corrupt login marker: %v", err)
+	}
+	if _, err := store.ClaimNotificationPrompt(); !errors.Is(err, errMissingMetadata) {
+		t.Fatalf("missing prompt metadata: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimNotificationPrompt(); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+		t.Fatal(err)
+	}
+}
+
+func TestMigrationBackupFailuresPreserveCauses(t *testing.T) {
+	store := openTestStore(t)
+	migration := &schemaMigration{
+		storage: store,
+		state:   schemaState{version: schemaV1, existing: true},
+	}
+	missing := filepath.Join(t.TempDir(), "missing", "raven.db")
+	if err := migration.backup(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backup path: %v", err)
+	}
+	file, err := os.CreateTemp(t.TempDir(), "backup-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = migration.finishBackup(file, filepath.Dir(missing))
+	if runtime.GOOS == "windows" {
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("backup directory sync: %v", err)
+	}
+	if err := store.db.Update(func(transaction *bolt.Tx) error {
+		return transaction.Bucket([]byte(metaBucket)).Put([]byte(schemaKey), []byte(schemaV4))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.planMigration(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("migration backup: %v", err)
+	}
+	file, err = os.CreateTemp(t.TempDir(), "closed-backup-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := migration.finishBackup(file, t.TempDir()); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("closed backup: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := migration.backup(
+		filepath.Join(t.TempDir(), "raven.db"),
+	); !errors.Is(
+		err,
+		bolt.ErrDatabaseNotOpen,
+	) {
+		t.Fatalf("closed database backup: %v", err)
+	}
+	state := schemaState{version: schemaV2}
+	if err := state.validate(); !errors.Is(err, errMissingFoldersBucket) {
+		t.Fatal(err)
+	}
+}
+
+func TestReadOnlyFolderAndCardWritesPreserveTransactionFailures(t *testing.T) {
+	store := openTestStore(t)
+	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Read-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := store.CreateCard(
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("prompt", "answer")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.View(func(transaction *bolt.Tx) error {
+		root := transaction.Bucket([]byte(foldersBucket))
+		bucket := root.Bucket([]byte(folder.ID))
+		metadata, items := bucket.Bucket([]byte(cardsBucket)), bucket.Bucket([]byte(itemsBucket))
+		migration := &schemaMigration{
+			storage: store,
+			state:   schemaState{version: schemaV4, existing: true},
+		}
+		for name, operation := range map[string]func() error{
+			"migration metadata":    func() error { return migration.apply(transaction) },
+			"migration root":        func() error { return migration.migrateRoot(transaction) },
+			"folder sequence":       func() error { return assignFolderID(root, &folderapi.Folder{}) },
+			"new folder":            func() error { return persistNewFolder(transaction, &folderapi.Folder{Title: "New"}) },
+			"folder metadata":       func() error { return writeFolderMetadata(bucket, &folder) },
+			"folder initialization": func() error { return initializeFolder(bucket, &folder) },
+			"card deletion":         func() error { return deleteOwnedCard(bucket, card.ID) },
+			"card record deletion":  func() error { return store.deleteCardRecords(transaction, folder.ID, card.ID) },
+			"item replacement":      func() error { _, err := replaceItemBucket(items, card.ID); return err },
+			"item allocation":       func() error { _, err := replaceItemBucket(items, "new"); return err },
+			"card metadata":         func() error { return putCard(metadata, &card) },
+			"card content":          func() error { return putItems(transaction, &card) },
+			"card buckets":          func() error { return writeCardBuckets(metadata, items, &card) },
+			"card records":          func() error { return writeCardRecords(transaction, metadata, &card) },
+			"card allocation":       func() error { _, err := allocateCard(metadata, folder.ID); return err },
+			"migration persistence": func() error { return migration.persistCard(&migrationFolder{parent: bucket, items: items}, &card) },
+			"notification acknowledgment": func() error {
+				return store.markOccurrences(transaction, []reviewapi.DueOccurrence{{FolderID: folder.ID, CardID: card.ID, ItemID: card.Items[0].ID, Due: card.Items[0].Schedule.Due.UnixMilli()}})
+			},
+		} {
+			if err := operation(); !errors.Is(err, bolt.ErrTxNotWritable) {
+				t.Errorf("%s: %v", name, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCorruptLibraryRootsAndExhaustedSequences(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.db.Update(func(transaction *bolt.Tx) error {
+		root := transaction.Bucket([]byte(foldersBucket))
+		if err := root.SetSequence(math.MaxUint64); err != nil {
+			return err
+		}
+		if _, err := nextFolderID(root); !errors.Is(err, errFolderIDSequenceExhausted) {
+			t.Errorf("folder sequence: %v", err)
+		}
+		if _, err := allocateCard(root, "folder"); err != nil {
+			t.Errorf("ordinary card allocation: %v", err)
+		}
+		if err := root.SetSequence(math.MaxUint64); err != nil {
+			return err
+		}
+		if _, err := allocateCard(root, "folder"); !errors.Is(err, errCardIDSequenceExhausted) {
+			t.Errorf("card sequence: %v", err)
+		}
+		if err := root.Put([]byte("invalid"), []byte("value")); err != nil {
+			return err
+		}
+		if _, err := readFolder(root, []byte("invalid"), []byte("value")); err == nil {
+			t.Error("accepted folder scalar")
+		}
+		if err := transaction.DeleteBucket([]byte(foldersBucket)); err != nil {
+			return err
+		}
+		for _, operation := range []func() error{
+			func() error { return (&folderListing{}).read(transaction) },
+			func() error { return (&cardListing{}).read(transaction) },
+			func() error { return persistNewFolder(transaction, &folderapi.Folder{}) },
+			func() error { return validateDestinationFolder(transaction, "folder") },
+		} {
+			if err := operation(); !errors.Is(err, errMissingFoldersBucket) {
+				t.Errorf("missing folder root: %v", err)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range []string{`{"id":"wrong","title":"Title"}`, `{"id":"one","title":""}`} {
+		if _, err := decodeFolder([]byte(data), "one"); !errors.Is(err, errInvalidFolderMetadata) {
+			t.Fatal(err)
+		}
+	}
+	folder, err := decodeFolder([]byte(`{"id":"one","title":"Title"}`), "one")
+	if err != nil || folder.Tags == nil {
+		t.Fatalf("legacy tags: %+v %v", folder, err)
+	}
+	if _, err := decodeCardMetadata(
+		[]byte(`{"id":"wrong","folder_id":"folder"}`),
+		"folder",
+		"card",
+	); !errors.Is(
+		err,
+		errInvalidCardMetadata,
+	) {
+		t.Fatal(err)
+	}
+	if err := (&cardContentReader{}).load(nil); !errors.Is(err, errMissingCardContent) {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateCard(&cardapi.UpdateInput{}); !errors.Is(err, errCardIDIsRequired) {
+		t.Fatal(err)
+	}
+}
+
+func TestMediaSignaturesAndFailedFileOperations(t *testing.T) {
+	settings := storeSettingsFixture()
+	for _, test := range []struct {
+		declared string
+		header   []byte
+		valid    bool
+	}{
+		{"video/quicktime", []byte("0000ftypqt  "), true},
+		{"image/avif", []byte("0000ftypavif"), true},
+		{"image/avif", []byte("0000ftypavis"), true},
+		{"image/avif", []byte("0000ftypisom"), false},
+		{"image/avif", []byte("invalid"), false},
+		{"audio/flac", []byte("fLaCdata"), true},
+	} {
+		if got := compatibleSignature(test.declared, test.header); got != test.valid {
+			t.Errorf("%s signature: %v", test.declared, got)
+		}
+	}
+	if mediaAlias(settings, settings.Rules.MIMEOggAudio) != "application/ogg" {
+		t.Fatal("lost Ogg alias")
+	}
+	store := openTestStore(t)
+	file, err := os.CreateTemp(t.TempDir(), "empty-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readMediaHeader(file); !errors.Is(err, errEmptyMediaFile) {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readMediaHeader(file); !errors.Is(err, os.ErrClosed) {
+		t.Fatal(err)
+	}
+	if _, err := settings.inspectMedia(
+		file,
+		"image",
+		"selected.png",
+	); !errors.Is(
+		err,
+		os.ErrClosed,
+	) {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	store.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	store.closeMediaFile(t.Context(), file)
+	store.reportCleanupFailure(io.ErrUnexpectedEOF)
+	if logs.Len() == 0 {
+		t.Fatal("file cleanup errors were not logged")
+	}
+	response := httptest.NewRecorder()
+	(&ownedMedia{file: file}).serve(
+		response,
+		httptest.NewRequest(http.MethodGet, "/media/test", nil),
+	)
+	if response.Code != http.StatusNotFound {
+		t.Fatal("served a closed media file")
+	}
+	store.mediaDir = filepath.Join(t.TempDir(), "missing")
+	if err := store.removeUnreferencedMedia(nil); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	store.mediaDir = file.Name()
+	if err := store.cleanupMedia(); err == nil {
+		t.Fatal("accepted a regular file as media directory")
+	}
+	if err := store.prepare(store.path); err == nil {
+		t.Fatal("startup accepted an invalid media directory")
+	}
+}
 
 func TestCardsPersistWithReviewSchedule(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
@@ -2043,7 +2923,7 @@ func TestRecordDecoderRejectsMalformedAndAmbiguousData(t *testing.T) {
 	}
 }
 
-func TestMediaCopyPreservesReadAndCloseFailures(t *testing.T) {
+func TestMediaCopyPreservesCopyAndCloseFailures(t *testing.T) {
 	source, err := os.CreateTemp(t.TempDir(), "source-*")
 	if err != nil {
 		t.Fatal(err)
@@ -2064,11 +2944,12 @@ func TestMediaCopyPreservesReadAndCloseFailures(t *testing.T) {
 	}
 	failures := multierr.Errors(errors.Unwrap(err))
 	if len(failures) != 2 {
-		t.Fatalf("expected read and close failures, got %v", failures)
+		t.Fatalf("expected copy and close failures, got %v", failures)
 	}
 	for index, path := range []string{source.Name(), target.Name()} {
 		var failure *os.PathError
-		if !errors.As(failures[index], &failure) || failure.Path != path ||
+		if !errors.As(failures[index], &failure) ||
+			(failure.Path != path && (index != 0 || failure.Path != target.Name())) ||
 			!errors.Is(failure, os.ErrClosed) {
 			t.Fatalf("expected failure for %q, got %v", path, failures[index])
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,20 +14,159 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
 	bolt "go.etcd.io/bbolt"
 	"go.uber.org/fx"
+	"go.uber.org/fx/fxevent"
 
 	cardapi "raven/api/cards"
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
+	mediaapi "raven/api/media"
+	companion "raven/internal/features/companion/domain"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
+	desktopwails "raven/internal/features/desktop/adapters/wails"
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
 	"raven/internal/shared/boltstore/ports"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
 	desktopmedia "raven/internal/shared/desktopmedia/adapters/wails"
+	"raven/internal/shared/lifetime"
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
+
+type desktopStub struct {
+	failure    error
+	registered int
+}
+
+func (desktop *desktopStub) Register(application.Service) { desktop.registered++ }
+func (desktop *desktopStub) Run() error                   { return desktop.failure }
+
+func TestExecutableGraphAndFailureReporting(t *testing.T) {
+	module := applicationModule
+	t.Cleanup(func() { applicationModule = module })
+	desktop := &desktopStub{}
+	runtime := lifetime.New()
+	t.Cleanup(runtime.Cancel)
+	applicationModule = fx.Options(fx.NopLogger, fx.Supply(
+		fx.Annotate(desktop, fx.As(new(desktopRunner))),
+		&RavenService{}, runtime,
+	))
+	main()
+	if desktop.registered != 2 {
+		t.Fatal("services were not registered")
+	}
+	failure := errors.New("desktop failed")
+	desktop.failure = failure
+	if err := run(); !errors.Is(err, failure) {
+		t.Fatalf("lost desktop error: %v", err)
+	}
+	applicationModule = fx.Error(failure)
+	if err := run(); !errors.Is(err, failure) {
+		t.Fatalf("lost graph error: %v", err)
+	}
+	var output bytes.Buffer
+	code := 0
+	logger := slog.New(slog.NewTextHandler(&output, nil))
+	exitOnError(failure, logger, func(value int) { code = value })
+	if code != startupFailureExitCode || !bytes.Contains(output.Bytes(), []byte(failure.Error())) {
+		t.Fatal("startup failure was not reported")
+	}
+	newFxLogger(logger).LogEvent(&fxevent.Started{})
+	if desktopRuntime(&desktopwails.Desktop{}) == nil {
+		t.Fatal("missing desktop runtime")
+	}
+}
+
+type facadeWindows struct {
+	companion.Windows
+	calls []string
+}
+
+func (windows *facadeWindows) ShowMain() { windows.calls = append(windows.calls, "show") }
+
+func (windows *facadeWindows) HideMain() { windows.calls = append(windows.calls, "hide") }
+
+func (windows *facadeWindows) ResetWidget() { windows.calls = append(windows.calls, "reset") }
+
+func (windows *facadeWindows) Quit() { windows.calls = append(windows.calls, "quit") }
+
+func (windows *facadeWindows) ToggleFloatingReview() { windows.calls = append(windows.calls, "toggle") }
+
+func (windows *facadeWindows) HideFloatingReview() {
+	windows.calls = append(windows.calls, "hide-review")
+}
+
+type facadeEvents struct{ names []string }
+
+func (events *facadeEvents) Emit(name string) { events.names = append(events.names, name) }
+
+type facadeReminders struct{ wakes int }
+
+func (*facadeReminders) Start()          {}
+func (*facadeReminders) Stop()           {}
+func (reminders *facadeReminders) Wake() { reminders.wakes++ }
+
+type facadeMedia struct{ failure error }
+
+func (media facadeMedia) Select(string) ([]mediaapi.Selection, error) {
+	return []mediaapi.Selection{{OriginalName: "test.png"}}, media.failure
+}
+
+type facadeRepository struct {
+	ports.Repository
+	failure error
+}
+
+func (repository facadeRepository) DeleteFolder(string) error       { return repository.failure }
+func (repository facadeRepository) DeleteCard(string, string) error { return repository.failure }
+
+func TestFacadeWindowCommandsAndDeletionEvents(t *testing.T) {
+	windows, events, reminders := &facadeWindows{}, &facadeEvents{}, &facadeReminders{}
+	service := newService(
+		serviceParams{Windows: windows, Events: events, Reminders: reminders, Media: facadeMedia{}},
+		configurationFixture(),
+	)
+	service.ShowMain()
+	service.HideMain()
+	service.ResetWidget()
+	service.Quit()
+	service.ToggleFloatingReview()
+	service.HideFloatingReview()
+	service.ShowReviews()
+	if !reflect.DeepEqual(
+		windows.calls,
+		[]string{"show", "hide", "reset", "quit", "toggle", "hide-review", "show"},
+	) {
+		t.Fatal(windows.calls)
+	}
+	if len(events.names) != 1 || events.names[0] != service.configuration.ShowReviews {
+		t.Fatal(events.names)
+	}
+	for _, remove := range []func() error{func() error { return service.DeleteFolder("folder") }, func() error { return service.DeleteCard("folder", "card") }} {
+		service.store = nil
+		if err := remove(); err == nil {
+			t.Fatal("missing storage accepted")
+		}
+		failure := errors.New("delete failed")
+		service.store = facadeRepository{failure: failure}
+		if err := remove(); err == nil || errors.Is(err, failure) {
+			t.Fatalf("delete failure: %v", err)
+		}
+		service.store = facadeRepository{}
+		if err := remove(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reminders.wakes != 2 || len(events.names) != 3 {
+		t.Fatal("deletions did not reconcile schedules")
+	}
+	selected, err := service.SelectMediaFiles("image")
+	if err != nil || len(selected) != 1 || selected[0].OriginalName != "test.png" {
+		t.Fatalf("media=%v error=%v", selected, err)
+	}
+}
 
 func TestCompleteDependencyGraph(t *testing.T) {
 	if err := fx.ValidateApp(applicationModule, fx.Invoke(func(*RavenService) {})); err != nil {

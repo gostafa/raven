@@ -8,6 +8,14 @@ import (
 	"testing"
 )
 
+func TestPreparingDetectionWaitsForNativeLaunch(t *testing.T) {
+	called := false
+	New().PrepareLoginDetection(func(bool) { called = true })
+	if called {
+		t.Fatal("registration classified launch before Cocoa delivered it")
+	}
+}
+
 func TestDetectorForwardsNativeLoginClassification(t *testing.T) {
 	var detected []bool
 	for _, automatic := range []bool{false, true} {

@@ -11,6 +11,7 @@ import (
 	autostartcomposition "raven/internal/features/autostart/composition"
 	companioncomposition "raven/internal/features/companion/composition"
 	configurationcomposition "raven/internal/features/configuration/composition"
+	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopcomposition "raven/internal/features/desktop/composition"
 	desktopports "raven/internal/features/desktop/ports"
 	remindercomposition "raven/internal/features/reminders/composition"
@@ -21,6 +22,7 @@ import (
 )
 
 var (
+	_ desktopRunner = (*desktopwails.Desktop)(nil)
 	//go:embed all:frontend/dist
 	assets embed.FS
 	//go:embed build/appicon.png
@@ -31,7 +33,7 @@ var (
 		fx.WithLogger(newFxLogger),
 		fx.Module("raven",
 			fx.Supply(desktopports.Assets{Files: assets, Icon: appIcon}),
-			fx.Provide(newService),
+			fx.Provide(newService, fx.Annotate(desktopRuntime, fx.As(new(desktopRunner)))),
 			configurationcomposition.Module,
 			storecomposition.Module,
 			mediacomposition.Module,

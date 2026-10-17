@@ -4,18 +4,52 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"testing"
+	"testing/fstest"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
 	"raven/internal/features/autostart/adapters/launch"
+	autostart "raven/internal/features/autostart/application"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
+	"raven/internal/features/desktop/ports"
+	reminderwails "raven/internal/features/reminders/adapters/wails"
+	mediawails "raven/internal/shared/desktopmedia/adapters/wails"
 	"raven/internal/shared/lifetime"
 )
+
+func TestNativeDesktopProvidersAndLifecycle(t *testing.T) {
+	settings := configurationFixture()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	requests := launch.New()
+	runtime := lifetime.New()
+	t.Cleanup(runtime.Cancel)
+	app := newApplication(appParams{
+		Media:      mediawails.NewRegistry(&mediawails.Dependencies{}, &mediawails.Settings{}),
+		Visibility: requests.Visibility(),
+		Logger:     logger,
+		Assets: ports.Assets{
+			Files: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("Raven")}},
+		},
+	}, settings)
+	lifecycle := fxtest.NewLifecycle(t)
+	desktop := newDesktop(desktopParams{
+		App: app, Handles: newWindows(app, settings), Lifecycle: lifecycle,
+		Runtime: runtime, Requests: requests, Visibility: requests.Visibility(),
+		Startup:       autostart.New(nil, true, settings.ApplicationID),
+		Notifications: reminderwails.NewRuntime(notifications.New(), logger, settings.LogErrorKey),
+	}, settings)
+	configureDesktop(desktop)
+	lifecycle.RequireStart()
+	lifecycle.RequireStop()
+}
 
 func TestBridgeLifetimeDeadlinesAndRepeatedShutdown(t *testing.T) {
 	runtime := lifetime.New()
@@ -103,6 +137,13 @@ func TestBridgeIsolatesStartupAndShutdownFailures(t *testing.T) {
 }
 
 func TestDesktopStopHonorsDeadline(t *testing.T) {
+	failure := errors.New("lifecycle failed")
+	if isolated := isolate(
+		failure,
+	); isolated.Error() != failure.Error() ||
+		errors.Unwrap(isolated) != nil {
+		t.Fatalf("lifecycle error contract: %v", isolated)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := waitForDesktop(ctx, make(chan struct{})); !errors.Is(err, context.Canceled) {

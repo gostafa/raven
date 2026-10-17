@@ -1,12 +1,87 @@
 package wails
 
 import (
+	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 )
+
+type fakeRuntime struct {
+	fakeNotifications
+	callback func(notifications.NotificationResult)
+	started  context.Context
+	stops    int
+}
+
+func (native *fakeRuntime) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
+	native.started = ctx
+	return native.failure
+}
+
+func (native *fakeRuntime) ServiceShutdown() error {
+	native.stops++
+	return native.failure
+}
+
+func (native *fakeRuntime) OnNotificationResponse(callback func(notifications.NotificationResult)) {
+	native.callback = callback
+}
+
+func TestOptionalNotificationLifecycleAndReviewActions(t *testing.T) {
+	for _, failStart := range []bool{false, true} {
+		native := &fakeRuntime{}
+		failure := errors.New("native failure")
+		if failStart {
+			native.failure = failure
+		}
+		runtime := NewRuntime(native, slog.New(slog.NewTextHandler(io.Discard, nil)), "error")
+		opened := 0
+		runtime.OnReview(func() { opened++ })
+		var response notifications.NotificationResult
+		response.Response.ActionIdentifier = notifications.DefaultActionIdentifier
+		native.callback(response)
+		runtime.Start(t.Context())
+		if runtime.Available() == failStart || native.started != t.Context() {
+			t.Fatal("incorrect startup state or context")
+		}
+		native.callback(notifications.NotificationResult{Error: failure})
+		native.callback(notifications.NotificationResult{})
+		native.callback(response)
+		if failStart {
+			if opened != 0 {
+				t.Fatal("unavailable runtime opened reviews")
+			}
+		} else if opened != 1 {
+			t.Fatal("default action did not open reviews exactly once")
+		}
+		if err := runtime.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		if runtime.Available() || native.stops != opened {
+			t.Fatal("incorrect shutdown state")
+		}
+	}
+	native := &fakeRuntime{}
+	runtime := NewRuntime(native, slog.Default(), "error")
+	runtime.Start(t.Context())
+	failure := errors.New("shutdown failure")
+	native.failure = failure
+	if err := runtime.Stop(); !errors.Is(err, failure) {
+		t.Fatalf("shutdown error: %v", err)
+	}
+	if runtime.Available() {
+		t.Fatal("failed shutdown retained availability")
+	}
+}
 
 type fakeNotifications struct {
 	failure        error

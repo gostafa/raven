@@ -5,7 +5,10 @@ package bbolt
 
 import (
 	"errors"
+	"os"
 	"regexp"
+
+	bolt "go.etcd.io/bbolt"
 
 	autostart "raven/internal/features/autostart/application"
 	reminders "raven/internal/features/reminders/application"
@@ -13,7 +16,10 @@ import (
 )
 
 var (
-	errStoreAlreadyStarted = errors.New(
+	_                      database    = (*bolt.DB)(nil)
+	_                      snapshot    = (*bolt.Tx)(nil)
+	_                      durableFile = (*os.File)(nil)
+	errStoreAlreadyStarted             = errors.New(
 		"library persistence already started",
 	)
 	_ libraryports.Repository = (*Store)(nil)

@@ -50,6 +50,9 @@ type (
 	}
 	// Desktop owns native desktop orchestration for the lifetime of Wails.
 	Desktop struct {
+		run           func() error
+		invoke        func(func())
+		showDialog    func(*application.MessageDialog)
 		windows       companion.Windows
 		reminders     reminderports.Control
 		store         autostart.Settings

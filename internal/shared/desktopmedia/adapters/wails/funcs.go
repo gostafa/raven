@@ -27,7 +27,14 @@ func NewPicker(
 	window *application.WebviewWindow,
 	registry *Registry,
 ) *Picker {
-	return &Picker{Registry: registry, choose: nativeChooser(app, window)}
+	return &Picker{
+		Registry: registry,
+		choose: nativeChooser(
+			app,
+			window,
+			(*application.OpenFileDialogStruct).PromptForMultipleSelection,
+		),
+	}
 }
 
 // NewRegistry creates media routes before native application construction.
@@ -49,16 +56,18 @@ func NewRegistry(dependencies *Dependencies, settings *Settings) *Registry {
 func nativeChooser(
 	app *application.App,
 	window *application.WebviewWindow,
+	prompt func(*application.OpenFileDialogStruct) ([]string, error),
 ) func(string, string) ([]string, error) {
 	return func(kind, filter string) ([]string, error) {
 		if app == nil || window == nil {
 			return nil, errFileSelectionIsUnavailable
 		}
 
-		paths, err := app.Dialog.OpenFile().AttachToWindow(window).CanChooseFiles(true).
+		dialog := app.Dialog.OpenFile().AttachToWindow(window).CanChooseFiles(true).
 			CanChooseDirectories(false).
-			AllowsOtherFileTypes(false).AddFilter(kind+" files", filter).
-			PromptForMultipleSelection()
+			AllowsOtherFileTypes(false).AddFilter(kind+" files", filter)
+
+		paths, err := prompt(dialog)
 		if err != nil {
 			return nil, fmt.Errorf("select native media files: %w", err)
 		}

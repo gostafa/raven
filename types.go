@@ -5,6 +5,7 @@
 package main
 
 import (
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
 
 	companion "raven/internal/features/companion/domain"
@@ -13,9 +14,21 @@ import (
 	reminderports "raven/internal/features/reminders/ports"
 	libraryports "raven/internal/shared/boltstore/ports"
 	mediaports "raven/internal/shared/desktopmedia/ports"
+	"raven/internal/shared/lifetime"
 )
 
 type (
+	desktopRunner interface {
+		Register(service application.Service)
+		Run() error
+	}
+	applicationParams struct {
+		fx.In
+
+		Desktop desktopRunner
+		Service *RavenService
+		Runtime *lifetime.Runtime
+	}
 	serviceResult[Value any] struct {
 		value   Value
 		failure error

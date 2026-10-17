@@ -22,7 +22,6 @@ import (
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopcomposition "raven/internal/features/desktop/composition"
 	libraryports "raven/internal/shared/boltstore/ports"
-	"raven/internal/shared/lifetime"
 )
 
 func newService(deps serviceParams, settings *configuration.Settings) *RavenService {
@@ -49,32 +48,31 @@ func newFxLogger(logger *slog.Logger) fxevent.Logger {
 }
 
 func main() {
-	err := run()
+	exitOnError(run(), newLogger(), os.Exit)
+}
+
+func exitOnError(err error, logger *slog.Logger, exit func(int)) {
 	if err != nil {
-		newLogger().ErrorContext(
+		logger.ErrorContext(
 			context.Background(),
 			"application stopped",
 			slog.String(startupDetailsKey, err.Error()),
 		)
-		os.Exit(startupFailureExitCode)
+		exit(startupFailureExitCode)
 	}
 }
 
 func run() error {
-	var (
-		desktop *desktopwails.Desktop
-		service *RavenService
-		runtime *lifetime.Runtime
-	)
+	var services applicationParams
 
-	graph, err := newApplicationGraph(&desktop, &service, &runtime)
+	graph, err := newApplicationGraph(&services)
 	if err != nil {
 		return fmt.Errorf("construct application graph: %w", err)
 	}
 
-	bridge := desktopcomposition.NewBridge(graph, runtime)
+	bridge := desktopcomposition.NewBridge(graph, services.Runtime)
 
-	err = runDesktop(desktop, bridge, service)
+	err = runDesktop(services.Desktop, bridge, services.Service)
 	if err != nil {
 		return fmt.Errorf("run desktop: %w", err)
 	}
@@ -82,12 +80,8 @@ func run() error {
 	return nil
 }
 
-func newApplicationGraph(
-	desktop **desktopwails.Desktop,
-	service **RavenService,
-	runtime **lifetime.Runtime,
-) (*fx.App, error) {
-	graph := fx.New(applicationModule, fx.Populate(desktop, service, runtime))
+func newApplicationGraph(services *applicationParams) (*fx.App, error) {
+	graph := fx.New(applicationModule, fx.Populate(services))
 
 	err := graph.Err()
 	if err != nil {
@@ -98,7 +92,7 @@ func newApplicationGraph(
 }
 
 func runDesktop(
-	desktop *desktopwails.Desktop,
+	desktop desktopRunner,
 	bridge *desktopcomposition.Bridge,
 	service *RavenService,
 ) error {
@@ -112,6 +106,8 @@ func runDesktop(
 
 	return nil
 }
+
+func desktopRuntime(desktop *desktopwails.Desktop) *desktopwails.Desktop { return desktop }
 
 // ListFolders returns folders in creation order.
 func (service *RavenService) ListFolders() ([]folderapi.Folder, error) {

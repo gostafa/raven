@@ -6,10 +6,9 @@
 package bbolt
 
 import (
+	"errors"
 	"fmt"
 	"os"
-
-	"go.uber.org/multierr"
 )
 
 func syncDirectory(path string) error {
@@ -18,10 +17,5 @@ func syncDirectory(path string) error {
 		return fmt.Errorf("open directory for sync: %w", err)
 	}
 
-	err = multierr.Append(directory.Sync(), directory.Close())
-	if err != nil {
-		return fmt.Errorf("sync and close directory: %w", err)
-	}
-
-	return nil
+	return errors.Join(syncAndClose(directory))
 }

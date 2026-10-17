@@ -13,10 +13,38 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
+
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
 )
+
+func TestNativeChooserConfiguresDialogAndPreservesResult(t *testing.T) {
+	app := application.New(application.Options{})
+	window := &application.WebviewWindow{}
+	failure := errors.New("native dialog failed")
+	for _, nativeFailure := range []error{nil, failure} {
+		choose := nativeChooser(
+			app,
+			window,
+			func(dialog *application.OpenFileDialogStruct) ([]string, error) {
+				if dialog == nil {
+					t.Fatal("missing dialog")
+				}
+				return []string{"selected.png"}, nativeFailure
+			},
+		)
+		paths, err := choose("image", "*.png")
+		if nativeFailure != nil {
+			if !errors.Is(err, nativeFailure) {
+				t.Fatalf("native failure: %v", err)
+			}
+		} else if err != nil || len(paths) != 1 || paths[0] != "selected.png" {
+			t.Fatalf("selection=%v error=%v", paths, err)
+		}
+	}
+}
 
 func TestUnavailablePickerAndSavedMediaReturnAvailabilityErrors(t *testing.T) {
 	picker := testPicker(nil)

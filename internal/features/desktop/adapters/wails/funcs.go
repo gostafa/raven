@@ -17,6 +17,10 @@ import (
 
 // NewApplication creates the single-instance shell before any persistence is opened.
 func NewApplication(deps *ApplicationDependencies) *application.App {
+	return application.New(applicationOptions(deps))
+}
+
+func applicationOptions(deps *ApplicationDependencies) application.Options {
 	options := desktopIdentityOptions(deps.Assets.Icon)
 
 	options.Logger = deps.Logger
@@ -26,7 +30,7 @@ func NewApplication(deps *ApplicationDependencies) *application.App {
 	options.Linux.DisableQuitOnLastWindowClosed = true
 	options.SingleInstance = singleInstanceOptions(deps)
 
-	return application.New(options)
+	return options
 }
 
 // NewWindows constructs all native window handles for injection into feature adapters.
@@ -41,11 +45,22 @@ func NewWindows(app *application.App, configuration *Configuration) companionwai
 // New constructs desktop orchestration with complete, stable dependencies.
 func New(deps *Dependencies) *Desktop {
 	return &Desktop{
+		run:           deps.App.Run,
+		invoke:        application.InvokeSync,
+		showDialog:    (*application.MessageDialog).Show,
 		configuration: *deps.Configuration,
-		app:           deps.App, mainWindow: deps.Handles.Main, widget: deps.Handles.Widget,
-		reviewWindow: deps.Handles.Review, windows: deps.Windows, store: deps.Settings,
-		visibility: deps.Visibility, startup: deps.Startup, reminders: deps.Reminders,
-		notifications: deps.Notifications, icon: deps.Assets.Icon, subscriptions: nil,
+		app:           deps.App,
+		mainWindow:    deps.Handles.Main,
+		widget:        deps.Handles.Widget,
+		reviewWindow:  deps.Handles.Review,
+		windows:       deps.Windows,
+		store:         deps.Settings,
+		visibility:    deps.Visibility,
+		startup:       deps.Startup,
+		reminders:     deps.Reminders,
+		notifications: deps.Notifications,
+		icon:          deps.Assets.Icon,
+		subscriptions: nil,
 	}
 }
 
@@ -71,7 +86,7 @@ func NewEvents(app *application.App) *EventPublisher { return &EventPublisher{ap
 
 // Run keeps the native event loop on the calling main goroutine.
 func (desktop *Desktop) Run() error {
-	err := desktop.app.Run()
+	err := desktop.run()
 	if err != nil {
 		return fmt.Errorf("run desktop application: %w", err)
 	}
@@ -245,15 +260,15 @@ func (desktop *Desktop) configureWidgetEvents() {
 	service := desktop
 	desktop.track(service.widget.OnWindowEvent(
 		events.Common.WindowShow,
-		func(_ *application.WindowEvent) { service.windows.ConfigureWidget() },
+		service.widgetShown,
 	))
 	desktop.track(service.widget.OnWindowEvent(
 		events.Common.WindowDidMove,
-		func(_ *application.WindowEvent) { service.windows.PositionFloatingReview() },
+		service.widgetMoved,
 	))
 	desktop.track(service.widget.OnWindowEvent(
 		events.Common.WindowDidResize,
-		func(_ *application.WindowEvent) { service.windows.ConfigureWidget() },
+		service.widgetShown,
 	))
 }
 
@@ -261,15 +276,15 @@ func (desktop *Desktop) configureClosingHooks() {
 	service := desktop
 	desktop.track(service.reviewWindow.RegisterHook(
 		events.Common.WindowClosing,
-		func(event *application.WindowEvent) { event.Cancel(); service.windows.RequestFloatingReviewClose() },
+		service.reviewClosing,
 	))
 	desktop.track(service.mainWindow.RegisterHook(
 		events.Common.WindowClosing,
-		func(event *application.WindowEvent) { event.Cancel(); service.windows.HideMain() },
+		service.mainClosing,
 	))
 	desktop.track(service.widget.RegisterHook(
 		events.Common.WindowClosing,
-		func(event *application.WindowEvent) { event.Cancel() },
+		cancelClosing,
 	))
 }
 
@@ -280,19 +295,19 @@ func (desktop *Desktop) configureLifecycleEvents() {
 	)
 	desktop.track(app.Event.OnApplicationEvent(
 		events.Common.SystemDidWake,
-		func(_ *application.ApplicationEvent) { desktop.reminders.Wake(); desktop.refreshStartup() },
+		desktop.systemWoke,
 	))
 	desktop.track(app.Event.OnApplicationEvent(
 		events.Mac.ApplicationShouldHandleReopen,
-		func(_ *application.ApplicationEvent) { desktop.visibility.RequestOpen() },
+		desktop.reopened,
 	))
 	desktop.track(app.Event.OnApplicationEvent(
 		events.Mac.ApplicationDidBecomeActive,
-		func(_ *application.ApplicationEvent) { desktop.refreshStartup() },
+		desktop.becameActive,
 	))
 	desktop.track(desktop.mainWindow.OnWindowEvent(
 		events.Common.WindowFocus,
-		func(_ *application.WindowEvent) { desktop.refreshStartup() },
+		desktop.mainFocused,
 	))
 }
 
@@ -317,10 +332,9 @@ func (desktop *Desktop) reportStartupError(err error) {
 		//nolint:sloglint // Log field names come from validated embedded configuration.
 		slog.Any(desktop.configuration.LogErrorKey, err),
 	)
-	app.Dialog.Error().
+	desktop.showDialog(app.Dialog.Error().
 		SetTitle(startupMenuTitle).
-		SetMessage(startupErrorMessage + err.Error()).
-		Show()
+		SetMessage(startupErrorMessage + err.Error()))
 }
 
 func (desktop *Desktop) refreshStartup() {
@@ -342,14 +356,14 @@ func (desktop *Desktop) toggleStartup(_ *application.Context) {
 func (desktop *Desktop) populateMenu(menu *application.Menu) *application.MenuItem {
 	service := desktop
 
-	menu.Add(openMenuTitle).OnClick(func(_ *application.Context) { service.windows.ShowMain() })
-	menu.Add(resetMenuTitle).OnClick(func(_ *application.Context) { service.windows.ResetWidget() })
+	menu.Add(openMenuTitle).OnClick(service.openClicked)
+	menu.Add(resetMenuTitle).OnClick(service.resetClicked)
 	menu.AddSeparator()
 
 	startup := menu.AddCheckbox(startupMenuTitle, false).SetEnabled(false)
 	startup.OnClick(desktop.toggleStartup)
 	menu.AddSeparator()
-	menu.Add(quitMenuTitle).OnClick(func(_ *application.Context) { service.windows.Quit() })
+	menu.Add(quitMenuTitle).OnClick(service.quitClicked)
 
 	return startup
 }
@@ -365,7 +379,7 @@ func (desktop *Desktop) configureMenus() {
 	tray := app.SystemTray.New().SetIcon(desktop.icon).SetMenu(trayMenu)
 	tray.SetTooltip(appTitle)
 	desktop.startup.SetPublisher(func(checked, available bool) {
-		application.InvokeSync(func() {
+		desktop.invoke(func() {
 			widgetStartup.SetChecked(checked).SetEnabled(available)
 			trayStartup.SetChecked(checked).SetEnabled(available)
 			menu.Update()
@@ -373,6 +387,47 @@ func (desktop *Desktop) configureMenus() {
 		})
 	})
 }
+
+func (desktop *Desktop) widgetShown(
+	_ *application.WindowEvent,
+) {
+	desktop.windows.ConfigureWidget()
+}
+
+func (desktop *Desktop) widgetMoved(_ *application.WindowEvent) {
+	desktop.windows.PositionFloatingReview()
+}
+
+func (desktop *Desktop) reviewClosing(event *application.WindowEvent) {
+	event.Cancel()
+	desktop.windows.RequestFloatingReviewClose()
+}
+
+func (desktop *Desktop) mainClosing(event *application.WindowEvent) {
+	event.Cancel()
+	desktop.windows.HideMain()
+}
+func cancelClosing(event *application.WindowEvent) { event.Cancel() }
+func (desktop *Desktop) systemWoke(_ *application.ApplicationEvent) {
+	desktop.reminders.Wake()
+	desktop.refreshStartup()
+}
+
+func (desktop *Desktop) reopened(
+	_ *application.ApplicationEvent,
+) {
+	desktop.visibility.RequestOpen()
+}
+func (desktop *Desktop) becameActive(_ *application.ApplicationEvent) { desktop.refreshStartup() }
+func (desktop *Desktop) mainFocused(_ *application.WindowEvent)       { desktop.refreshStartup() }
+func (desktop *Desktop) openClicked(_ *application.Context)           { desktop.windows.ShowMain() }
+
+func (desktop *Desktop) resetClicked(
+	_ *application.Context,
+) {
+	desktop.windows.ResetWidget()
+}
+func (desktop *Desktop) quitClicked(_ *application.Context) { desktop.windows.Quit() }
 
 func (desktop *Desktop) track(cancel func()) {
 	desktop.subscriptions = append(desktop.subscriptions, cancel)

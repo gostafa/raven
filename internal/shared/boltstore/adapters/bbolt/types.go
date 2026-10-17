@@ -5,6 +5,7 @@
 package bbolt
 
 import (
+	"io"
 	"log/slog"
 	"os"
 	"sync"
@@ -21,6 +22,21 @@ import (
 )
 
 type (
+	database interface {
+		View(callback func(*bolt.Tx) error) error
+		Update(callback func(*bolt.Tx) error) error
+		Close() error
+		Path() string
+		Stats() bolt.Stats
+	}
+	snapshot interface {
+		WriteTo(writer io.Writer) (int64, error)
+		Size() int64
+	}
+	durableFile interface {
+		Sync() error
+		Close() error
+	}
 	// Dependencies supplies stable runtime dependencies and shared persistence settings.
 	Dependencies struct {
 		Batch     ports.BatchExecutor
@@ -43,7 +59,7 @@ type (
 		settings  *Settings
 		scheduler ports.Scheduler
 		logger    *slog.Logger
-		db        *bolt.DB
+		db        database
 		path      string
 		mediaDir  string
 		mediaMu   sync.Mutex
