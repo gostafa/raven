@@ -21,6 +21,7 @@ import (
 
 	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
 	bolt "go.etcd.io/bbolt"
+	"go.uber.org/multierr"
 
 	cardapi "raven/api/cards"
 	contentapi "raven/api/content"
@@ -1817,6 +1818,38 @@ func TestRecordDecoderRejectsMalformedAndAmbiguousData(t *testing.T) {
 		var target map[string]any
 		if err := decodeRecord([]byte(data), &target); err == nil {
 			t.Fatalf("accepted %q", data)
+		}
+	}
+}
+
+func TestMediaCopyPreservesReadAndCloseFailures(t *testing.T) {
+	source, err := os.CreateTemp(t.TempDir(), "source-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.CreateTemp(t.TempDir(), "target-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = target.Close(); err != nil {
+		t.Fatal(err)
+	}
+	size, err := copyMediaFile(target, source)
+	if size != 0 || !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("expected closed-file failure without copied bytes, got %d, %v", size, err)
+	}
+	failures := multierr.Errors(errors.Unwrap(err))
+	if len(failures) != 2 {
+		t.Fatalf("expected read and close failures, got %v", failures)
+	}
+	for index, path := range []string{source.Name(), target.Name()} {
+		var failure *os.PathError
+		if !errors.As(failures[index], &failure) || failure.Path != path ||
+			!errors.Is(failure, os.ErrClosed) {
+			t.Fatalf("expected failure for %q, got %v", path, failures[index])
 		}
 	}
 }

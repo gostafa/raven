@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
+	"go.uber.org/multierr"
 
 	cardapi "raven/api/cards"
 	configurationapi "raven/api/configuration"
@@ -67,18 +67,50 @@ func run() error {
 		runtime *lifetime.Runtime
 	)
 
-	graph := fx.New(applicationModule, fx.Populate(&desktop, &service, &runtime))
-
-	err := graph.Err()
+	graph, err := newApplicationGraph(&desktop, &service, &runtime)
 	if err != nil {
 		return fmt.Errorf("construct application graph: %w", err)
 	}
 
 	bridge := desktopcomposition.NewBridge(graph, runtime)
+
+	err = runDesktop(desktop, bridge, service)
+	if err != nil {
+		return fmt.Errorf("run desktop: %w", err)
+	}
+
+	return nil
+}
+
+func newApplicationGraph(
+	desktop **desktopwails.Desktop,
+	service **RavenService,
+	runtime **lifetime.Runtime,
+) (*fx.App, error) {
+	graph := fx.New(applicationModule, fx.Populate(desktop, service, runtime))
+
+	err := graph.Err()
+	if err != nil {
+		return nil, fmt.Errorf("populate application services: %w", err)
+	}
+
+	return graph, nil
+}
+
+func runDesktop(
+	desktop *desktopwails.Desktop,
+	bridge *desktopcomposition.Bridge,
+	service *RavenService,
+) error {
 	desktop.Register(application.NewService(bridge))
 	desktop.Register(application.NewService(service))
 
-	return errors.Join(desktop.Run(), bridge.ServiceShutdown())
+	err := multierr.Append(desktop.Run(), bridge.ServiceShutdown())
+	if err != nil {
+		return fmt.Errorf("run and shut down application: %w", err)
+	}
+
+	return nil
 }
 
 // ListFolders returns folders in creation order.

@@ -6,9 +6,10 @@
 package boltstore
 
 import (
-	"errors"
 	"fmt"
 	"os"
+
+	"go.uber.org/multierr"
 )
 
 func syncDirectory(path string) error {
@@ -17,7 +18,7 @@ func syncDirectory(path string) error {
 		return fmt.Errorf("open directory for sync: %w", err)
 	}
 
-	err = errors.Join(directory.Sync(), directory.Close())
+	err = multierr.Append(directory.Sync(), directory.Close())
 	if err != nil {
 		return fmt.Errorf("sync and close directory: %w", err)
 	}

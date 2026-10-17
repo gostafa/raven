@@ -24,6 +24,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	"go.uber.org/multierr"
 
 	cardapi "raven/api/cards"
 	contentapi "raven/api/content"
@@ -283,7 +284,10 @@ func (migration *schemaMigration) backup(path string) error {
 func (migration *schemaMigration) finishBackup(file *os.File, directory string) error {
 	err := migration.storage.writeBackup(file)
 	if err != nil {
-		return fmt.Errorf("write migration backup: %w", errors.Join(err, os.Remove(file.Name())))
+		return fmt.Errorf(
+			"write migration backup: %w",
+			multierr.Append(err, os.Remove(file.Name())),
+		)
 	}
 
 	err = syncDirectory(directory)
@@ -296,22 +300,31 @@ func (migration *schemaMigration) finishBackup(file *os.File, directory string) 
 
 func (storage *Store) writeBackup(file *os.File) error {
 	err := storage.db.View(func(transaction *bolt.Tx) error {
-		written, failure := transaction.WriteTo(file)
-		if failure != nil {
-			return fmt.Errorf("copy migration snapshot: %w", failure)
-		}
-
-		if written != transaction.Size() {
-			return errIncompleteMigrationBackup
-		}
-
-		return nil
+		return writeBackupSnapshot(transaction, file)
 	})
 	if err == nil {
 		err = file.Sync()
 	}
 
-	return errors.Join(err, file.Close())
+	err = multierr.Append(err, file.Close())
+	if err != nil {
+		return fmt.Errorf("write and close migration backup: %w", err)
+	}
+
+	return nil
+}
+
+func writeBackupSnapshot(transaction *bolt.Tx, file *os.File) error {
+	written, err := transaction.WriteTo(file)
+	if err != nil {
+		return fmt.Errorf("copy migration snapshot: %w", err)
+	}
+
+	if written != transaction.Size() {
+		return errIncompleteMigrationBackup
+	}
+
+	return nil
 }
 
 func (migration *schemaMigration) apply(transaction *bolt.Tx) error {
@@ -1052,7 +1065,7 @@ func copyMediaFile(target *os.File, source io.Reader) (int64, error) {
 		err = target.Sync()
 	}
 
-	err = errors.Join(err, target.Close())
+	err = multierr.Append(err, target.Close())
 	if err != nil {
 		return size, fmt.Errorf("copy and sync media: %w", err)
 	}
@@ -1349,7 +1362,7 @@ func (storage *Store) openPersistence() error {
 func (storage *Store) prepareOpenedDatabase() error {
 	err := storage.prepare(storage.path)
 	if err != nil {
-		failure := errors.Join(err, storage.db.Close())
+		failure := multierr.Append(err, storage.db.Close())
 
 		storage.db = nil
 
