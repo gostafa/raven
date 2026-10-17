@@ -19,6 +19,7 @@ import (
 	configuration "raven/internal/features/configuration/domain"
 	desktopports "raven/internal/features/desktop/ports"
 	"raven/internal/features/library/adapters/boltstore"
+	"raven/internal/features/library/adapters/cffbatch"
 	"raven/internal/features/library/adapters/scheduling"
 	librarycomposition "raven/internal/features/library/composition"
 	libraryports "raven/internal/features/library/ports"
@@ -143,6 +144,7 @@ func TestLifecycleOrderingReadinessAndLockRelease(t *testing.T) {
 	reopened, err := boltstore.Open(
 		path,
 		&boltstore.Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
@@ -205,6 +207,7 @@ func TestPartialStartupRollsBackEveryStartedResource(t *testing.T) {
 	store, err := boltstore.Open(
 		path,
 		&boltstore.Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),

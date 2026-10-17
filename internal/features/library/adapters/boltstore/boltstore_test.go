@@ -29,6 +29,7 @@ import (
 	reviewapi "raven/api/reviews"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
+	"raven/internal/features/library/adapters/cffbatch"
 	"raven/internal/features/library/adapters/scheduling"
 )
 
@@ -102,11 +103,223 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 	}
 }
 
+// Noncanonical JSON and a sequence marker reveal accidental bucket replacement
+// and rewriting of records that do not belong to an update.
+func markItemBucket(t *testing.T, store *Store, card *cardapi.Card) map[string][]byte {
+	t.Helper()
+	err := store.db.Update(func(tx *bolt.Tx) error {
+		bucket := testItemBucket(tx, card)
+		if err := bucket.SetSequence(42); err != nil {
+			return err
+		}
+		for index := range card.Items {
+			item := &card.Items[index]
+			data := append([]byte(" \n"), bucket.Get([]byte(item.ID))...)
+			if err := bucket.Put([]byte(item.ID), data); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshotItemRecords(t, store, card)
+}
+
+func testItemBucket(tx *bolt.Tx, card *cardapi.Card) *bolt.Bucket {
+	return tx.Bucket([]byte(foldersBucket)).Bucket([]byte(card.FolderID)).
+		Bucket([]byte(itemsBucket)).Bucket([]byte(card.ID))
+}
+
+func snapshotItemRecords(t *testing.T, store *Store, card *cardapi.Card) map[string][]byte {
+	t.Helper()
+	records := make(map[string][]byte)
+	err := store.db.View(func(tx *bolt.Tx) error {
+		bucket := testItemBucket(tx, card)
+		if bucket.Sequence() != 42 {
+			t.Error("item bucket sequence changed")
+		}
+		return bucket.ForEach(func(key, value []byte) error {
+			records[string(key)] = bytes.Clone(value)
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
+
+func TestReviewWritesOnlyOwnedItemAndReturnsHydratedCard(t *testing.T) {
+	store, cards := persistenceFixture(t, 3)
+	card := &cards[0]
+	before := markItemBucket(t, store, card)
+	item := &card.Items[0]
+	now := item.Schedule.Due.Add(time.Second)
+	updated, err := store.reviewItemAt(&cardapi.ReviewInput{
+		FolderID: card.FolderID, CardID: card.ID, ItemID: item.ID, Rating: 4,
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := snapshotItemRecords(t, store, card)
+	for index := range card.Items {
+		id := card.Items[index].ID
+		if bytes.Equal(before[id], after[id]) != (index != 0) {
+			t.Fatalf("unexpected record change for item %d", index)
+		}
+	}
+	if updated.LastReviewed != now.UnixMilli() ||
+		updated.DueAt != card.Items[1].Schedule.Due.UnixMilli() {
+		t.Fatal("returned aggregate schedule is stale")
+	}
+	listed, err := store.ListCards()
+	if err != nil || !reflect.DeepEqual(listed[0], updated) {
+		t.Fatalf("returned card differs from stored card: %v", err)
+	}
+	assertReopenedCards(t, store, listed)
+}
+
+func assertReopenedCards(t *testing.T, store *Store, expected []cardapi.Card) {
+	t.Helper()
+	path := store.db.Path()
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	actual, err := reopened.ListCards()
+	if err != nil || !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("cards changed after reopening: %v", err)
+	}
+}
+
+func notificationOccurrence(card *cardapi.Card, index int) reviewapi.DueOccurrence {
+	item := &card.Items[index]
+	return reviewapi.DueOccurrence{
+		FolderID: card.FolderID,
+		CardID:   card.ID,
+		ItemID:   item.ID,
+		Due:      item.Schedule.Due.UnixMilli(),
+	}
+}
+
+func TestNotificationBatchWritesOnlyChangedItems(t *testing.T) {
+	store, cards := persistenceFixture(t, 3)
+	before := make([]map[string][]byte, len(cards))
+	for index := range cards {
+		before[index] = markItemBucket(t, store, &cards[index])
+	}
+	first := notificationOccurrence(&cards[0], 0)
+	other := notificationOccurrence(&cards[1], 0)
+	second := notificationOccurrence(&cards[0], 1)
+	stale := notificationOccurrence(&cards[0], 2)
+	stale.Due--
+	missing := first
+	missing.ItemID = "missing"
+	batch := []reviewapi.DueOccurrence{first, other, first, stale, missing, second}
+	if err := store.MarkNotified(batch); err != nil {
+		t.Fatal(err)
+	}
+	for index := range cards {
+		after := snapshotItemRecords(t, store, &cards[index])
+		for position, item := range cards[index].Items {
+			changed := (index == 0 && position < 2) || (index == 1 && position == 0)
+			if bytes.Equal(before[index][item.ID], after[item.ID]) == changed {
+				t.Fatalf("unexpected change for card %d item %d", index, position)
+			}
+		}
+	}
+	err := store.db.Update(func(tx *bolt.Tx) error {
+		if err := store.markOccurrences(tx, batch); err != nil {
+			return err
+		}
+		stats := tx.Stats()
+		if stats.GetNodeCount() != 0 {
+			t.Error("no-op acknowledgment batch dirtied records")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.ListCards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listed[0].Items[0].LastNotifiedDue != first.Due ||
+		listed[0].Items[1].LastNotifiedDue != second.Due ||
+		listed[1].Items[0].LastNotifiedDue != other.Due {
+		t.Fatal("acknowledgments did not persist")
+	}
+	assertReopenedCards(t, store, listed)
+}
+
+func TestNotificationBatchRollsBackEarlierCards(t *testing.T) {
+	for _, missingFolder := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missingFolder=%t", missingFolder), func(t *testing.T) {
+			store, cards := persistenceFixture(t, 2)
+			before := markItemBucket(t, store, &cards[0])
+			missing := notificationOccurrence(&cards[1], 0)
+			missing.CardID = "missing"
+			expected := errCardNotFound
+			if missingFolder {
+				missing.FolderID = "missing"
+				expected = errFolderNotFoundOrInvalid
+			}
+			err := store.MarkNotified([]reviewapi.DueOccurrence{
+				notificationOccurrence(&cards[0], 0), missing,
+			})
+			if !errors.Is(err, expected) {
+				t.Fatalf("unexpected missing-record error: %v", err)
+			}
+			if !reflect.DeepEqual(before, snapshotItemRecords(t, store, &cards[0])) {
+				t.Fatal("failed batch committed earlier acknowledgment")
+			}
+		})
+	}
+}
+
+func TestTargetedUpdatesStillValidateSiblingContent(t *testing.T) {
+	for _, operation := range []string{"review", "acknowledge"} {
+		t.Run(operation, func(t *testing.T) {
+			store, cards := persistenceFixture(t, 2)
+			card := &cards[0]
+			markItemBucket(t, store, card)
+			if err := store.db.Update(func(tx *bolt.Tx) error {
+				return testItemBucket(tx, card).Put([]byte(card.Items[1].ID), []byte("invalid"))
+			}); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotItemRecords(t, store, card)
+			var err error
+			if operation == "review" {
+				_, err = store.ReviewItem(&cardapi.ReviewInput{
+					FolderID: card.FolderID, CardID: card.ID, ItemID: card.Items[0].ID, Rating: 3,
+				})
+			} else {
+				err = store.MarkNotified([]reviewapi.DueOccurrence{notificationOccurrence(card, 0)})
+			}
+			if err == nil {
+				t.Fatal("corrupt sibling content was ignored")
+			}
+			if !reflect.DeepEqual(before, snapshotItemRecords(t, store, card)) {
+				t.Fatal("failed update changed item records")
+			}
+		})
+	}
+}
+
 func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
 	store := New(
 		path,
 		&Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    storageLogger(nil),
 			Settings:  *storeSettingsFixture(),
@@ -145,6 +358,7 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 	reopened, err := Open(
 		path,
 		&Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
@@ -179,6 +393,7 @@ func TestFailedPreparationReleasesManagedDatabase(t *testing.T) {
 	store := New(
 		path,
 		&Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    storageLogger(nil),
 			Settings:  *storeSettingsFixture(),
@@ -456,6 +671,9 @@ func TestContentValidationAndRollback(t *testing.T) {
 		{Kind: "image", SourcePath: image},
 		{Kind: "audio", SourcePath: "missing.wav"},
 	}
+	for range 6 {
+		failed = append(failed, contentapi.Draft{Kind: "image", SourcePath: image})
+	}
 	if _, err := s.UpdateCard(
 		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: failed},
 	); err == nil {
@@ -474,6 +692,8 @@ func TestContentValidationAndRollback(t *testing.T) {
 	if _, err := s.CreateCard(&cardapi.CreateInput{
 		FolderID: folder.ID,
 		Items: []contentapi.Draft{
+			{Kind: "image", SourcePath: image},
+			{Kind: "image", SourcePath: image},
 			{Kind: "image", SourcePath: image},
 			{Kind: "text", Text: "Answer"},
 		},
@@ -1575,6 +1795,7 @@ func openStore(path string) (*Store, error) {
 	return Open(
 		path,
 		&Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
@@ -2034,7 +2255,11 @@ func TestConfiguredContentAndMediaRouteSurvivePersistence(t *testing.T) {
 	settings.Rules.TextKind = "plain"
 	settings.MediaRoutePrefix = "/saved/"
 	path := filepath.Join(t.TempDir(), "raven.db")
-	deps := &Dependencies{Scheduler: scheduling.New(&settings.Rules), Settings: *settings}
+	deps := &Dependencies{
+		Batch:     cffbatch.New(),
+		Scheduler: scheduling.New(&settings.Rules),
+		Settings:  *settings,
+	}
 	store, err := Open(path, deps)
 	if err != nil {
 		t.Fatal(err)

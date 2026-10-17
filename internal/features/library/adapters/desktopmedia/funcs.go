@@ -31,16 +31,18 @@ func NewPicker(
 }
 
 // NewRegistry creates media routes before native application construction.
-func NewRegistry(saved func() http.Handler, logger *slog.Logger, settings *Settings) *Registry {
+func NewRegistry(dependencies *Dependencies, settings *Settings) *Registry {
+	saved := dependencies.Saved
 	if saved == nil {
 		saved = func() http.Handler { return nil }
 	}
 
 	return &Registry{
 		settings: *settings,
+		batch:    dependencies.Batch,
 		saved:    saved,
 		previews: sync.Map{},
-		logger:   logger,
+		logger:   dependencies.Logger,
 	}
 }
 
@@ -98,19 +100,56 @@ func (picker *Picker) describePaths(
 	filter string,
 ) ([]mediaapi.Selection, error) {
 	selected := make([]mediaapi.Selection, zero, len(paths))
-	for index := range paths {
-		value, err := picker.describePath(paths[index], filter)
-		if err != nil {
-			return nil, fmt.Errorf("inspect selected media: %w", err)
-		}
-
-		selected = append(selected, value)
+	for range paths {
+		selected = append(selected, mediaapi.Selection{
+			SourcePath: "", OriginalName: "", PreviewURL: "", ByteSize: zero,
+		})
 	}
+
+	jobs := picker.inspectionJobs(paths, selected, filter)
+
+	err := picker.batch.Run(context.Background(), jobs)
+	if err != nil {
+		return nil, fmt.Errorf("inspect selection: %w", err)
+	}
+
+	picker.registerPreviews(selected)
 
 	return selected, nil
 }
 
-func (picker *Picker) describePath(path, filter string) (mediaapi.Selection, error) {
+func (*Picker) inspectionJobs(
+	paths []string,
+	selected []mediaapi.Selection,
+	filter string,
+) []func(context.Context) error {
+	jobs := make([]func(context.Context) error, zero, len(paths))
+	for index := range paths {
+		jobs = append(jobs, func(context.Context) error {
+			value, err := describePath(paths[index], filter)
+			if err != nil {
+				return fmt.Errorf("inspect selected media: %w", err)
+			}
+
+			selected[index] = value
+
+			return nil
+		})
+	}
+
+	return jobs
+}
+
+func (picker *Picker) registerPreviews(selected []mediaapi.Selection) {
+	for index := range selected {
+		key := rand.Text()
+		picker.previews.Store(key, selected[index].SourcePath)
+
+		selected[index].PreviewURL = picker.settings.PreviewRoutePrefix + key
+	}
+}
+
+func describePath(path, filter string) (mediaapi.Selection, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return mediaapi.Selection{}, fmt.Errorf("inspect selected file: %w", err)
@@ -121,14 +160,11 @@ func (picker *Picker) describePath(path, filter string) (mediaapi.Selection, err
 		return mediaapi.Selection{}, fmt.Errorf("validate selected file: %w", err)
 	}
 
-	key := rand.Text()
-	picker.previews.Store(key, path)
-
 	return mediaapi.Selection{
 		SourcePath:   path,
 		OriginalName: filepath.Base(path),
 		ByteSize:     info.Size(),
-		PreviewURL:   picker.settings.PreviewRoutePrefix + key,
+		PreviewURL:   "",
 	}, nil
 }
 

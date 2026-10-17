@@ -14,6 +14,7 @@ import (
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	"raven/internal/features/library/adapters/boltstore"
+	"raven/internal/features/library/adapters/cffbatch"
 	"raven/internal/features/library/adapters/scheduling"
 	reminders "raven/internal/features/reminders/application"
 )
@@ -70,6 +71,7 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 	store, err := boltstore.Open(
 		path,
 		&boltstore.Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
@@ -120,6 +122,7 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 	store, err = boltstore.Open(
 		path,
 		&boltstore.Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),

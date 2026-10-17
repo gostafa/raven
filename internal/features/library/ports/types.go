@@ -5,6 +5,7 @@
 package ports
 
 import (
+	"context"
 	"net/http"
 
 	cardapi "raven/api/cards"
@@ -14,6 +15,14 @@ import (
 )
 
 type (
+	// BatchExecutor runs independent jobs with bounded concurrency. It returns the
+	// first error in input order and drains started jobs even after cancellation.
+	// Job failures do not skip other jobs; cancellation skips pending jobs.
+	// Panics become errors, and an empty batch succeeds even when canceled.
+	BatchExecutor interface {
+		Run(ctx context.Context, jobs []func(context.Context) error) error
+	}
+
 	// Repository provides library persistence and durable application settings.
 	Repository interface {
 		Folders

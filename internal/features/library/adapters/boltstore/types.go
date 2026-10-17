@@ -17,11 +17,13 @@ import (
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	library "raven/internal/features/library/domain"
+	"raven/internal/features/library/ports"
 )
 
 type (
 	// Dependencies supplies stable runtime dependencies and shared persistence settings.
 	Dependencies struct {
+		Batch     ports.BatchExecutor
 		Scheduler library.Scheduler
 		Logger    *slog.Logger
 		Settings  Settings
@@ -37,6 +39,7 @@ type (
 
 	// Store owns atomic database and media persistence.
 	Store struct {
+		batch     ports.BatchExecutor
 		settings  *Settings
 		scheduler library.Scheduler
 		logger    *slog.Logger
@@ -92,10 +95,16 @@ type (
 		rating   int
 	}
 	cardListing struct {
-		storage     *Store
-		transaction *bolt.Tx
-		folderID    string
-		cards       []cardapi.Card
+		storage  *Store
+		root     *bolt.Bucket
+		items    *bolt.Bucket
+		schema   string
+		folderID string
+		cards    []cardapi.Card
+	}
+	notificationCard struct {
+		items  map[string]*contentapi.Item
+		bucket *bolt.Bucket
 	}
 	folderListing struct {
 		root    *bolt.Bucket

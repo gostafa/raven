@@ -22,6 +22,7 @@ import (
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	"raven/internal/features/library/adapters/boltstore"
+	"raven/internal/features/library/adapters/cffbatch"
 	"raven/internal/features/library/adapters/desktopmedia"
 	"raven/internal/features/library/adapters/scheduling"
 	"raven/internal/features/library/ports"
@@ -121,6 +122,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	store, err := boltstore.Open(
 		path,
 		&boltstore.Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
@@ -185,6 +187,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	reopened, err := boltstore.Open(
 		path,
 		&boltstore.Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
@@ -216,7 +219,7 @@ func TestMediaMiddlewareAndPickerErrors(t *testing.T) {
 		status int
 	}{{"/", http.StatusAccepted}, {"/media/folder/card/item", http.StatusServiceUnavailable}} {
 		w := httptest.NewRecorder()
-		desktopmedia.NewRegistry(nil, slog.New(slog.NewTextHandler(io.Discard, nil)), mediaSettingsFixture()).
+		desktopmedia.NewRegistry(&desktopmedia.Dependencies{Saved: nil, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Batch: cffbatch.New()}, mediaSettingsFixture()).
 			Middleware(next).
 			ServeHTTP(w, httptest.NewRequest("GET", test.path, nil))
 		if w.Code != test.status {
@@ -258,6 +261,7 @@ func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
 	store, err := boltstore.Open(
 		filepath.Join(t.TempDir(), "raven.db"),
 		&boltstore.Dependencies{
+			Batch:     cffbatch.New(),
 			Scheduler: scheduling.New(&configurationFixture().Library),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),

@@ -25,6 +25,7 @@ type (
 	storeParams  struct {
 		fx.In
 
+		Batch     libraryports.BatchExecutor
 		Lifecycle fx.Lifecycle
 		Scheduler library.Scheduler
 		Logger    *slog.Logger
@@ -37,6 +38,13 @@ type (
 		Repository libraryports.Repository
 		Reminders  reminders.Source
 		Settings   autostart.Settings
+	}
+	registryParams struct {
+		fx.In
+
+		Batch  libraryports.BatchExecutor
+		Store  *boltstore.Store
+		Logger *slog.Logger
 	}
 	mediaParams struct {
 		fx.In

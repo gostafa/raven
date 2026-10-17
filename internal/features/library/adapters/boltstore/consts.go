@@ -26,7 +26,7 @@ const (
 
 	privateFileMode = 0o600
 	mediaHeaderSize = 512
-	mediaItemPart   = 2
+	two             = 2
 	mediaRouteParts = 3
 	isoHeaderSize   = 12
 	isoSignatureEnd = 8

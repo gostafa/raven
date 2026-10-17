@@ -9,6 +9,7 @@ import (
 
 	contentapi "raven/api/content"
 	reviewapi "raven/api/reviews"
+	"raven/internal/features/library/ports"
 )
 
 type (
@@ -32,18 +33,28 @@ type (
 		) (reviewapi.Schedule, reviewapi.Log, error)
 		Validate(schedule *reviewapi.Schedule) error
 	}
+	// PreparationInput supplies draft content and its previous owned records.
+	PreparationInput struct {
+		Drafts   []contentapi.Draft
+		Previous []contentapi.Item
+	}
 	// PreparationDependencies supplies media import and identifier generation.
 	PreparationDependencies struct {
+		Batch       ports.BatchExecutor
 		ImportMedia func(*contentapi.Item, string) (contentapi.Item, string, error)
 		NewID       func() (string, error)
 	}
 
+	mediaPreparation struct {
+		dependencies *PreparationDependencies
+		textKind     string
+		items        []contentapi.Item
+		drafts       []contentapi.Draft
+		paths        []string
+	}
 	itemPreparation struct {
-		rules       *Rules
-		previous    map[string]contentapi.Item
-		seen        map[string]bool
-		importMedia func(*contentapi.Item, string) (contentapi.Item, string, error)
-		newID       func() (string, error)
-		imported    []string
+		previous map[string]contentapi.Item
+		seen     map[string]bool
+		newID    func() (string, error)
 	}
 )

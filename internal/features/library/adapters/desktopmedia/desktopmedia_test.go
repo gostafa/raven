@@ -15,6 +15,7 @@ import (
 
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
+	"raven/internal/features/library/adapters/cffbatch"
 )
 
 func TestUnavailablePickerAndSavedMediaReturnAvailabilityErrors(t *testing.T) {
@@ -148,6 +149,41 @@ func TestSelectionValidatesFilesAndCreatesPreviews(t *testing.T) {
 	}
 }
 
+func TestBatchSelectionPreservesOrderAndRegistersOnlySuccessfulBatches(t *testing.T) {
+	directory := t.TempDir()
+	paths := make([]string, 8)
+	for index := range paths {
+		paths[index] = filepath.Join(directory, strings.Repeat("a", index+1)+".png")
+		if err := os.WriteFile(paths[index], []byte("selected"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	picker := testPicker(nil)
+	selected, err := picker.describePaths(paths, selectionFilter("image"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range paths {
+		path, exists := picker.previewPath(selected[index].PreviewURL)
+		if !exists || path != paths[index] || selected[index].SourcePath != paths[index] {
+			t.Fatalf("selection %d: %+v preview=%s", index, selected[index], path)
+		}
+	}
+	failed := testPicker(nil)
+	paths[1] = filepath.Join(directory, "missing.png")
+	if values, err := failed.describePaths(
+		paths,
+		selectionFilter("image"),
+	); err == nil ||
+		values != nil {
+		t.Fatalf("failed selection: %+v %v", values, err)
+	}
+	failed.previews.Range(func(key, value any) bool {
+		t.Errorf("failed batch registered preview %v: %v", key, value)
+		return true
+	})
+}
+
 func TestPreviewRegistryAndRoutingFailures(t *testing.T) {
 	service := testPicker(func() http.Handler {
 		return http.HandlerFunc(
@@ -223,7 +259,14 @@ func testPicker(saved func() http.Handler) *Picker {
 	return NewPicker(
 		nil,
 		nil,
-		NewRegistry(saved, slog.New(slog.NewTextHandler(io.Discard, nil)), mediaSettingsFixture()),
+		NewRegistry(
+			&Dependencies{
+				Saved:  saved,
+				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				Batch:  cffbatch.New(),
+			},
+			mediaSettingsFixture(),
+		),
 	)
 }
 
@@ -231,11 +274,11 @@ func TestConfiguredMediaRoutesReachPickerAndMiddleware(t *testing.T) {
 	settings := mediaSettingsFixture()
 	settings.MediaRoutePrefix = "/saved/"
 	settings.PreviewRoutePrefix = "/preview/"
-	registry := NewRegistry(func() http.Handler {
+	registry := NewRegistry(&Dependencies{Saved: func() http.Handler {
 		return http.HandlerFunc(
 			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) },
 		)
-	}, slog.New(slog.NewTextHandler(io.Discard, nil)), settings)
+	}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Batch: cffbatch.New()}, settings)
 	picker := NewPicker(nil, nil, registry)
 	path := filepath.Join(t.TempDir(), "selected.png")
 	if err := os.WriteFile(path, []byte("selected image"), 0o600); err != nil {

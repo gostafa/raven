@@ -6,7 +6,6 @@ package composition
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"go.uber.org/fx"
@@ -42,14 +41,13 @@ func defaultPath() (DatabasePath, error) {
 	return DatabasePath(path), nil
 }
 
-func newRegistry(
-	store *boltstore.Store,
-	logger *slog.Logger,
-	settings *configuration.Settings,
-) *desktopmedia.Registry {
+func newRegistry(params registryParams, settings *configuration.Settings) *desktopmedia.Registry {
 	return desktopmedia.NewRegistry(
-		func() http.Handler { return store.MediaHandler() },
-		logger,
+		&desktopmedia.Dependencies{
+			Saved:  func() http.Handler { return params.Store.MediaHandler() },
+			Logger: params.Logger,
+			Batch:  params.Batch,
+		},
 		&desktopmedia.Settings{
 			MediaRoutePrefix:   settings.MediaRoutePrefix,
 			PreviewRoutePrefix: settings.PreviewRoutePrefix,
@@ -71,7 +69,7 @@ func storeDependencies(
 	settings *configuration.Settings,
 ) *boltstore.Dependencies {
 	return &boltstore.Dependencies{
-		Scheduler: params.Scheduler, Logger: params.Logger,
+		Batch: params.Batch, Scheduler: params.Scheduler, Logger: params.Logger,
 		Settings: boltstore.Settings{
 			Rules:            settings.Library,
 			MediaRoutePrefix: settings.MediaRoutePrefix,

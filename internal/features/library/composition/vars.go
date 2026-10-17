@@ -6,6 +6,7 @@ package composition
 import (
 	"go.uber.org/fx"
 
+	"raven/internal/features/library/adapters/cffbatch"
 	library "raven/internal/features/library/domain"
 	libraryports "raven/internal/features/library/ports"
 )
@@ -15,6 +16,7 @@ import (
 //nolint:gochecknoglobals // Fx modules are immutable dependency registration declarations.
 var Module = fx.Module("library",
 	fx.Provide(
+		fx.Annotate(cffbatch.New, fx.As(new(libraryports.BatchExecutor))),
 		fx.Annotate(newScheduler, fx.As(new(library.Scheduler))),
 		newStore,
 		defaultPath,
