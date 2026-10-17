@@ -35,6 +35,56 @@ linters:
           rules:
             - pattern: '**'
               max: 0.3
+            # Public data contracts are concrete, stable leaves by design.
+            # Adding interfaces to DTOs would not improve their dependency direction.
+            - pattern: raven/api/cards
+              max: 0.84
+            - pattern: raven/api/configuration
+              max: 1.0
+            - pattern: raven/api/content
+              max: 0.8
+            - pattern: raven/api/folders
+              max: 1.0
+            - pattern: raven/api/media
+              max: 1.0
+            - pattern: raven/api/reviews
+              max: 1.0
+            # These adapters already implement consumer-owned ports. Module-only
+            # dependency counts omit their OS, Wails, config, and CFF dependencies.
+            - pattern: raven/internal/features/autostart/adapters/launch
+              max: 0.34
+            - pattern: raven/internal/features/autostart/adapters/native
+              max: 0.5
+            - pattern: raven/internal/features/companion/adapters/native
+              max: 0.5
+            - pattern: raven/internal/features/configuration/adapters/yaml
+              max: 0.34
+            - pattern: raven/internal/features/reminders/adapters/worker
+              max: 0.34
+            - pattern: raven/internal/shared/cffbatch/adapters/cff
+              max: 0.34
+            # Application policy owns concrete controller state alongside its
+            # injected backend and settings interfaces.
+            - pattern: raven/internal/features/autostart/application
+              max: 0.6
+            # Shared settings, geometry, and content rules are concrete domain
+            # values; their consumers should depend on these stable contracts.
+            - pattern: raven/internal/features/configuration/domain
+              max: 0.85
+            - pattern: raven/internal/features/companion/domain
+              max: 0.34
+            - pattern: raven/internal/shared/boltstore/domain
+              max: 0.39
+            # Loader references its domain result, while desktop ports include
+            # the concrete embedded-assets value alongside their interfaces.
+            - pattern: raven/internal/features/configuration/ports
+              max: 0.34
+            - pattern: raven/internal/features/desktop/ports
+              max: 0.34
+            # This shared owner encapsulates context cancellation and locking;
+            # its standard-library dependencies are outside the module metric.
+            - pattern: raven/internal/shared/lifetime
+              max: 1.0
       reusability:
         type: module
         description: Enforce Go type reusability policy thresholds
