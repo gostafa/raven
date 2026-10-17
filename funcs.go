@@ -21,7 +21,7 @@ import (
 	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopcomposition "raven/internal/features/desktop/composition"
-	libraryports "raven/internal/features/library/ports"
+	libraryports "raven/internal/shared/boltstore/ports"
 	"raven/internal/shared/lifetime"
 )
 

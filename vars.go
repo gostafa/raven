@@ -13,8 +13,11 @@ import (
 	configurationcomposition "raven/internal/features/configuration/composition"
 	desktopcomposition "raven/internal/features/desktop/composition"
 	desktopports "raven/internal/features/desktop/ports"
-	librarycomposition "raven/internal/features/library/composition"
 	remindercomposition "raven/internal/features/reminders/composition"
+	storecomposition "raven/internal/shared/boltstore/composition"
+	batchcomposition "raven/internal/shared/cffbatch/composition"
+	mediacomposition "raven/internal/shared/desktopmedia/composition"
+	schedulingcomposition "raven/internal/shared/scheduling/composition"
 )
 
 var (
@@ -30,7 +33,10 @@ var (
 			fx.Supply(desktopports.Assets{Files: assets, Icon: appIcon}),
 			fx.Provide(newService),
 			configurationcomposition.Module,
-			librarycomposition.Module,
+			storecomposition.Module,
+			mediacomposition.Module,
+			schedulingcomposition.Module,
+			batchcomposition.Module,
 			autostartcomposition.Module,
 			companioncomposition.Module,
 			remindercomposition.Module,

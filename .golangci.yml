@@ -689,8 +689,8 @@ linters:
         text: '\.[A-Za-z]+(Params|Result) \(type\): reusability'
         linters:
           - reusability
-      # Ports deliberately collect the named interfaces owned by their feature.
-      - path: '^internal/features/[^/]+/ports/types\.go$'
+      # Ports deliberately collect the named interfaces owned by their consumer.
+      - path: '^internal/(features|shared)/[^/]+/ports/types\.go$'
         text: '^max-public-structs:'
         linters:
           - revive

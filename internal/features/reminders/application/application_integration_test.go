@@ -13,10 +13,10 @@ import (
 	reviewapi "raven/api/reviews"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
-	"raven/internal/features/library/adapters/boltstore"
-	"raven/internal/features/library/adapters/cffbatch"
-	"raven/internal/features/library/adapters/scheduling"
 	reminders "raven/internal/features/reminders/application"
+	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
+	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
+	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
 
 func TestReminderSnapshotGroupsDueItemsAndFindsNextDeadline(t *testing.T) {

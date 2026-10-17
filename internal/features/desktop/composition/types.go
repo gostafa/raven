@@ -16,9 +16,9 @@ import (
 	companionwails "raven/internal/features/companion/adapters/wails"
 	companion "raven/internal/features/companion/domain"
 	"raven/internal/features/desktop/ports"
-	libraryports "raven/internal/features/library/ports"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
 	reminderports "raven/internal/features/reminders/ports"
+	mediaports "raven/internal/shared/desktopmedia/ports"
 	"raven/internal/shared/lifetime"
 )
 
@@ -26,7 +26,7 @@ type (
 	appParams struct {
 		fx.In
 
-		Media      libraryports.MediaRoutes
+		Media      mediaports.MediaRoutes
 		Visibility *autostart.Visibility
 		Logger     *slog.Logger
 		Assets     ports.Assets

@@ -21,11 +21,11 @@ import (
 	folderapi "raven/api/folders"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
-	"raven/internal/features/library/adapters/boltstore"
-	"raven/internal/features/library/adapters/cffbatch"
-	"raven/internal/features/library/adapters/desktopmedia"
-	"raven/internal/features/library/adapters/scheduling"
-	"raven/internal/features/library/ports"
+	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
+	"raven/internal/shared/boltstore/ports"
+	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
+	desktopmedia "raven/internal/shared/desktopmedia/adapters/wails"
+	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
 
 func TestCompleteDependencyGraph(t *testing.T) {

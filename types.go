@@ -10,8 +10,9 @@ import (
 	companion "raven/internal/features/companion/domain"
 	configuration "raven/internal/features/configuration/domain"
 	desktopports "raven/internal/features/desktop/ports"
-	libraryports "raven/internal/features/library/ports"
 	reminderports "raven/internal/features/reminders/ports"
+	libraryports "raven/internal/shared/boltstore/ports"
+	mediaports "raven/internal/shared/desktopmedia/ports"
 )
 
 type (
@@ -23,7 +24,7 @@ type (
 		fx.In
 
 		Repository libraryports.Repository
-		Media      libraryports.Selection
+		Media      mediaports.Selection
 		Windows    companion.Windows
 		Events     desktopports.Events
 		Reminders  reminderports.Control
@@ -32,7 +33,7 @@ type (
 	RavenService struct {
 		configuration *configuration.Settings
 		store         libraryports.Repository
-		media         libraryports.Selection
+		media         mediaports.Selection
 		windows       companion.Windows
 		events        desktopports.Events
 		reminders     reminderports.Control

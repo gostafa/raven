@@ -7,7 +7,7 @@ import (
 
 	companion "raven/internal/features/companion/domain"
 	"raven/internal/features/configuration/domain"
-	library "raven/internal/features/library/domain"
+	library "raven/internal/shared/boltstore/domain"
 )
 
 func TestEmbeddedDefaultsPreserveExistingContracts(t *testing.T) {

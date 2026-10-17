@@ -6,7 +6,7 @@ package domain
 
 import (
 	companion "raven/internal/features/companion/domain"
-	library "raven/internal/features/library/domain"
+	library "raven/internal/shared/boltstore/domain"
 )
 
 type (

@@ -100,7 +100,7 @@ func coreDependencyError(path string, s source) error {
 func isComposition(path string) bool {
 	parts := strings.Split(path, "/")
 	return len(parts) == 1 || (len(parts) >= 5 && parts[0] == "internal" &&
-		parts[1] == "features" && parts[3] == "composition")
+		(parts[1] == "features" || parts[1] == "shared") && parts[3] == "composition")
 }
 
 func featureLayoutError(path string) error {
@@ -299,8 +299,8 @@ func TestConventionFixtures(t *testing.T) {
 		})
 	}
 	for _, text := range []string{
-		`package main; import library "raven/internal/features/library/domain"; type Card = library.Card`,
-		`package main; import library "raven/internal/features/library/domain"; type Envelope struct{ Items []Card }; type Card struct{ Value library.Card }`,
+		`package main; import library "raven/internal/shared/boltstore/domain"; type Card = library.Card`,
+		`package main; import library "raven/internal/shared/boltstore/domain"; type Envelope struct{ Items []Card }; type Card struct{ Value library.Card }`,
 		`package main; import ext "example.com/vendor"; type Port interface{ Read() ext.Result }`,
 		`package main; import "go.uber.org/fx"; type Params struct{ fx.In }`,
 		`package main; import "go.uber.org/fx"; func Module() fx.Option { return nil }`,
@@ -335,12 +335,12 @@ func TestConventionFixtures(t *testing.T) {
 	}
 	s, err = parseSource(
 		"funcs.go",
-		`package library; import _ "raven/internal/features/library/adapters/boltstore"`,
+		`package library; import _ "raven/internal/shared/boltstore/adapters/bbolt"`,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if coreDependencyError("internal/features/library/domain/funcs.go", s) == nil {
+	if coreDependencyError("internal/shared/boltstore/domain/funcs.go", s) == nil {
 		t.Fatal("accepted core-to-adapter dependency")
 	}
 }
@@ -350,14 +350,14 @@ func TestFeatureLayoutFixtures(t *testing.T) {
 		path  string
 		valid bool
 	}{
-		{"internal/features/library/types.go", false},
-		{"internal/features/library/library_test.go", false},
-		{"internal/features/library/README.md", false},
+		{"internal/features/reminders/types.go", false},
+		{"internal/features/reminders/reminders_test.go", false},
+		{"internal/features/reminders/README.md", false},
 		{"internal/features/README.md", false},
-		{"internal/features/library/domain/types.go", true},
-		{"internal/features/library/domain/domain_integration_test.go", true},
-		{"internal/features/library/adapters/boltstore/types.go", true},
-		{"internal/features/library/composition/vars.go", true},
+		{"internal/features/reminders/domain/types.go", true},
+		{"internal/features/reminders/domain/domain_integration_test.go", true},
+		{"internal/features/reminders/adapters/boltstore/types.go", true},
+		{"internal/features/reminders/composition/vars.go", true},
 		{"internal/shared/filesystem/types.go", true},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
@@ -374,14 +374,21 @@ func TestCompositionDependencyFixtures(t *testing.T) {
 		valid            bool
 	}{
 		{"vars.go", "go.uber.org/fx", true},
-		{"internal/features/library/composition/vars.go", "go.uber.org/fx", true},
-		{"internal/features/library/composition/funcs.go", "raven/internal/features/library/adapters/boltstore", true},
-		{"internal/features/library/domain/types.go", "go.uber.org/fx", false},
-		{"internal/features/library/application/types.go", "go.uber.org/fx", false},
-		{"internal/features/library/ports/types.go", "go.uber.org/fx", false},
-		{"internal/features/library/adapters/boltstore/types.go", "go.uber.org/fx", false},
-		{"internal/features/library/domain/funcs.go", "raven/internal/features/library/composition", false},
-		{"internal/shared/filesystem/funcs.go", "raven/internal/features/library/composition", false},
+		{"internal/shared/boltstore/composition/vars.go", "go.uber.org/fx", true},
+		{"internal/shared/desktopmedia/composition/vars.go", "go.uber.org/fx", true},
+		{"internal/shared/scheduling/composition/vars.go", "go.uber.org/fx", true},
+		{"internal/shared/cffbatch/composition/vars.go", "go.uber.org/fx", true},
+		{"internal/shared/boltstore/domain/funcs.go", "raven/internal/shared/boltstore/adapters/bbolt", false},
+		{"internal/shared/desktopmedia/ports/types.go", "raven/internal/shared/desktopmedia/adapters/wails", false},
+		{"internal/shared/cffbatch/adapters/cff/vars.go", "go.uber.org/fx", false},
+		{"internal/shared/filesystem/funcs.go", "go.uber.org/fx", false},
+		{"internal/shared/boltstore/composition/funcs.go", "raven/internal/shared/boltstore/adapters/bbolt", true},
+		{"internal/shared/boltstore/domain/types.go", "go.uber.org/fx", false},
+		{"internal/shared/boltstore/application/types.go", "go.uber.org/fx", false},
+		{"internal/shared/boltstore/ports/types.go", "go.uber.org/fx", false},
+		{"internal/shared/boltstore/adapters/bbolt/types.go", "go.uber.org/fx", false},
+		{"internal/shared/boltstore/domain/funcs.go", "raven/internal/shared/boltstore/composition", false},
+		{"internal/shared/filesystem/funcs.go", "raven/internal/shared/boltstore/composition", false},
 	} {
 		t.Run(tc.path+tc.dependency, func(t *testing.T) {
 			s, err := parseSource(

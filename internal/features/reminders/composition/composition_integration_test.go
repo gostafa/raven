@@ -18,15 +18,18 @@ import (
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	desktopports "raven/internal/features/desktop/ports"
-	"raven/internal/features/library/adapters/boltstore"
-	"raven/internal/features/library/adapters/cffbatch"
-	"raven/internal/features/library/adapters/scheduling"
-	librarycomposition "raven/internal/features/library/composition"
-	libraryports "raven/internal/features/library/ports"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
 	"raven/internal/features/reminders/composition"
 	reminderports "raven/internal/features/reminders/ports"
+	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
+	storecomposition "raven/internal/shared/boltstore/composition"
+	libraryports "raven/internal/shared/boltstore/ports"
+	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
+	batchcomposition "raven/internal/shared/cffbatch/composition"
+	mediacomposition "raven/internal/shared/desktopmedia/composition"
 	"raven/internal/shared/lifetime"
+	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
+	schedulingcomposition "raven/internal/shared/scheduling/composition"
 )
 
 type native struct {
@@ -57,7 +60,10 @@ func (e *events) Emit(string) {
 
 func modules(path string, n *native, e *events) fx.Option {
 	return fx.Options(
-		librarycomposition.Module,
+		storecomposition.Module,
+		mediacomposition.Module,
+		schedulingcomposition.Module,
+		batchcomposition.Module,
 		fx.Supply(configurationFixture()),
 		composition.Module,
 		fx.Provide(
@@ -66,7 +72,7 @@ func modules(path string, n *native, e *events) fx.Option {
 		),
 		fx.Supply(fx.Annotate(e, fx.As(new(desktopports.Events)))),
 		fx.Replace(
-			librarycomposition.DatabasePath(path),
+			storecomposition.DatabasePath(path),
 			fx.Annotate(n, fx.As(new(reminderwails.NativeRuntime))),
 		),
 	)
