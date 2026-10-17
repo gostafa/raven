@@ -8,7 +8,7 @@ import {
   editItems,
   hasContent,
   matchesCard,
-  mediaURL,
+  createMediaURL,
   moveItem,
   saveItems,
   orderedItems,
@@ -46,7 +46,7 @@ test('a refresh preceding the save response never duplicates a saved card', () =
 });
 
 test('editing keeps IDs and does not mutate saved cards', () => {
-  const drafts = editItems(card, mediaURL);
+  const drafts = editItems(card, createMediaURL('/media/'));
   drafts[0].text = 'Changed';
   assert.equal(card.items[0].text, 'Useful information');
   assert.equal(drafts[1].id, 'i1');
@@ -59,7 +59,7 @@ test('editing keeps IDs and does not mutate saved cards', () => {
 });
 
 test('all mixed items reorder together and preserve their identities', () => {
-  const drafts = editItems(card, mediaURL);
+  const drafts = editItems(card, createMediaURL('/media/'));
   const moved = moveItem(drafts, 'a1', -1);
   assert.deepEqual(
     moved.map((item) => item.id),
@@ -96,7 +96,7 @@ test('content renders in one stored order', () => {
     orderedItems(shuffled).map((item) => item.id),
     ['t1', 'i1', 't2', 'a1'],
   );
-  assert.equal(mediaURL(card.items[1]), '/media/folder/card/i1');
+  assert.equal(createMediaURL('/media/')(card.items[1]), '/media/folder/card/i1');
 });
 
 test('leaving a card pauses all mounted audio and video', () => {

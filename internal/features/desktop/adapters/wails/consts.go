@@ -3,18 +3,7 @@
 
 package wails
 
-import (
-	companion "raven/internal/features/companion/domain"
-)
-
 const (
-	widgetSize   = companion.WidgetSize
-	reviewWidth  = companion.ReviewWidth
-	reviewHeight = companion.ReviewHeight
-
-	logErrorKey     = "error"
-	logOperationKey = "operation"
-
 	resetMenuTitle = "Reset widget position"
 
 	appTitle            = "Raven"

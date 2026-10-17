@@ -59,9 +59,24 @@ export interface CreateInput {
  * ReviewInput identifies an owned content item and its user rating.
  */
 export interface ReviewInput {
+    /**
+     * FolderID identifies the owning folder.
+     */
     "folder_id": string;
+
+    /**
+     * CardID identifies the owning card.
+     */
     "card_id": string;
+
+    /**
+     * ItemID identifies the content to review.
+     */
     "item_id": string;
+
+    /**
+     * Rating records the user's review grade from one through four.
+     */
     "rating": number;
 }
 

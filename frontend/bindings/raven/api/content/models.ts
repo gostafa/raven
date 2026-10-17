@@ -80,7 +80,7 @@ export interface Item {
     "reviews": Review[] | null;
 
     /**
-     * reviewapi.Schedule contains the current item scheduling state.
+     * Schedule contains the current item scheduling state.
      */
     "schedule": reviews$0.Schedule;
 

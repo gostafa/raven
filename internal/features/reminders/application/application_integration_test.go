@@ -11,6 +11,8 @@ import (
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	reviewapi "raven/api/reviews"
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 	"raven/internal/features/library/adapters/boltstore"
 	"raven/internal/features/library/adapters/scheduling"
 	reminders "raven/internal/features/reminders/application"
@@ -65,7 +67,14 @@ func (n *fakeReminderNotifier) Send(count int) error {
 
 func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
-	store, err := boltstore.Open(path, scheduling.New())
+	store, err := boltstore.Open(
+		path,
+		&boltstore.Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    nil,
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +117,14 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 		t.Fatal("due items not grouped")
 	}
 	_ = store.Close()
-	store, err = boltstore.Open(path, scheduling.New())
+	store, err = boltstore.Open(
+		path,
+		&boltstore.Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    nil,
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,4 +193,21 @@ func TestCoordinatorShutdownDoesNotWaitForAuthorization(t *testing.T) {
 	}
 	// Wake remains safe after cancellation, including a late authorization result.
 	c.Wake()
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
+}
+
+func storeSettingsFixture() *boltstore.Settings {
+	settings := configurationFixture()
+	return &boltstore.Settings{
+		Rules:            settings.Library,
+		MediaRoutePrefix: settings.MediaRoutePrefix,
+		LogErrorKey:      settings.LogErrorKey,
+	}
 }

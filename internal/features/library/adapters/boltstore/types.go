@@ -20,8 +20,24 @@ import (
 )
 
 type (
+	// Dependencies supplies stable runtime dependencies and shared persistence settings.
+	Dependencies struct {
+		Scheduler library.Scheduler
+		Logger    *slog.Logger
+		Settings  Settings
+	}
+	legacyContentLoader func(*Settings, *bolt.Bucket, *cardapi.Card) ([]contentapi.Item, error)
+
+	// Settings supplies content rules, media routes, and log field names.
+	Settings struct {
+		MediaRoutePrefix string
+		LogErrorKey      string
+		Rules            library.Rules
+	}
+
 	// Store owns atomic database and media persistence.
 	Store struct {
+		settings  *Settings
 		scheduler library.Scheduler
 		logger    *slog.Logger
 		db        *bolt.DB
@@ -50,6 +66,7 @@ type (
 		state   schemaState
 	}
 	cardContentReader struct {
+		settings  *Settings
 		card      *cardapi.Card
 		scheduler library.Scheduler
 		schema    string

@@ -10,16 +10,14 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	companion "raven/internal/features/companion/domain"
-	companionports "raven/internal/features/companion/ports"
 )
 
 // New constructs the adapter with its required runtime dependencies.
-func New(
-	app *application.App,
-	handles WindowSet,
-	configuration companionports.WidgetConfiguration,
-) *Windows {
+func New(deps *Dependencies) *Windows {
+	app, handles, configuration := deps.App, deps.Handles, deps.Configuration
+	settings := &deps.Settings
 	windows := &Windows{
+		settings:        *settings,
 		mainWindow:      handles.Main,
 		widget:          handles.Widget,
 		reviewWindow:    nil,
@@ -51,7 +49,8 @@ func (windows *Windows) ConfigureWidget() {
 			windows.logger.ErrorContext(
 				context.Background(),
 				"could not configure raven widget",
-				slog.Any(logErrorKey, err),
+				//nolint:sloglint // Log field names come from validated embedded configuration.
+				slog.Any(windows.settings.LogErrorKey, err),
 			)
 		}
 	})
@@ -75,8 +74,8 @@ func (windows *Windows) ResetWidget() {
 	if screen := windows.primaryScreen(); screen != nil {
 		area := screen.WorkArea
 		windows.widget.SetPosition(
-			area.X+max(zero, area.Width-widgetSize-widgetMargin),
-			area.Y+max(zero, area.Height-widgetSize-widgetMargin),
+			area.X+max(zero, area.Width-windows.settings.Layout.WidgetSize-widgetMargin),
+			area.Y+max(zero, area.Height-windows.settings.Layout.WidgetSize-widgetMargin),
 		)
 	}
 
@@ -107,7 +106,7 @@ func (windows *Windows) placeFloatingReview() {
 
 	horizontal, vertical := windows.widget.Position()
 	area := screen.WorkArea
-	bounds := companion.Bounds(
+	bounds := windows.settings.Layout.Bounds(
 		horizontal,
 		vertical,
 		&companion.Rect{X: area.X, Y: area.Y, Width: area.Width, Height: area.Height},
@@ -130,7 +129,7 @@ func (windows *Windows) RequestFloatingReviewClose() {
 	// The frontend owns the saving state and ignores close requests until a
 	// rating finishes. DispatchWailsEvent targets only this window.
 	windows.reviewWindow.DispatchWailsEvent(
-		&application.CustomEvent{Name: "raven:close-floating-review", Data: nil, Sender: ""},
+		&application.CustomEvent{Name: windows.settings.CloseFloatingReview, Data: nil, Sender: ""},
 	)
 }
 
@@ -146,7 +145,11 @@ func (windows *Windows) ToggleFloatingReview() {
 		windows.placeFloatingReview()
 		windows.reviewWindow.Show()
 		windows.reviewWindow.DispatchWailsEvent(
-			&application.CustomEvent{Name: "raven:open-floating-review", Data: nil, Sender: ""},
+			&application.CustomEvent{
+				Name:   windows.settings.OpenFloatingReview,
+				Data:   nil,
+				Sender: "",
+			},
 		)
 		windows.reviewWindow.Focus()
 	})

@@ -1,4 +1,4 @@
-export type { Card, ContentItem, ItemDraft, EditorItem, CardPort, MediaPort } from './domain/types';
+export type { Card, ContentItem, ItemDraft, EditorItem, CardPort, MediaPort, MediaURLPort } from './domain/types';
 export {
   textDraft,
   editItems,
@@ -12,4 +12,4 @@ export {
 } from './domain/funcs';
 export { default as CardEditor } from './components/CardEditor.svelte';
 export { default as CardContent } from './components/CardContent.svelte';
-export { mediaURL } from './adapters/vars';
+export { createMediaURL } from './adapters/funcs';

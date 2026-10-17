@@ -10,22 +10,26 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
 
+	companionwails "raven/internal/features/companion/adapters/wails"
+	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	"raven/internal/features/desktop/ports"
 	"raven/internal/shared/lifetime"
 )
 
-func newApplication(params appParams) *application.App {
+func newApplication(params appParams, settings *configuration.Settings) *application.App {
 	return desktopwails.NewApplication(&desktopwails.ApplicationDependencies{
-		Assets:     params.Assets,
-		Media:      params.Media,
-		Visibility: params.Visibility,
-		Logger:     params.Logger,
+		Configuration: desktopConfiguration(settings),
+		Assets:        params.Assets,
+		Media:         params.Media,
+		Visibility:    params.Visibility,
+		Logger:        params.Logger,
 	})
 }
 
-func newDesktop(params desktopParams) *desktopwails.Desktop {
+func newDesktop(params desktopParams, settings *configuration.Settings) *desktopwails.Desktop {
 	desktop := desktopwails.New(&desktopwails.Dependencies{
+		Configuration: desktopConfiguration(settings),
 		App:           params.App,
 		Handles:       params.Handles,
 		Windows:       params.Windows,
@@ -144,3 +148,14 @@ func isolate(err error) error {
 }
 
 func (failure *lifecycleError) Error() string { return failure.message }
+
+func desktopConfiguration(settings *configuration.Settings) *desktopwails.Configuration {
+	return &desktopwails.Configuration{
+		Layout: settings.Layout, ApplicationID: settings.ApplicationID,
+		LogErrorKey: settings.LogErrorKey, ShowReviews: settings.ShowReviews,
+	}
+}
+
+func newWindows(app *application.App, settings *configuration.Settings) companionwails.WindowSet {
+	return desktopwails.NewWindows(app, desktopConfiguration(settings))
+}

@@ -10,6 +10,7 @@ import (
 
 	autostartcomposition "raven/internal/features/autostart/composition"
 	companioncomposition "raven/internal/features/companion/composition"
+	configurationcomposition "raven/internal/features/configuration/composition"
 	desktopcomposition "raven/internal/features/desktop/composition"
 	desktopports "raven/internal/features/desktop/ports"
 	librarycomposition "raven/internal/features/library/composition"
@@ -28,6 +29,7 @@ var (
 		fx.Module("raven",
 			fx.Supply(desktopports.Assets{Files: assets, Icon: appIcon}),
 			fx.Provide(newService),
+			configurationcomposition.Module,
 			librarycomposition.Module,
 			autostartcomposition.Module,
 			companioncomposition.Module,

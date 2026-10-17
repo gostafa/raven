@@ -4,12 +4,10 @@
 package boltstore
 
 const (
-	textKind                = "text"
 	legacyPromptSide        = "prompt"
 	legacyAnswerSide        = "answer"
 	isoMediaSignature       = "ftyp"
 	privateDirectoryMode    = 0o700
-	mediaRoutePrefix        = "/media/"
 	recordIDFormat          = "%020d"
 	schemaV2                = "2"
 	schemaV3                = "3"
@@ -27,7 +25,6 @@ const (
 	schemaV1 = "1"
 
 	privateFileMode = 0o600
-	logErrorKey     = "error"
 	mediaHeaderSize = 512
 	mediaItemPart   = 2
 	mediaRouteParts = 3

@@ -11,6 +11,8 @@ import (
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	reviewapi "raven/api/reviews"
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 	library "raven/internal/features/library/domain"
 )
 
@@ -52,7 +54,7 @@ func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 	}
 	before := item
 	failure := errors.New("schedule failed")
-	if err := library.ApplyReview(
+	if err := configurationFixture().Library.ApplyReview(
 		&item,
 		&reviewapi.Attempt{At: now, Rating: 3},
 		fakeScheduler{failure: failure},
@@ -65,14 +67,14 @@ func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 	if !reflect.DeepEqual(item, before) {
 		t.Fatal("failed review mutated item")
 	}
-	if err := library.ApplyReview(
+	if err := configurationFixture().Library.ApplyReview(
 		&item,
 		&reviewapi.Attempt{At: now, Rating: 5},
 		fakeScheduler{},
 	); err == nil {
 		t.Fatal("accepted invalid rating")
 	}
-	if err := library.ApplyReview(
+	if err := configurationFixture().Library.ApplyReview(
 		&item,
 		&reviewapi.Attempt{At: now, Rating: 3},
 		fakeScheduler{},
@@ -96,7 +98,7 @@ func TestPreparationReturnsRollbackFilesAndProtectsOwnership(t *testing.T) {
 		return item, "copied.png", nil
 	}
 	id := func() (string, error) { return "0123456789abcdef0123456789abcdef", nil }
-	_, rollback, err := library.PrepareItems([]contentapi.Draft{
+	_, rollback, err := configurationFixture().Library.PrepareItems([]contentapi.Draft{
 		{Kind: "image", SourcePath: "image.png"},
 		{ID: "foreign", Kind: "text", Text: "Changed"},
 	}, nil, &library.PreparationDependencies{ImportMedia: importer, NewID: id})
@@ -109,7 +111,7 @@ func TestPreparationReturnsRollbackFilesAndProtectsOwnership(t *testing.T) {
 		Text:     "Before",
 		Schedule: reviewapi.Schedule{Reps: 4},
 	}
-	items, _, err := library.PrepareItems(
+	items, _, err := configurationFixture().Library.PrepareItems(
 		[]contentapi.Draft{{ID: "owned", Kind: "text", Text: " After "}},
 		[]contentapi.Item{old},
 		&library.PreparationDependencies{ImportMedia: importer, NewID: id},
@@ -167,7 +169,7 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 		RelativePath: "media/" + id + ".png",
 		ByteSize:     1,
 	}
-	if err := library.ValidateItem(&valid); err != nil {
+	if err := configurationFixture().Library.ValidateItem(&valid); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*contentapi.Item){
@@ -182,12 +184,12 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	} {
 		invalid := valid
 		mutate(&invalid)
-		if err := library.ValidateItem(&invalid); err == nil {
+		if err := configurationFixture().Library.ValidateItem(&invalid); err == nil {
 			t.Fatalf("accepted invalid media: %+v", invalid)
 		}
 	}
 	text := contentapi.Item{ID: "text", Kind: "text", Text: "Remember"}
-	if err := library.ValidateItem(&text); err != nil {
+	if err := configurationFixture().Library.ValidateItem(&text); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*contentapi.Item){
@@ -199,18 +201,19 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	} {
 		invalid := text
 		mutate(&invalid)
-		if err := library.ValidateItem(&invalid); err == nil {
+		if err := configurationFixture().Library.ValidateItem(&invalid); err == nil {
 			t.Fatal("accepted invalid text")
 		}
 	}
 	for _, extension := range []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".flac", ".mp4", ".m4v", ".webm", ".ogv", ".mov"} {
-		if library.MediaType(extension) == "" ||
-			!library.ValidMediaPath("media/"+id+extension, id) {
+		if configurationFixture().Library.MediaType(extension) == "" ||
+			!configurationFixture().Library.ValidMediaPath("media/"+id+extension, id) {
 			t.Fatalf("lost supported media %s", extension)
 		}
 	}
-	if library.MediaType(".svg") != "" || library.ValidMediaPath("media/"+id+".svg", id) ||
-		library.ValidMediaPath("media/bad.png", "bad") {
+	if configurationFixture().Library.MediaType(".svg") != "" ||
+		configurationFixture().Library.ValidMediaPath("media/"+id+".svg", id) ||
+		configurationFixture().Library.ValidMediaPath("media/bad.png", "bad") {
 		t.Fatal("accepted unsupported media path")
 	}
 }
@@ -223,14 +226,14 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		item := *original
 		return item, "", failure
 	}
-	if _, _, err := library.PrepareItems(
+	if _, _, err := configurationFixture().Library.PrepareItems(
 		nil,
 		nil,
 		&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
 	); err == nil {
 		t.Fatal("accepted empty content")
 	}
-	if _, _, err := library.PrepareItems(
+	if _, _, err := configurationFixture().Library.PrepareItems(
 		[]contentapi.Draft{{Kind: "text", Text: "remember"}},
 		nil,
 		&library.PreparationDependencies{
@@ -243,7 +246,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	) {
 		t.Fatal(err)
 	}
-	if _, _, err := library.PrepareItems(
+	if _, _, err := configurationFixture().Library.PrepareItems(
 		[]contentapi.Draft{{Kind: "image", SourcePath: "image.png"}},
 		nil,
 		&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
@@ -254,7 +257,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, draft := range []contentapi.Draft{{Kind: "text", Text: "remember", SourcePath: "invalid"}, {Kind: "image", Text: "unexpected"}, {Kind: "text", Text: " "}} {
-		if _, _, err := library.PrepareItems(
+		if _, _, err := configurationFixture().Library.PrepareItems(
 			[]contentapi.Draft{draft},
 			nil,
 			&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
@@ -267,7 +270,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		ID: id, Kind: "image", OriginalName: "image.png", MIMEType: "image/png",
 		RelativePath: "media/" + id + ".png", ByteSize: 1,
 	}}
-	if _, _, err := library.PrepareItems(
+	if _, _, err := configurationFixture().Library.PrepareItems(
 		[]contentapi.Draft{{ID: id, Kind: "image", Text: "unexpected"}},
 		media,
 		&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
@@ -280,7 +283,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		{{ID: id, Kind: "text", Text: "after", SourcePath: "invalid"}},
 		{{ID: id, Kind: "text", Text: "after"}, {ID: id, Kind: "text", Text: "duplicate"}},
 	} {
-		if _, _, err := library.PrepareItems(
+		if _, _, err := configurationFixture().Library.PrepareItems(
 			drafts,
 			previous,
 			&library.PreparationDependencies{ImportMedia: importer, NewID: newID},
@@ -307,4 +310,12 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	); err == nil {
 		t.Fatal("accepted unordered content")
 	}
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
 }

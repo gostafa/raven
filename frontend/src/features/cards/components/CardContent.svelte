@@ -1,11 +1,10 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import type { Card } from '../domain/types';
+  import type { Card, MediaURLPort } from '../domain/types';
   import { orderedItems } from '../domain/funcs';
-  import { mediaURL } from '../adapters/vars';
   import { stopMedia } from '../../ui';
 
-  let { card, compact = false }: { card: Card; compact?: boolean } = $props();
+  let { card, mediaURL, compact = false }: { card: Card; mediaURL: MediaURLPort; compact?: boolean } = $props();
   let root: HTMLDivElement;
   let failed = $state<string[]>([]);
   let hovered = $state<number | null>(null);

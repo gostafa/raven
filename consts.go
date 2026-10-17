@@ -4,9 +4,8 @@
 package main
 
 const (
-	logErrorKey                = "error"
+	startupDetailsKey          = "details"
 	startupFailureExitCode     = 1
 	cardStorageIsUnavailable   = "card storage is unavailable"
 	folderStorageIsUnavailable = "folder storage is unavailable"
-	ravenSchedulesChanged      = "raven:schedules-changed"
 )

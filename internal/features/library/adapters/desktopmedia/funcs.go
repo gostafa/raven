@@ -21,15 +21,6 @@ import (
 	localfiles "raven/internal/shared/filesystem"
 )
 
-// New creates a native picker and an isolated preview registry.
-func New(
-	app *application.App,
-	window *application.WebviewWindow,
-	saved func() http.Handler,
-) *Picker {
-	return NewPicker(app, window, NewRegistry(saved, slog.New(slog.NewTextHandler(os.Stderr, nil))))
-}
-
 // NewPicker attaches native selection to an existing HTTP registry.
 func NewPicker(
 	app *application.App,
@@ -40,12 +31,13 @@ func NewPicker(
 }
 
 // NewRegistry creates media routes before native application construction.
-func NewRegistry(saved func() http.Handler, logger *slog.Logger) *Registry {
+func NewRegistry(saved func() http.Handler, logger *slog.Logger, settings *Settings) *Registry {
 	if saved == nil {
 		saved = func() http.Handler { return nil }
 	}
 
 	return &Registry{
+		settings: *settings,
 		saved:    saved,
 		previews: sync.Map{},
 		logger:   logger,
@@ -136,7 +128,7 @@ func (picker *Picker) describePath(path, filter string) (mediaapi.Selection, err
 		SourcePath:   path,
 		OriginalName: filepath.Base(path),
 		ByteSize:     info.Size(),
-		PreviewURL:   previewRoutePrefix + key,
+		PreviewURL:   picker.settings.PreviewRoutePrefix + key,
 	}, nil
 }
 
@@ -157,9 +149,9 @@ func validateSelection(info os.FileInfo, path, filter string) error {
 func (picker *Registry) Middleware(next http.Handler) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		switch {
-		case strings.HasPrefix(request.URL.Path, previewRoutePrefix):
+		case strings.HasPrefix(request.URL.Path, picker.settings.PreviewRoutePrefix):
 			picker.servePreview(writer, request)
-		case strings.HasPrefix(request.URL.Path, mediaRoutePrefix):
+		case strings.HasPrefix(request.URL.Path, picker.settings.MediaRoutePrefix):
 			picker.serveSaved(writer, request)
 		default:
 			next.ServeHTTP(writer, request)
@@ -196,7 +188,9 @@ func (picker *Registry) servePreview(writer http.ResponseWriter, request *http.R
 }
 
 func (picker *Registry) previewPath(url string) (string, bool) {
-	value, exists := picker.previews.Load(strings.TrimPrefix(url, previewRoutePrefix))
+	value, exists := picker.previews.Load(
+		strings.TrimPrefix(url, picker.settings.PreviewRoutePrefix),
+	)
 	if !exists {
 		return "", false
 	}
@@ -225,7 +219,12 @@ func (picker *Registry) servePreviewPath(
 func (picker *Registry) closePreview(ctx context.Context, file *os.File) {
 	err := file.Close()
 	if err != nil {
-		picker.logger.WarnContext(ctx, "could not close media preview", slog.Any(logErrorKey, err))
+		picker.logger.WarnContext(
+			ctx,
+			"could not close media preview",
+			//nolint:sloglint // Log field names come from validated embedded configuration.
+			slog.Any(picker.settings.LogErrorKey, err),
+		)
 	}
 }
 

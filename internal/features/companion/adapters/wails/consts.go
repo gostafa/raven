@@ -3,15 +3,7 @@
 
 package wails
 
-import (
-	companion "raven/internal/features/companion/domain"
-)
-
 const (
-	widgetSize = companion.WidgetSize
-
-	logErrorKey = "error"
-
 	widgetMargin = 24
 	zero         = 0
 )

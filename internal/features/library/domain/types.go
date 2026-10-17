@@ -12,6 +12,16 @@ import (
 )
 
 type (
+	// Rules supplies the shared content identifiers and supported rating range.
+	Rules struct {
+		TextKind      string `yaml:"text_kind"`
+		MIMEJPEG      string `yaml:"mime_jpeg"`
+		MIMEOggAudio  string `yaml:"mime_ogg_audio"`
+		MIMEMP4Video  string `yaml:"mime_mp4_video"`
+		MinimumRating int    `yaml:"minimum_rating"`
+		MaximumRating int    `yaml:"maximum_rating"`
+	}
+
 	// Scheduler initializes, advances, and validates spaced repetition schedules.
 	Scheduler interface {
 		Initialize(now time.Time) (reviewapi.Schedule, reviewapi.Log, error)
@@ -29,6 +39,7 @@ type (
 	}
 
 	itemPreparation struct {
+		rules       *Rules
 		previous    map[string]contentapi.Item
 		seen        map[string]bool
 		importMedia func(*contentapi.Item, string) (contentapi.Item, string, error)

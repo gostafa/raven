@@ -15,21 +15,24 @@ import (
 	"go.uber.org/fx/fxevent"
 
 	cardapi "raven/api/cards"
+	configurationapi "raven/api/configuration"
 	folderapi "raven/api/folders"
 	mediaapi "raven/api/media"
+	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopcomposition "raven/internal/features/desktop/composition"
 	libraryports "raven/internal/features/library/ports"
 	"raven/internal/shared/lifetime"
 )
 
-func newService(deps serviceParams) *RavenService {
+func newService(deps serviceParams, settings *configuration.Settings) *RavenService {
 	return &RavenService{
-		store:     deps.Repository,
-		media:     deps.Media,
-		windows:   deps.Windows,
-		events:    deps.Events,
-		reminders: deps.Reminders,
+		configuration: settings,
+		store:         deps.Repository,
+		media:         deps.Media,
+		windows:       deps.Windows,
+		events:        deps.Events,
+		reminders:     deps.Reminders,
 	}
 }
 
@@ -48,7 +51,11 @@ func newFxLogger(logger *slog.Logger) fxevent.Logger {
 func main() {
 	err := run()
 	if err != nil {
-		newLogger().ErrorContext(context.Background(), "application stopped", slog.Any(logErrorKey, err))
+		newLogger().ErrorContext(
+			context.Background(),
+			"application stopped",
+			slog.String(startupDetailsKey, err.Error()),
+		)
 		os.Exit(startupFailureExitCode)
 	}
 }
@@ -179,7 +186,7 @@ func (service *RavenService) Quit() { service.windows.Quit() }
 // ShowReviews opens the library review session.
 func (service *RavenService) ShowReviews() {
 	service.ShowMain()
-	service.events.Emit("raven:show-reviews")
+	service.events.Emit(service.configuration.ShowReviews)
 }
 
 // RefreshReminders requests reconciliation of persisted review schedules.
@@ -191,7 +198,7 @@ func (service *RavenService) RefreshReminders() {
 
 func (service *RavenService) schedulesChanged() {
 	if service.events != nil {
-		service.events.Emit(ravenSchedulesChanged)
+		service.events.Emit(service.configuration.SchedulesChanged)
 	}
 
 	service.RefreshReminders()
@@ -266,4 +273,19 @@ func nonNilInput[Value any](value *Value) *Value {
 	}
 
 	return value
+}
+
+// GetConfiguration returns the frontend's immutable configuration snapshot.
+func (service *RavenService) GetConfiguration() configurationapi.Settings {
+	settings := service.configuration
+
+	return configurationapi.Settings{
+		PreferencesStorageKey: settings.PreferencesStorageKey,
+		MediaRoutePrefix:      settings.MediaRoutePrefix,
+		TextKind:              settings.Library.TextKind,
+		SchedulesChanged:      settings.SchedulesChanged,
+		ShowReviews:           settings.ShowReviews,
+		OpenFloatingReview:    settings.OpenFloatingReview,
+		CloseFloatingReview:   settings.CloseFloatingReview,
+	}
 }

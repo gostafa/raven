@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 )
 
 type testWindow struct {
@@ -61,6 +64,7 @@ func (window *testWindow) DispatchWailsEvent(event *application.CustomEvent) {
 func testWindows() (*Windows, *testWindow, *testWindow, *testWindow) {
 	main, widget, review := new(testWindow), new(testWindow), new(testWindow)
 	return &Windows{
+		settings:   *windowSettingsFixture(),
 		mainWindow: main, widget: widget, reviewWindow: review, reviewPlacement: review,
 		invoke:        func(operation func()) { operation() },
 		primaryScreen: func() *application.Screen { return nil },
@@ -182,7 +186,14 @@ func TestConstructorBindsNativeWindowsAndRuntime(t *testing.T) {
 	)
 	configured := 0
 	configuration := testConfiguration(func() error { configured++; return nil })
-	windows := New(app, WindowSet{Main: main, Widget: widget, Review: review}, configuration)
+	windows := New(
+		&Dependencies{
+			App:           app,
+			Handles:       WindowSet{Main: main, Widget: widget, Review: review},
+			Configuration: configuration,
+			Settings:      *windowSettingsFixture(),
+		},
+	)
 	if windows.mainWindow != main || windows.widget != widget || windows.reviewWindow != review ||
 		windows.configuration == nil || windows.invoke == nil ||
 		windows.primaryScreen == nil || windows.quit == nil || windows.logger != app.Logger {
@@ -193,9 +204,58 @@ func TestConstructorBindsNativeWindowsAndRuntime(t *testing.T) {
 	if configured != 1 {
 		t.Fatal("constructor did not retain the supplied native configuration")
 	}
-	windows = New(app, WindowSet{Main: main, Widget: widget, Review: nil}, configuration)
+	windows = New(
+		&Dependencies{
+			App:           app,
+			Handles:       WindowSet{Main: main, Widget: widget, Review: nil},
+			Configuration: configuration,
+			Settings:      *windowSettingsFixture(),
+		},
+	)
 	if windows.reviewWindow != nil || windows.reviewPlacement != nil {
 		t.Fatal("missing review window became a non-nil interface")
 	}
 	windows.PositionFloatingReview()
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
+}
+
+func windowSettingsFixture() *Settings {
+	settings := configurationFixture()
+	return &Settings{
+		Layout:              settings.Layout,
+		LogErrorKey:         settings.LogErrorKey,
+		OpenFloatingReview:  settings.OpenFloatingReview,
+		CloseFloatingReview: settings.CloseFloatingReview,
+	}
+}
+
+func TestConfiguredEventsGeometryAndLogFieldsReachConsumers(t *testing.T) {
+	windows, _, widget, review := testWindows()
+	windows.settings.OpenFloatingReview = "custom:open"
+	windows.settings.CloseFloatingReview = "custom:close"
+	windows.settings.LogErrorKey = "custom_error"
+	windows.settings.Layout.ReviewWidth = 300
+	windows.settings.Layout.ReviewHeight = 400
+	widget.screen = &application.Screen{WorkArea: application.Rect{Width: 1000, Height: 800}}
+	windows.ToggleFloatingReview()
+	windows.ToggleFloatingReview()
+	if !reflect.DeepEqual(review.events, []string{"custom:open", "custom:close"}) ||
+		review.width != 300 ||
+		review.height != 400 {
+		t.Fatal("configured events or geometry were ignored", review)
+	}
+	var output bytes.Buffer
+	windows.logger = slog.New(slog.NewTextHandler(&output, nil))
+	windows.configuration = testConfiguration(func() error { return errors.New("styling failed") })
+	windows.ConfigureWidget()
+	if !strings.Contains(output.String(), "custom_error=") {
+		t.Fatal(output.String())
+	}
 }

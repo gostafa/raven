@@ -13,12 +13,13 @@ import (
 )
 
 // NewRuntime constructs an optional notification runtime without starting it.
-func NewRuntime(native NativeRuntime, logger *slog.Logger) *Runtime {
+func NewRuntime(native NativeRuntime, logger *slog.Logger, logErrorKey string) *Runtime {
 	var runtime Runtime
 
 	runtime.Notifier = New(native)
 	runtime.native = native
 	runtime.logger = logger
+	runtime.logErrorKey = logErrorKey
 
 	return &runtime
 }
@@ -32,7 +33,8 @@ func (runtime *Runtime) Start(ctx context.Context) {
 		runtime.logger.WarnContext(
 			ctx,
 			"desktop notifications unavailable",
-			slog.Any(logErrorKey, err),
+			//nolint:sloglint // Log field names come from validated embedded configuration.
+			slog.Any(runtime.logErrorKey, err),
 		)
 
 		return

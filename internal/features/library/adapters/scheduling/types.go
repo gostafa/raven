@@ -8,11 +8,16 @@ import (
 	"time"
 
 	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
+
+	library "raven/internal/features/library/domain"
 )
 
 type (
 	// Scheduler translates between FSRS state and library schedules.
-	Scheduler struct{ engine schedulingEngine }
+	Scheduler struct {
+		engine schedulingEngine
+		rules  *library.Rules
+	}
 
 	schedulingEngine interface {
 		Next(card fsrs.Card, now time.Time, rating fsrs.Rating) (fsrs.SchedulingInfo, error)

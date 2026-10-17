@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	companion "raven/internal/features/companion/domain"
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 )
 
 func TestFloatingReviewBounds(t *testing.T) {
@@ -26,7 +28,7 @@ func TestFloatingReviewBounds(t *testing.T) {
 		{"widget outside work area", 1800, 1100, primary, companion.Rect{X: 1020, Y: 355, Width: 420, Height: 520}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := companion.Bounds(test.x, test.y, &test.area)
+			got := configurationFixture().Layout.Bounds(test.x, test.y, &test.area)
 			if got != test.want {
 				t.Fatalf("got %+v, want %+v", got, test.want)
 			}
@@ -37,4 +39,12 @@ func TestFloatingReviewBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
 }

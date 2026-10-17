@@ -1,0 +1,17 @@
+---
+application_id: app.raven.desktop
+log_error_key: error
+log_operation_key: operation
+media_route_prefix: /media/
+preview_route_prefix: /media-preview/
+schedules_changed: raven:schedules-changed
+show_reviews: raven:show-reviews
+open_floating_review: raven:open-floating-review
+close_floating_review: raven:close-floating-review
+library:
+  text_kind: text
+  minimum_rating: 1
+  maximum_rating: 4
+  mime_jpeg: image/jpeg
+  mime_ogg_audio: audio/ogg
+  mime_mp4_video: video/mp4

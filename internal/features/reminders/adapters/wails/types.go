@@ -38,8 +38,9 @@ type (
 	Runtime struct {
 		Notifier
 
-		native    NativeRuntime
-		logger    *slog.Logger
-		available atomic.Bool
+		native      NativeRuntime
+		logger      *slog.Logger
+		logErrorKey string
+		available   atomic.Bool
 	}
 )

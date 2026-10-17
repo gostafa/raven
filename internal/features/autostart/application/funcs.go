@@ -145,7 +145,7 @@ func (controller *Controller) disableRegistration() error {
 
 func (controller *Controller) enableRegistration() error {
 	err := controller.backend.EnableWithOptions(&Options{
-		Identifier: ApplicationID,
+		Identifier: controller.applicationID,
 		Arguments:  []string{autostartArgument},
 	})
 	if err != nil {
@@ -225,14 +225,15 @@ func (visibility *Visibility) firstManualLaunch() bool {
 }
 
 // New constructs the adapter with its required runtime dependencies.
-func New(backend Backend, debug bool, publish func(bool, bool)) *Controller {
+func New(backend Backend, debug bool, applicationID string) *Controller {
 	return &Controller{
-		backend: backend,
-		debug:   debug,
-		publish: publish,
-		mu:      sync.Mutex{},
-		ready:   false,
-		enabled: false,
+		backend:       backend,
+		applicationID: applicationID,
+		debug:         debug,
+		publish:       nil,
+		mu:            sync.Mutex{},
+		ready:         false,
+		enabled:       false,
 	}
 }
 

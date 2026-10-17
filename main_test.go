@@ -19,6 +19,8 @@ import (
 	cardapi "raven/api/cards"
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 	"raven/internal/features/library/adapters/boltstore"
 	"raven/internal/features/library/adapters/desktopmedia"
 	"raven/internal/features/library/adapters/scheduling"
@@ -40,7 +42,10 @@ func (r failingRepository) ListFolders() ([]folderapi.Folder, error) { return ni
 
 func TestFacadeOwnsErrorContract(t *testing.T) {
 	cause := fmt.Errorf("read library: %w", bolt.ErrDatabaseNotOpen)
-	service := &RavenService{store: failingRepository{failure: cause}}
+	service := &RavenService{
+		configuration: configurationFixture(),
+		store:         failingRepository{failure: cause},
+	}
 	_, err := service.ListFolders()
 	var public *ServiceError
 	if !errors.As(err, &public) || public.Message != cause.Error() {
@@ -54,7 +59,7 @@ func TestFacadeOwnsErrorContract(t *testing.T) {
 
 func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 123000000, time.UTC)
-	schedule, log, err := scheduling.New().Initialize(now)
+	schedule, log, err := scheduling.New(&configurationFixture().Library).Initialize(now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,12 +118,19 @@ func facadeValue[Value any](t *testing.T, value Value) Value {
 
 func TestFolderServiceAndShutdown(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
-	store, err := boltstore.Open(path, scheduling.New())
+	store, err := boltstore.Open(
+		path,
+		&boltstore.Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    nil,
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	service := &RavenService{store: store}
+	service := &RavenService{configuration: configurationFixture(), store: store}
 	folder, err := service.CreateFolder(&folderapi.CreateInput{Title: " Ideas "})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +182,14 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	if _, err := service.ListFolders(); err == nil || errors.Is(err, bolt.ErrDatabaseNotOpen) {
 		t.Fatalf("shutdown did not close storage: %v", err)
 	}
-	reopened, err := boltstore.Open(path, scheduling.New())
+	reopened, err := boltstore.Open(
+		path,
+		&boltstore.Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    nil,
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("shutdown did not release the database lock: %v", err)
 	}
@@ -188,7 +207,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 }
 
 func TestMediaMiddlewareAndPickerErrors(t *testing.T) {
-	service := &RavenService{}
+	service := &RavenService{configuration: configurationFixture()}
 	next := http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) },
 	)
@@ -197,7 +216,7 @@ func TestMediaMiddlewareAndPickerErrors(t *testing.T) {
 		status int
 	}{{"/", http.StatusAccepted}, {"/media/folder/card/item", http.StatusServiceUnavailable}} {
 		w := httptest.NewRecorder()
-		desktopmedia.NewRegistry(nil, slog.New(slog.NewTextHandler(io.Discard, nil))).
+		desktopmedia.NewRegistry(nil, slog.New(slog.NewTextHandler(io.Discard, nil)), mediaSettingsFixture()).
 			Middleware(next).
 			ServeHTTP(w, httptest.NewRequest("GET", test.path, nil))
 		if w.Code != test.status {
@@ -212,7 +231,7 @@ func TestMediaMiddlewareAndPickerErrors(t *testing.T) {
 }
 
 func TestFolderServiceWithoutStorage(t *testing.T) {
-	service := &RavenService{}
+	service := &RavenService{configuration: configurationFixture()}
 	if _, err := service.ListFolders(); err == nil {
 		t.Fatal("listing without storage should fail")
 	}
@@ -236,7 +255,14 @@ func TestFolderServiceWithoutStorage(t *testing.T) {
 }
 
 func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
-	store, err := boltstore.Open(filepath.Join(t.TempDir(), "raven.db"), scheduling.New())
+	store, err := boltstore.Open(
+		filepath.Join(t.TempDir(), "raven.db"),
+		&boltstore.Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    nil,
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +271,7 @@ func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	service := &RavenService{store: store}
+	service := &RavenService{configuration: configurationFixture(), store: store}
 	if _, err := service.CreateFolder(nil); err == nil {
 		t.Fatal("accepted empty folder input")
 	}
@@ -258,5 +284,52 @@ func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
 	folders, err := service.ListFolders()
 	if err != nil || len(folders) != 0 {
 		t.Fatalf("invalid inputs wrote records: %+v %v", folders, err)
+	}
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
+}
+
+func storeSettingsFixture() *boltstore.Settings {
+	settings := configurationFixture()
+	return &boltstore.Settings{
+		Rules:            settings.Library,
+		MediaRoutePrefix: settings.MediaRoutePrefix,
+		LogErrorKey:      settings.LogErrorKey,
+	}
+}
+
+func mediaSettingsFixture() *desktopmedia.Settings {
+	settings := configurationFixture()
+	return &desktopmedia.Settings{
+		MediaRoutePrefix:   settings.MediaRoutePrefix,
+		PreviewRoutePrefix: settings.PreviewRoutePrefix,
+		LogErrorKey:        settings.LogErrorKey,
+	}
+}
+
+func TestConfigurationFacadeReturnsOwnedFrontendSnapshot(t *testing.T) {
+	settings := configurationFixture()
+	settings.PreferencesStorageKey = "custom.preferences"
+	settings.MediaRoutePrefix = "/saved/"
+	service := &RavenService{configuration: settings}
+	value := service.GetConfiguration()
+	if value.PreferencesStorageKey != settings.PreferencesStorageKey ||
+		value.MediaRoutePrefix != settings.MediaRoutePrefix ||
+		value.TextKind != settings.Library.TextKind ||
+		value.SchedulesChanged != settings.SchedulesChanged ||
+		value.ShowReviews != settings.ShowReviews ||
+		value.OpenFloatingReview != settings.OpenFloatingReview ||
+		value.CloseFloatingReview != settings.CloseFloatingReview {
+		t.Fatal("configuration facade omitted or changed values", value)
+	}
+	value.PreferencesStorageKey = "edited"
+	if service.GetConfiguration().PreferencesStorageKey != "custom.preferences" {
+		t.Fatal("facade returned shared mutable state")
 	}
 }

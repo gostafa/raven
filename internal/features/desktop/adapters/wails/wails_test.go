@@ -5,10 +5,13 @@ import (
 	"testing"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 )
 
 func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
-	main := mainWindowOptions()
+	main := mainWindowOptions(&Configuration{Layout: configurationFixture().Layout})
 	if main.Name != "raven" || main.Title != "Raven" || main.URL != "/" || !main.Hidden ||
 		main.Width != 960 ||
 		main.Height != 680 ||
@@ -20,14 +23,14 @@ func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 		main.Mac.Backdrop != application.MacBackdropTranslucent {
 		t.Fatal("main window appearance changed")
 	}
-	widget := widgetWindowOptions()
+	widget := widgetWindowOptions(&Configuration{Layout: configurationFixture().Layout})
 	if widget.Name != "raven-widget" || widget.URL != "/?view=widget" || widget.Hidden ||
-		widget.Width != widgetSize ||
-		widget.MinWidth != widgetSize ||
-		widget.MaxWidth != widgetSize ||
-		widget.Height != widgetSize ||
-		widget.MinHeight != widgetSize ||
-		widget.MaxHeight != widgetSize {
+		widget.Width != configurationFixture().Layout.WidgetSize ||
+		widget.MinWidth != configurationFixture().Layout.WidgetSize ||
+		widget.MaxWidth != configurationFixture().Layout.WidgetSize ||
+		widget.Height != configurationFixture().Layout.WidgetSize ||
+		widget.MinHeight != configurationFixture().Layout.WidgetSize ||
+		widget.MaxHeight != configurationFixture().Layout.WidgetSize {
 		t.Fatal("widget geometry changed")
 	}
 	if widget.InitialPosition != application.WindowXY || widget.X != 24 || widget.Y != 100 ||
@@ -39,10 +42,10 @@ func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 		widget.Mac.CornerType != application.MacWindowCornerTypeSquare {
 		t.Fatal("widget platform appearance changed")
 	}
-	review := reviewWindowOptions()
+	review := reviewWindowOptions(&Configuration{Layout: configurationFixture().Layout})
 	if review.Name != "raven-review" || review.URL != "/?view=review" || !review.Hidden ||
-		review.Width != reviewWidth ||
-		review.Height != reviewHeight ||
+		review.Width != configurationFixture().Layout.ReviewWidth ||
+		review.Height != configurationFixture().Layout.ReviewHeight ||
 		review.Mac.Appearance != application.NSAppearanceNameDarkAqua {
 		t.Fatal("review window changed")
 	}
@@ -70,5 +73,32 @@ func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 		identity.Description != "A little practice. A little more remembered." ||
 		len(identity.Icon) == 0 {
 		t.Fatal("application identity changed")
+	}
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
+}
+
+func TestConfiguredIdentityAndGeometryReachNativeOptions(t *testing.T) {
+	settings := &Configuration{
+		ApplicationID: "custom.desktop",
+		Layout:        configurationFixture().Layout,
+	}
+	settings.Layout.WidgetSize = 64
+	settings.Layout.ReviewWidth = 300
+	settings.Layout.ReviewHeight = 400
+	if singleInstanceOptions(
+		&ApplicationDependencies{Configuration: settings},
+	).UniqueID != "custom.desktop" {
+		t.Fatal("single-instance identity ignored configuration")
+	}
+	widget, review := widgetWindowOptions(settings), reviewWindowOptions(settings)
+	if widget.Width != 64 || widget.Height != 64 || review.Width != 300 || review.Height != 400 {
+		t.Fatal("window sizes ignored configuration")
 	}
 }

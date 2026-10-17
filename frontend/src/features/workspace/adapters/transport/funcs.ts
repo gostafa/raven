@@ -1,7 +1,12 @@
+import type { Settings as TransportConfiguration } from '../../../../../bindings/raven/api/configuration/models';
+import type { RuntimeConfiguration } from '../../domain/types';
 import type { Card as TransportCard } from '../../../../../bindings/raven/api/cards/models';
 import type { Item as TransportItem, Draft as TransportDraft } from '../../../../../bindings/raven/api/content/models';
 import type { Folder as TransportFolder } from '../../../../../bindings/raven/api/folders/models';
-import type { Log as TransportReview, Schedule as TransportSchedule } from '../../../../../bindings/raven/api/reviews/models';
+import type {
+  Log as TransportReview,
+  Schedule as TransportSchedule,
+} from '../../../../../bindings/raven/api/reviews/models';
 import type { Selection as TransportMedia } from '../../../../../bindings/raven/api/media/models';
 import type { Card } from '../../../cards';
 import type { Folder } from '../../../folders';
@@ -9,20 +14,20 @@ import type { AppPorts } from '../../domain/types';
 export function folderFromTransport(value: TransportFolder): Folder {
   return { ...value, tags: value.tags ?? [] };
 }
-export function cardFromTransport(value: TransportCard): Card {
+export function cardFromTransport(value: TransportCard, textKind: string): Card {
   return {
     id: value.id,
     folderId: value.folder_id,
     createdAt: value.created_at,
     dueAt: value.due_at,
     lastReviewed: value.last_reviewed,
-    items: (value.items ?? []).map(itemFromTransport),
+    items: (value.items ?? []).map((item) => itemFromTransport(item, textKind)),
   };
 }
 function scheduleFromTransport(value: TransportSchedule): Card['items'][number]['schedule'] {
   return {
-    Due: value.due,
-    LastReview: value.last_review,
+    Due: timestampFromTransport(value.due),
+    LastReview: timestampFromTransport(value.last_review),
     Stability: value.stability,
     Difficulty: value.difficulty,
     ScheduledDays: value.scheduled_days,
@@ -34,8 +39,8 @@ function scheduleFromTransport(value: TransportSchedule): Card['items'][number][
 }
 function reviewFromTransport(value: TransportReview): Card['items'][number]['reviews'][number]['log'] {
   return {
-    Due: value.due,
-    Review: value.review,
+    Due: timestampFromTransport(value.due),
+    Review: timestampFromTransport(value.review),
     ScheduledDays: value.scheduled_days,
     Stability: value.stability,
     Difficulty: value.difficulty,
@@ -44,12 +49,12 @@ function reviewFromTransport(value: TransportReview): Card['items'][number]['rev
     State: value.state,
   };
 }
-function itemFromTransport(value: TransportItem): Card['items'][number] {
+function itemFromTransport(value: TransportItem, textKind: string): Card['items'][number] {
   return {
     id: value.id,
     folderId: value.folder_id,
     cardId: value.card_id,
-    kind: value.kind,
+    kind: value.kind === textKind ? 'text' : value.kind,
     text: value.text,
     originalName: value.original_name,
     mimeType: value.mime_type,
@@ -58,11 +63,22 @@ function itemFromTransport(value: TransportItem): Card['items'][number] {
     position: value.position,
     lastNotifiedDue: value.last_notified_due,
     schedule: scheduleFromTransport(value.schedule),
-    reviews: (value.reviews ?? []).map((review) => ({ automatic: review.automatic, log: reviewFromTransport(review.log) })),
+    reviews: (value.reviews ?? []).map((review) => ({
+      automatic: review.automatic,
+      log: reviewFromTransport(review.log),
+    })),
   };
 }
-export function draftToTransport(value: Parameters<AppPorts['CreateCard']>[0]['items'][number]): TransportDraft {
-  return { id: value.id, kind: value.kind, text: value.text, source_path: value.sourcePath };
+export function draftToTransport(
+  value: Parameters<AppPorts['CreateCard']>[0]['items'][number],
+  textKind: string,
+): TransportDraft {
+  return {
+    id: value.id,
+    kind: value.kind === 'text' ? textKind : value.kind,
+    text: value.text,
+    source_path: value.sourcePath,
+  };
 }
 export function mediaFromTransport(value: TransportMedia) {
   return {
@@ -71,4 +87,21 @@ export function mediaFromTransport(value: TransportMedia) {
     byteSize: value.byte_size,
     previewURL: value.preview_url,
   };
+}
+
+export function configurationFromTransport(value: TransportConfiguration): RuntimeConfiguration {
+  return {
+    preferencesStorageKey: value.preferences_storage_key,
+    mediaRoutePrefix: value.media_route_prefix,
+    textKind: value.text_kind,
+    schedulesChanged: value.schedules_changed,
+    showReviews: value.show_reviews,
+    openFloatingReview: value.open_floating_review,
+    closeFloatingReview: value.close_floating_review,
+  };
+}
+
+function timestampFromTransport(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('Raven returned an invalid review timestamp.');
+  return value;
 }

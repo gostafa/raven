@@ -1,5 +1,4 @@
 import type { Folder, Preferences, PreferencesStorage, Workspace } from './types';
-import { preferencesStorageKey } from './consts';
 
 export function emptyWorkspace(): Workspace {
   return { folders: [], selectedFolderId: null, sidebarOpen: true };
@@ -18,7 +17,10 @@ export function parseTags(value: string): string[] {
     });
 }
 
-export function loadPreferences(storage: Pick<PreferencesStorage, 'getItem'>): Preferences {
+export function loadPreferences(
+  storage: Pick<PreferencesStorage, 'getItem'>,
+  preferencesStorageKey: string,
+): Preferences {
   const saved = storage.getItem(preferencesStorageKey);
   if (saved === null) return { selectedFolderId: null, sidebarOpen: true };
 
@@ -38,7 +40,11 @@ export function loadPreferences(storage: Pick<PreferencesStorage, 'getItem'>): P
   };
 }
 
-export function savePreferences(storage: Pick<PreferencesStorage, 'setItem'>, preferences: Preferences): void {
+export function savePreferences(
+  storage: Pick<PreferencesStorage, 'setItem'>,
+  preferences: Preferences,
+  preferencesStorageKey: string,
+): void {
   const { selectedFolderId, sidebarOpen } = preferences;
   storage.setItem(preferencesStorageKey, JSON.stringify({ selectedFolderId, sidebarOpen }));
 }

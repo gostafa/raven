@@ -18,14 +18,14 @@ import (
 )
 
 // ValidateItem checks structural and kind-specific content invariants.
-func ValidateItem(item *contentapi.Item) error {
+func (rules *Rules) ValidateItem(item *contentapi.Item) error {
 	if item.ID == "" || item.Position < zero {
 		return errInvalidContentItem
 	}
 
-	validate := validateMedia
+	validate := rules.validateMedia
 
-	if item.Kind == textKind {
+	if item.Kind == rules.TextKind {
 		validate = validateText
 	}
 
@@ -50,7 +50,7 @@ func hasMediaMetadata(item *contentapi.Item) bool {
 		item.ByteSize != zero
 }
 
-func validateMedia(item *contentapi.Item) error {
+func (rules *Rules) validateMedia(item *contentapi.Item) error {
 	if !isMediaKind(item.Kind) {
 		return errInvalidContentKind
 	}
@@ -59,7 +59,7 @@ func validateMedia(item *contentapi.Item) error {
 		return errInvalidMediaItem
 	}
 
-	err := validateMediaLocation(item)
+	err := rules.validateMediaLocation(item)
 	if err != nil {
 		return fmt.Errorf("validate media: %w", err)
 	}
@@ -73,61 +73,61 @@ func validMediaMetadata(item *contentapi.Item) bool {
 
 func isMediaKind(kind string) bool { return kind == "audio" || kind == "image" || kind == "video" }
 
-func validateMediaLocation(item *contentapi.Item) error {
-	if !mediaLocationMatches(item) {
+func (rules *Rules) validateMediaLocation(item *contentapi.Item) error {
+	if !rules.mediaLocationMatches(item) {
 		return errInvalidMediaItem
 	}
 
 	return nil
 }
 
-func mediaLocationMatches(item *contentapi.Item) bool {
+func (rules *Rules) mediaLocationMatches(item *contentapi.Item) bool {
 	return strings.HasPrefix(item.MIMEType, item.Kind+"/") &&
-		ValidMediaPath(item.RelativePath, item.ID)
+		rules.ValidMediaPath(item.RelativePath, item.ID)
 }
 
 // ValidMediaPath checks that a supported media path belongs to the item identifier.
-func ValidMediaPath(path, id string) bool {
+func (rules *Rules) ValidMediaPath(path, id string) bool {
 	if !itemIDPattern.MatchString(id) {
 		return false
 	}
 
 	extension := filepath.Ext(path)
 
-	return MediaType(extension) != "" && path == "media/"+id+extension
+	return rules.MediaType(extension) != "" && path == "media/"+id+extension
 }
 
 // MediaType returns the supported MIME type for a lowercase file extension.
 // Active document formats, including SVG and HTML, are deliberately unsupported.
-func MediaType(extension string) string {
-	if mediaType := imageMediaType(extension); mediaType != "" {
+func (rules *Rules) MediaType(extension string) string {
+	if mediaType := rules.imageMediaType(extension); mediaType != "" {
 		return mediaType
 	}
 
-	if mediaType := audioMediaType(extension); mediaType != "" {
+	if mediaType := rules.audioMediaType(extension); mediaType != "" {
 		return mediaType
 	}
 
-	return videoMediaType(extension)
+	return rules.videoMediaType(extension)
 }
 
-func imageMediaType(extension string) string {
+func (rules *Rules) imageMediaType(extension string) string {
 	return map[string]string{
-		".jpg": mimeJPEG, ".jpeg": mimeJPEG, ".png": "image/png",
+		".jpg": rules.MIMEJPEG, ".jpeg": rules.MIMEJPEG, ".png": "image/png",
 		".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif",
 	}[extension]
 }
 
-func audioMediaType(extension string) string {
+func (rules *Rules) audioMediaType(extension string) string {
 	return map[string]string{
 		".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
-		".ogg": mimeOggAudio, ".oga": mimeOggAudio, ".flac": "audio/flac",
+		".ogg": rules.MIMEOggAudio, ".oga": rules.MIMEOggAudio, ".flac": "audio/flac",
 	}[extension]
 }
 
-func videoMediaType(extension string) string {
+func (rules *Rules) videoMediaType(extension string) string {
 	return map[string]string{
-		".mp4": mimeMP4Video, ".m4v": mimeMP4Video, ".webm": "video/webm",
+		".mp4": rules.MIMEMP4Video, ".m4v": rules.MIMEMP4Video, ".webm": "video/webm",
 		".ogv": "video/ogg", ".mov": "video/quicktime",
 	}[extension]
 }
@@ -240,8 +240,12 @@ func InitializeItem(item *contentapi.Item, now time.Time, scheduler Scheduler) e
 }
 
 // ApplyReview advances a schedule after a validated user rating.
-func ApplyReview(item *contentapi.Item, attempt *reviewapi.Attempt, scheduler Scheduler) error {
-	if attempt.Rating < minimumRating || attempt.Rating > maximumRating {
+func (rules *Rules) ApplyReview(
+	item *contentapi.Item,
+	attempt *reviewapi.Attempt,
+	scheduler Scheduler,
+) error {
+	if attempt.Rating < rules.MinimumRating || attempt.Rating > rules.MaximumRating {
 		return errInvalidReviewRating
 	}
 
@@ -259,12 +263,13 @@ func ApplyReview(item *contentapi.Item, attempt *reviewapi.Attempt, scheduler Sc
 }
 
 // PrepareItems validates drafts and returns newly imported files for rollback.
-func PrepareItems(
+func (rules *Rules) PrepareItems(
 	drafts []contentapi.Draft,
 	previous []contentapi.Item,
 	dependencies *PreparationDependencies,
 ) ([]contentapi.Item, []string, error) {
 	preparation := itemPreparation{
+		rules:       rules,
 		previous:    indexItems(previous),
 		seen:        make(map[string]bool),
 		importMedia: dependencies.ImportMedia,
@@ -320,7 +325,7 @@ func (preparation *itemPreparation) prepare(
 
 	item.Position = position
 
-	err = applyDraft(&item, draft)
+	err = preparation.rules.applyDraft(&item, draft)
 	if err != nil {
 		return contentapi.Item{}, fmt.Errorf("apply draft: %w", err)
 	}
@@ -366,7 +371,7 @@ func (preparation *itemPreparation) create(draft *contentapi.Draft) (contentapi.
 
 	item := newDraftItem(id, draft.Kind)
 
-	if draft.Kind == textKind {
+	if draft.Kind == preparation.rules.TextKind {
 		return item, nil
 	}
 
@@ -401,13 +406,13 @@ func (preparation *itemPreparation) importItem(
 	return imported, nil
 }
 
-func applyDraft(item *contentapi.Item, draft *contentapi.Draft) error {
-	err := applyDraftContent(item, draft)
+func (rules *Rules) applyDraft(item *contentapi.Item, draft *contentapi.Draft) error {
+	err := rules.applyDraftContent(item, draft)
 	if err != nil {
 		return fmt.Errorf("apply content: %w", err)
 	}
 
-	err = ValidateItem(item)
+	err = rules.ValidateItem(item)
 	if err != nil {
 		return fmt.Errorf("validate prepared content: %w", err)
 	}
@@ -415,12 +420,12 @@ func applyDraft(item *contentapi.Item, draft *contentapi.Draft) error {
 	return nil
 }
 
-func applyDraftContent(item *contentapi.Item, draft *contentapi.Draft) error {
-	if draft.Kind != textKind && draft.Text == "" {
+func (rules *Rules) applyDraftContent(item *contentapi.Item, draft *contentapi.Draft) error {
+	if draft.Kind != rules.TextKind && draft.Text == "" {
 		return nil
 	}
 
-	if draft.Kind != textKind {
+	if draft.Kind != rules.TextKind {
 		return errMediaCannotContainText
 	}
 

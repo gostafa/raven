@@ -22,7 +22,7 @@ var (
 		fx.Provide(
 			lifetime.New,
 			newApplication,
-			desktopwails.NewWindows,
+			newWindows,
 			fx.Annotate(desktopwails.NewEvents, fx.As(new(ports.Events))),
 			newDesktop,
 		),

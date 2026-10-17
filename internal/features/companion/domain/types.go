@@ -5,6 +5,14 @@
 package domain
 
 type (
+	// Layout defines floating-window dimensions in logical pixels.
+	Layout struct {
+		WidgetSize   int `yaml:"widget_size"`
+		ReviewWidth  int `yaml:"review_width"`
+		ReviewHeight int `yaml:"review_height"`
+		ReviewGap    int `yaml:"review_gap"`
+	}
+
 	// Rect describes a desktop rectangle in logical pixels.
 	Rect struct {
 		// X is the horizontal origin in logical pixels.
@@ -19,13 +27,13 @@ type (
 
 	// Windows controls Raven main, widget, and floating review windows.
 	Windows interface {
-		MainWindow
+		mainWindow
 		Widget
 		FloatingReview
 	}
 
-	// MainWindow controls the library window and application lifetime.
-	MainWindow interface {
+	// mainWindow controls the library window and application lifetime.
+	mainWindow interface {
 		ShowMain()
 		HideMain()
 		Quit()

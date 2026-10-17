@@ -1,5 +1,9 @@
 # Raven agent instructions
 
+## JavaScript and TypeScript tooling
+
+Always use Bun for JavaScript/TypeScript dependency management and package scripts. Use `bun install`, `bun add`, `bun remove`, `bun run`, and `bunx` instead of npm, pnpm, yarn, or npx. Run the existing test script with `bun run test`.
+
 ## TaskOtter files
 
 Treat `taskotter/**` as read-only generated tooling. Never create, edit, delete, rename, format, regenerate, or update files under it, including through automated commands. Put project-specific tasks in `taskfiles/NAME/Taskfile.yml`, and call TaskOtter tasks without changing their implementation. Keep the root `Taskfile.yml` as a symlink to `taskfiles/root/Taskfile.yml` so existing Task and Wails commands work from the repository root.
@@ -35,15 +39,15 @@ Keep Raven's monochrome palette and dark sidebar during future design, content, 
 
 Every Go package may contain only the following Go filenames and their platform/build variants. Replace `PACKAGENAME` with the actual package name; create only files that have content.
 
-| Filename | Contents |
-| --- | --- |
-| `funcs.go` | Functions and methods |
-| `vars.go` | Package variables, including sentinel errors |
-| `consts.go` | Constants |
-| `types.go` | Type declarations and package documentation |
-| `PACKAGENAME_test.go` | Tests of unexported implementation, using `package PACKAGENAME` |
+| Filename                          | Contents                                                                            |
+| --------------------------------- | ----------------------------------------------------------------------------------- |
+| `funcs.go`                        | Functions and methods                                                               |
+| `vars.go`                         | Package variables, including sentinel errors                                        |
+| `consts.go`                       | Constants                                                                           |
+| `types.go`                        | Type declarations and package documentation                                         |
+| `PACKAGENAME_test.go`             | Tests of unexported implementation, using `package PACKAGENAME`                     |
 | `PACKAGENAME_integration_test.go` | Tests of exported behavior, using `package PACKAGENAME_test` and only exported APIs |
-| `PACKAGENAME_bench_test.go` | Benchmarks |
+| `PACKAGENAME_bench_test.go`       | Benchmarks                                                                          |
 
 Platform/build variants must retain the role-based name, such as `funcs_darwin.go`, `funcs_other.go`, `vars_windows.go`, or `PACKAGENAME_integration_darwin_test.go`. Use the appropriate filename suffixes and build constraints for the target platform or build mode.
 
@@ -67,17 +71,17 @@ Place package documentation on the package declaration in `types.go`. Consolidat
 
 Use the following filenames within each feature layer or adapter directory; create only files that have content. Replace `Component` and `feature` with descriptive names.
 
-| Filename | Contents |
-| --- | --- |
-| `Component.svelte` | PascalCase UI components with typed props and callbacks |
-| `funcs.ts` | Functions and application use cases |
-| `vars.ts` | Module variables and state without Svelte runes |
-| `consts.ts` | Constants |
-| `types.ts` | Type declarations, domain contracts, and port interfaces |
-| `index.ts` | Explicit exports forming the feature's public interface |
-| `funcs.svelte.ts` | Shared functions that require Svelte runes |
-| `vars.svelte.ts` | Shared reactive state that requires Svelte runes |
-| `feature.test.mjs` | Implementation tests using the existing Node test runner |
+| Filename                       | Contents                                                        |
+| ------------------------------ | --------------------------------------------------------------- |
+| `Component.svelte`             | PascalCase UI components with typed props and callbacks         |
+| `funcs.ts`                     | Functions and application use cases                             |
+| `vars.ts`                      | Module variables and state without Svelte runes                 |
+| `consts.ts`                    | Constants                                                       |
+| `types.ts`                     | Type declarations, domain contracts, and port interfaces        |
+| `index.ts`                     | Explicit exports forming the feature's public interface         |
+| `funcs.svelte.ts`              | Shared functions that require Svelte runes                      |
+| `vars.svelte.ts`               | Shared reactive state that requires Svelte runes                |
+| `feature.test.mjs`             | Implementation tests using the existing Node test runner        |
 | `feature.integration.test.mjs` | Public behavior tests using only the feature's public interface |
 
 Keep tests under `frontend/tests/` so the existing Node test runner discovers both test forms. Application entry points, configuration files, ambient declarations, and generated files are exempt from helper filename rules. Component-local functions, types, and state may remain in the component. Consolidate feature helpers into the allowed filenames when intentionally modifying a feature.
@@ -104,9 +108,9 @@ Both commands must finish successfully before reporting completion. Inspect chan
 When frontend code or configuration changes, also run these commands from the repository root after the TaskOtter pair:
 
 ```sh
-npm --prefix frontend run check
-npm --prefix frontend test
-npm --prefix frontend run build
+bun run --cwd frontend check
+bun run --cwd frontend test
+bun run --cwd frontend build
 ```
 
 All applicable frontend commands must finish successfully before reporting completion. After further edits, rerun the TaskOtter pair followed by the frontend commands.

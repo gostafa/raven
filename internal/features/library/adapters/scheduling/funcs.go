@@ -10,16 +10,21 @@ import (
 	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
 
 	reviewapi "raven/api/reviews"
+	library "raven/internal/features/library/domain"
 )
 
 // New constructs the adapter with its required runtime dependencies.
-func New() Scheduler { return Scheduler{engine: fsrs.NewFSRS(fsrs.DefaultParam())} }
+func New(rules *library.Rules) Scheduler {
+	settings := *rules
+
+	return Scheduler{rules: &settings, engine: fsrs.NewFSRS(fsrs.DefaultParam())}
+}
 
 // Initialize creates the initial spaced repetition schedule.
 func (scheduler Scheduler) Initialize(now time.Time) (reviewapi.Schedule, reviewapi.Log, error) {
 	card := fsrs.NewCard(now)
 
-	result2, result3, forwardErr := scheduler.advance(&card, now, minimumRating)
+	result2, result3, forwardErr := scheduler.advance(&card, now, scheduler.rules.MinimumRating)
 	if forwardErr != nil {
 		return result2, result3, fmt.Errorf("initialize: %w", forwardErr)
 	}
@@ -50,7 +55,7 @@ func (scheduler Scheduler) Validate(card *reviewapi.Schedule) error {
 		return fmt.Errorf("validate: %w", err)
 	}
 
-	if len(records) != maximumRating {
+	if len(records) != scheduler.rules.MaximumRating {
 		return errIncompleteSchedules
 	}
 
@@ -62,11 +67,16 @@ func (scheduler Scheduler) advance(
 	now time.Time,
 	rating int,
 ) (reviewapi.Schedule, reviewapi.Log, error) {
-	if rating < minimumRating || rating > maximumRating {
+	if rating < scheduler.rules.MinimumRating || rating > scheduler.rules.MaximumRating {
 		return reviewapi.Schedule{}, reviewapi.Log{}, errInvalidRating
 	}
 
-	result, err := scheduler.engine.Next(*card, now, fsrs.Rating(rating))
+	nativeRating, err := ratingFor(rating)
+	if err != nil {
+		return reviewapi.Schedule{}, reviewapi.Log{}, fmt.Errorf("translate rating: %w", err)
+	}
+
+	result, err := scheduler.engine.Next(*card, now, nativeRating)
 
 	return fromCard(&result.Card), fromLog(&result.ReviewLog), err
 }
@@ -110,4 +120,12 @@ func fromLog(value *fsrs.ReviewLog) reviewapi.Log {
 		Difficulty:     value.Difficulty,
 		RemainingSteps: value.RemainingSteps,
 	}
+}
+
+func ratingFor(rating int) (fsrs.Rating, error) {
+	if rating < int(fsrs.Again) || rating > int(fsrs.Easy) {
+		return fsrs.Again, errInvalidRating
+	}
+
+	return fsrs.Rating(rating), nil
 }

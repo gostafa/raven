@@ -23,12 +23,13 @@ type (
 
 	// Controller serializes login startup changes and publishes the observed OS state.
 	Controller struct {
-		backend Backend
-		publish func(checked, available bool)
-		mu      sync.Mutex
-		debug   bool
-		ready   bool
-		enabled bool
+		backend       Backend
+		publish       func(checked, available bool)
+		applicationID string
+		mu            sync.Mutex
+		debug         bool
+		ready         bool
+		enabled       bool
 	}
 
 	// Visibility reconciles launch classification with explicit window opening requests.

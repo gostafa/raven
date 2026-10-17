@@ -4,11 +4,13 @@ import (
 	"testing"
 	"time"
 
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 	"raven/internal/features/library/adapters/scheduling"
 )
 
 func TestSchedulesAdvanceAndValidateAcrossRoundTrips(t *testing.T) {
-	scheduler := scheduling.New()
+	scheduler := scheduling.New(&configurationFixture().Library)
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	schedule, initial, err := scheduler.Initialize(now)
 	if err != nil {
@@ -48,4 +50,12 @@ func TestSchedulesAdvanceAndValidateAcrossRoundTrips(t *testing.T) {
 	if _, _, err := scheduler.Initialize(time.Time{}); err != nil {
 		t.Fatalf("zero time compatibility: %v", err)
 	}
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
 }

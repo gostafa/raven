@@ -26,6 +26,8 @@ import (
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	reviewapi "raven/api/reviews"
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 	"raven/internal/features/library/adapters/scheduling"
 )
 
@@ -101,7 +103,14 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 
 func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
-	store := New(path, scheduling.New(), storageLogger(nil))
+	store := New(
+		path,
+		&Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    storageLogger(nil),
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +141,14 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkUnavailable()
-	reopened, err := Open(path, scheduling.New())
+	reopened, err := Open(
+		path,
+		&Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    nil,
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("managed shutdown retained lock: %v", err)
 	}
@@ -159,7 +175,14 @@ func TestFailedPreparationReleasesManagedDatabase(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store := New(path, scheduling.New(), storageLogger(nil))
+	store := New(
+		path,
+		&Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    storageLogger(nil),
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err := store.Start(); err == nil {
 		t.Fatal("accepted unsupported schema")
 	}
@@ -1547,7 +1570,16 @@ func TestAutostartMarkerFailsOnClosedDatabase(t *testing.T) {
 	}
 }
 
-func openStore(path string) (*Store, error) { return Open(path, scheduling.New()) }
+func openStore(path string) (*Store, error) {
+	return Open(
+		path,
+		&Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    nil,
+			Settings:  *storeSettingsFixture(),
+		},
+	)
+}
 
 func nativeSchedule(v reviewapi.Schedule) fsrs.Card {
 	return fsrs.Card{
@@ -1802,7 +1834,7 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 		}
 	})
 	item := contentapi.Item{ID: strings.Repeat("a", 32), Kind: "image"}
-	if err = inspectImportedMedia(source, path, &item); err != nil {
+	if err = storeSettingsFixture().inspectImportedMedia(source, path, &item); err != nil {
 		t.Fatal(err)
 	}
 	if item.ByteSize != int64(len(content)) || item.MIMEType != "image/png" {
@@ -1840,7 +1872,14 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 	if err = target.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("copy failure left destination open: %v", err)
 	}
-	if err = inspectImportedMedia(closed, path, &item); !errors.Is(err, os.ErrClosed) {
+	if err = storeSettingsFixture().inspectImportedMedia(
+		closed,
+		path,
+		&item,
+	); !errors.Is(
+		err,
+		os.ErrClosed,
+	) {
 		t.Fatalf("expected stat failure, got %v", err)
 	}
 	if _, err = store.commitMedia(
@@ -1937,5 +1976,66 @@ func TestRecordEncoderRejectsNonFiniteScheduleValues(t *testing.T) {
 	item := contentapi.Item{Schedule: reviewapi.Schedule{Stability: math.NaN()}}
 	if _, err := encodeRecord(item); err == nil {
 		t.Fatal("encoded non-finite schedule")
+	}
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
+}
+
+func storeSettingsFixture() *Settings {
+	settings := configurationFixture()
+	return &Settings{
+		Rules:            settings.Library,
+		MediaRoutePrefix: settings.MediaRoutePrefix,
+		LogErrorKey:      settings.LogErrorKey,
+	}
+}
+
+func TestConfiguredContentAndMediaRouteSurvivePersistence(t *testing.T) {
+	settings := storeSettingsFixture()
+	settings.Rules.TextKind = "plain"
+	settings.MediaRoutePrefix = "/saved/"
+	path := filepath.Join(t.TempDir(), "raven.db")
+	deps := &Dependencies{Scheduler: scheduling.New(&settings.Rules), Settings: *settings}
+	store, err := Open(path, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Configured"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, contents := mediaFixture(t, ".png")
+	card, err := store.CreateCard(
+		&cardapi.CreateInput{FolderID: folder.ID, Items: []contentapi.Draft{
+			{Kind: "plain", Text: "Remember"}, {Kind: "image", SourcePath: image},
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	cards, err := reopened.ListCards()
+	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
+		t.Fatal(cards, err)
+	}
+	route := "/saved/" + folder.ID + "/" + card.ID + "/" + card.Items[1].ID
+	response := httptest.NewRecorder()
+	reopened.MediaHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
+	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), contents) {
+		t.Fatalf("configured media route failed: %d %q", response.Code, response.Body.String())
 	}
 }

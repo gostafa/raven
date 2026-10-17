@@ -4,10 +4,5 @@
 package desktopmedia
 
 const (
-	previewRoutePrefix = "/media-preview/"
-
-	mediaRoutePrefix = "/media/"
-	logErrorKey      = "error"
-
 	zero = 0
 )

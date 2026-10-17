@@ -9,10 +9,27 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	companion "raven/internal/features/companion/domain"
 	companionports "raven/internal/features/companion/ports"
 )
 
 type (
+	// Dependencies supplies native windows, styling, and immutable window settings.
+	Dependencies struct {
+		App           *application.App
+		Handles       WindowSet
+		Configuration companionports.WidgetConfiguration
+		Settings      Settings
+	}
+
+	// Settings supplies geometry and shared event/log names to window orchestration.
+	Settings struct {
+		LogErrorKey         string
+		OpenFloatingReview  string
+		CloseFloatingReview string
+		Layout              companion.Layout
+	}
+
 	// Windows owns the Wails windows used by Raven.
 	Windows struct {
 		mainWindow      restorableWindow
@@ -24,6 +41,7 @@ type (
 		primaryScreen   func() *application.Screen
 		quit            func()
 		logger          *slog.Logger
+		settings        Settings
 	}
 	windowVisibility interface {
 		Show() application.Window

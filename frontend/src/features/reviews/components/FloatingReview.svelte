@@ -82,6 +82,7 @@
   {#if status === 'ready'}
     {#key generation}<ReviewSession
         review={backend}
+        mediaURL={backend.mediaURL}
         {entries}
         {folders}
         floating

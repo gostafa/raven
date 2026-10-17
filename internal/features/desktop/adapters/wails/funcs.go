@@ -12,7 +12,6 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
-	autostart "raven/internal/features/autostart/application"
 	companionwails "raven/internal/features/companion/adapters/wails"
 )
 
@@ -31,18 +30,19 @@ func NewApplication(deps *ApplicationDependencies) *application.App {
 }
 
 // NewWindows constructs all native window handles for injection into feature adapters.
-func NewWindows(app *application.App) companionwails.WindowSet {
+func NewWindows(app *application.App, configuration *Configuration) companionwails.WindowSet {
 	return companionwails.WindowSet{
-		Main:   app.Window.NewWithOptions(mainWindowOptions()),
-		Widget: app.Window.NewWithOptions(widgetWindowOptions()),
-		Review: app.Window.NewWithOptions(reviewWindowOptions()),
+		Main:   app.Window.NewWithOptions(mainWindowOptions(configuration)),
+		Widget: app.Window.NewWithOptions(widgetWindowOptions(configuration)),
+		Review: app.Window.NewWithOptions(reviewWindowOptions(configuration)),
 	}
 }
 
 // New constructs desktop orchestration with complete, stable dependencies.
 func New(deps *Dependencies) *Desktop {
 	return &Desktop{
-		app: deps.App, mainWindow: deps.Handles.Main, widget: deps.Handles.Widget,
+		configuration: *deps.Configuration,
+		app:           deps.App, mainWindow: deps.Handles.Main, widget: deps.Handles.Widget,
 		reviewWindow: deps.Handles.Review, windows: deps.Windows, store: deps.Settings,
 		visibility: deps.Visibility, startup: deps.Startup, reminders: deps.Reminders,
 		notifications: deps.Notifications, icon: deps.Assets.Icon, subscriptions: nil,
@@ -60,7 +60,7 @@ func (desktop *Desktop) Configure() {
 
 func (desktop *Desktop) showReviews() {
 	desktop.windows.ShowMain()
-	desktop.app.Event.Emit("raven:show-reviews")
+	desktop.app.Event.Emit(desktop.configuration.ShowReviews)
 }
 
 // Emit publishes a frontend event through the desktop adapter.
@@ -110,19 +110,19 @@ func desktopIdentityOptions(icon []byte) application.Options {
 	return options
 }
 
-func mainWindowBounds() application.WebviewWindowOptions {
+func mainWindowBounds(configuration *Configuration) application.WebviewWindowOptions {
 	var options application.WebviewWindowOptions
 
 	options.Width = mainWindowWidth
 	options.Height = mainWindowHeight
 	options.MinWidth = mainWindowMinWidth
-	options.MinHeight = reviewHeight
+	options.MinHeight = configuration.Layout.ReviewHeight
 
 	return options
 }
 
-func mainWindowOptions() application.WebviewWindowOptions {
-	options := mainWindowBounds()
+func mainWindowOptions(configuration *Configuration) application.WebviewWindowOptions {
+	options := mainWindowBounds(configuration)
 
 	options.Name = appName
 	options.Title = appTitle
@@ -156,21 +156,21 @@ func floatingWindowOptions() application.WebviewWindowOptions {
 	return options
 }
 
-func widgetWindowBounds() application.WebviewWindowOptions {
+func widgetWindowBounds(configuration *Configuration) application.WebviewWindowOptions {
 	options := floatingWindowOptions()
 
-	options.Width = widgetSize
-	options.Height = widgetSize
-	options.MinWidth = widgetSize
-	options.MinHeight = widgetSize
-	options.MaxWidth = widgetSize
-	options.MaxHeight = widgetSize
+	options.Width = configuration.Layout.WidgetSize
+	options.Height = configuration.Layout.WidgetSize
+	options.MinWidth = configuration.Layout.WidgetSize
+	options.MinHeight = configuration.Layout.WidgetSize
+	options.MaxWidth = configuration.Layout.WidgetSize
+	options.MaxHeight = configuration.Layout.WidgetSize
 
 	return options
 }
 
-func widgetWindowOptions() application.WebviewWindowOptions {
-	options := widgetWindowBounds()
+func widgetWindowOptions(configuration *Configuration) application.WebviewWindowOptions {
+	options := widgetWindowBounds(configuration)
 
 	options.Name = "raven-widget"
 	options.Title = "Raven widget"
@@ -226,13 +226,13 @@ func reviewMacWindowOptions() application.MacWindow {
 	return options
 }
 
-func reviewWindowOptions() application.WebviewWindowOptions {
+func reviewWindowOptions(configuration *Configuration) application.WebviewWindowOptions {
 	options := floatingWindowOptions()
 
 	options.Name = "raven-review"
 	options.Title = "Raven review"
-	options.Width = reviewWidth
-	options.Height = reviewHeight
+	options.Width = configuration.Layout.ReviewWidth
+	options.Height = configuration.Layout.ReviewHeight
 	options.Hidden = true
 	options.BackgroundColour = application.NewRGB(blackChannel, blackChannel, blackChannel)
 	options.URL = "/?view=review"
@@ -314,7 +314,8 @@ func (desktop *Desktop) reportStartupError(err error) {
 	app.Logger.ErrorContext(
 		context.Background(),
 		"could not configure login startup",
-		slog.Any(logErrorKey, err),
+		//nolint:sloglint // Log field names come from validated embedded configuration.
+		slog.Any(desktop.configuration.LogErrorKey, err),
 	)
 	app.Dialog.Error().
 		SetTitle(startupMenuTitle).
@@ -328,7 +329,8 @@ func (desktop *Desktop) refreshStartup() {
 		desktop.app.Logger.WarnContext(
 			context.Background(),
 			"could not refresh login startup status",
-			slog.Any(logErrorKey, err),
+			//nolint:sloglint // Log field names come from validated embedded configuration.
+			slog.Any(desktop.configuration.LogErrorKey, err),
 		)
 	}
 }
@@ -388,7 +390,7 @@ func (desktop *Desktop) Dispose() {
 func singleInstanceOptions(deps *ApplicationDependencies) *application.SingleInstanceOptions {
 	var options application.SingleInstanceOptions
 
-	options.UniqueID = autostart.ApplicationID
+	options.UniqueID = deps.Configuration.ApplicationID
 	options.OnSecondInstanceLaunch = func(data application.SecondInstanceData) {
 		deps.Visibility.SecondInstance(data.Args)
 	}

@@ -3,17 +3,22 @@ package desktopmedia
 import (
 	"bytes"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 )
 
 func TestUnavailablePickerAndSavedMediaReturnAvailabilityErrors(t *testing.T) {
-	picker := New(nil, nil, nil)
+	picker := testPicker(nil)
 	if _, err := picker.Select("image"); !errors.Is(err, errFileSelectionIsUnavailable) {
 		t.Fatalf("missing native window: %v", err)
 	}
@@ -34,7 +39,7 @@ func TestClosedPreviewFilesAreRejectedAndCleanupFailuresAreLogged(t *testing.T) 
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	picker := New(nil, nil, nil)
+	picker := testPicker(nil)
 	picker.logger = slog.New(slog.NewTextHandler(&output, nil))
 	picker.closePreview(t.Context(), file)
 	if !bytes.Contains(output.Bytes(), []byte("could not close media preview")) {
@@ -56,7 +61,7 @@ func TestSelectedMediaPreview(t *testing.T) {
 	if err := os.WriteFile(path, []byte("0123456789"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := New(nil, nil, nil)
+	service := testPicker(nil)
 	service.previews.Store("selected-token", path)
 	handler := service.Middleware(http.NotFoundHandler())
 	request := httptest.NewRequest(http.MethodGet, "/media-preview/selected-token", nil)
@@ -95,7 +100,7 @@ func TestSelectionValidatesFilesAndCreatesPreviews(t *testing.T) {
 	if err := os.WriteFile(path, []byte("selected"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := New(nil, nil, nil)
+	service := testPicker(nil)
 	service.choose = func(kind, filter string) ([]string, error) {
 		if kind != "image" || filter == "" {
 			t.Fatal("missing native filter")
@@ -144,7 +149,7 @@ func TestSelectionValidatesFilesAndCreatesPreviews(t *testing.T) {
 }
 
 func TestPreviewRegistryAndRoutingFailures(t *testing.T) {
-	service := New(nil, nil, func() http.Handler {
+	service := testPicker(func() http.Handler {
 		return http.HandlerFunc(
 			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) },
 		)
@@ -187,12 +192,77 @@ func TestSelectedSymlinkMayReferToAnotherDirectory(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	service := New(nil, nil, nil)
+	service := testPicker(nil)
 	service.previews.Store("selected", link)
 	response := httptest.NewRecorder()
 	service.Middleware(http.NotFoundHandler()).
 		ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/media-preview/selected", nil))
 	if response.Code != http.StatusOK || response.Body.String() != "selected" {
 		t.Fatalf("symlink preview: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
+}
+
+func mediaSettingsFixture() *Settings {
+	settings := configurationFixture()
+	return &Settings{
+		MediaRoutePrefix:   settings.MediaRoutePrefix,
+		PreviewRoutePrefix: settings.PreviewRoutePrefix,
+		LogErrorKey:        settings.LogErrorKey,
+	}
+}
+
+func testPicker(saved func() http.Handler) *Picker {
+	return NewPicker(
+		nil,
+		nil,
+		NewRegistry(saved, slog.New(slog.NewTextHandler(io.Discard, nil)), mediaSettingsFixture()),
+	)
+}
+
+func TestConfiguredMediaRoutesReachPickerAndMiddleware(t *testing.T) {
+	settings := mediaSettingsFixture()
+	settings.MediaRoutePrefix = "/saved/"
+	settings.PreviewRoutePrefix = "/preview/"
+	registry := NewRegistry(func() http.Handler {
+		return http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) },
+		)
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)), settings)
+	picker := NewPicker(nil, nil, registry)
+	path := filepath.Join(t.TempDir(), "selected.png")
+	if err := os.WriteFile(path, []byte("selected image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	picker.choose = func(string, string) ([]string, error) { return []string{path}, nil }
+	selected, err := picker.Select("image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(selected[0].PreviewURL, "/preview/") {
+		t.Fatal(selected)
+	}
+	handler := registry.Middleware(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) },
+		),
+	)
+	for route, status := range map[string]int{
+		"/saved/folder/card/item": http.StatusAccepted,
+		selected[0].PreviewURL:    http.StatusOK,
+		"/media/folder/card/item": http.StatusNoContent,
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
+		if response.Code != status {
+			t.Fatalf("%s: got %d, want %d", route, response.Code, status)
+		}
 	}
 }

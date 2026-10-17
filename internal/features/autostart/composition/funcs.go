@@ -11,6 +11,7 @@ import (
 
 	startupwails "raven/internal/features/autostart/adapters/wails"
 	autostart "raven/internal/features/autostart/application"
+	configuration "raven/internal/features/configuration/domain"
 )
 
 func newLaunch(params launchParams) launchResult {
@@ -23,6 +24,10 @@ func newLaunch(params launchParams) launchResult {
 	return launchResult{Out: fx.Out{}, Visibility: visibility, Requests: params.Requests}
 }
 
-func newController(app *application.App) *autostart.Controller {
-	return autostart.New(startupwails.New(app.Autostart), app.Env.Info().Debug, nil)
+func newController(app *application.App, settings *configuration.Settings) *autostart.Controller {
+	return autostart.New(
+		startupwails.New(app.Autostart),
+		app.Env.Info().Debug,
+		settings.ApplicationID,
+	)
 }

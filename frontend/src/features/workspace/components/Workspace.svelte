@@ -121,7 +121,10 @@
 
   function restoreWorkspace(): Workspace {
     try {
-      return { ...emptyWorkspace(), ...loadPreferences(backend.preferences) };
+      return {
+        ...emptyWorkspace(),
+        ...loadPreferences(backend.preferences, backend.configuration.preferencesStorageKey),
+      };
     } catch {
       preferencesError = 'Your navigation preferences could not be loaded.';
       return emptyWorkspace();
@@ -145,7 +148,7 @@
 
   function persistPreferences() {
     try {
-      savePreferences(backend.preferences, workspace);
+      savePreferences(backend.preferences, workspace, backend.configuration.preferencesStorageKey);
       preferencesError = '';
     } catch {
       preferencesError = 'Your navigation preferences could not be saved on this device.';
@@ -636,7 +639,9 @@
           {#if visibleCards.length}<ul class="memory-grid" aria-label="Memory cards">
               {#each visibleCards as card (`${card.folderId}/${card.id}`)}
                 <li class="memory-tile">
-                  <div class="memory-card"><div class="memory-card-preview"><CardContent {card} compact /></div></div>
+                  <div class="memory-card">
+                    <div class="memory-card-preview"><CardContent {card} mediaURL={backend.mediaURL} compact /></div>
+                  </div>
                   <span class="tile-actions"
                     ><ActionMenu
                       label={`Options for card ${cardPreview(card)}`}
@@ -823,6 +828,7 @@
 >
   {#if reviewOpen}<ReviewSession
       review={backend}
+      mediaURL={backend.mediaURL}
       entries={reviewQueue}
       folders={workspace.folders}
       bind:saving={reviewSaving}

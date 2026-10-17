@@ -11,6 +11,8 @@ import (
 	"go.uber.org/fx/fxtest"
 
 	"raven/internal/features/autostart/adapters/launch"
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	"raven/internal/shared/lifetime"
 )
@@ -115,7 +117,9 @@ func TestDesktopStopHonorsDeadline(t *testing.T) {
 
 func TestDesktopRequestWorkerUsesIndependentLifetime(t *testing.T) {
 	runtime := lifetime.New()
-	desktop := desktopwails.New(&desktopwails.Dependencies{})
+	desktop := desktopwails.New(
+		&desktopwails.Dependencies{Configuration: desktopConfiguration(configurationFixture())},
+	)
 	graph := fxtest.New(t, fx.Invoke(func(lc fx.Lifecycle) {
 		lc.Append(desktopLifecycle(desktop, runtime, launch.New()))
 	}))
@@ -127,4 +131,12 @@ func TestDesktopRequestWorkerUsesIndependentLifetime(t *testing.T) {
 	if runtime.Context().Err() == nil {
 		t.Fatal("shutdown retained request worker lifetime")
 	}
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
 }

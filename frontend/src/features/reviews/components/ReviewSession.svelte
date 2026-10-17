@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte';
-  import type { Card } from '../../cards';
+  import type { Card, MediaURLPort } from '../../cards';
   import type { Folder } from '../../folders';
   import type { ReviewPort } from '../domain/types';
   import { saveReview } from '../application/funcs';
@@ -10,6 +10,7 @@
 
   let {
     review,
+    mediaURL,
     entries,
     folders,
     floating = false,
@@ -19,6 +20,7 @@
     onclose,
   }: {
     review: ReviewPort;
+    mediaURL: MediaURLPort;
     entries: ReviewItem[];
     folders: Pick<Folder, 'id' | 'title'>[];
     floating?: boolean;
@@ -98,7 +100,7 @@
     </div>
     <div class="review-scroll">
       <p class="eyebrow" id="review-title">WHAT YOU WANT TO REMEMBER</p>
-      {#key `${card.folderId}/${card.id}/${entry.item.id}`}<CardContent {card} />{/key}
+      {#key `${card.folderId}/${card.id}/${entry.item.id}`}<CardContent {card} {mediaURL} />{/key}
     </div>
     <footer>
       <p class="review-question">How familiar does this feel?</p>

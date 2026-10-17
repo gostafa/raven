@@ -540,7 +540,7 @@ func (migration *schemaMigration) unscheduledItems(
 		return nil, fmt.Errorf("select legacy content reader: %w", err)
 	}
 
-	items, err := load(folder, card)
+	items, err := load(migration.storage.settings, folder, card)
 	if err != nil {
 		return nil, fmt.Errorf("read unscheduled content: %w", err)
 	}
@@ -548,7 +548,7 @@ func (migration *schemaMigration) unscheduledItems(
 	return items, nil
 }
 
-func (migration *schemaMigration) legacyLoader() (func(*bolt.Bucket, *cardapi.Card) ([]contentapi.Item, error), error) {
+func (migration *schemaMigration) legacyLoader() (legacyContentLoader, error) {
 	switch migration.state.version {
 	case schemaV1:
 		return legacyTextContent, nil
@@ -559,8 +559,12 @@ func (migration *schemaMigration) legacyLoader() (func(*bolt.Bucket, *cardapi.Ca
 	}
 }
 
-func legacyTextContent(folder *bolt.Bucket, card *cardapi.Card) ([]contentapi.Item, error) {
-	items, err := legacyTextItems(folder.Bucket([]byte(cardsBucket)).Get([]byte(card.ID)))
+func legacyTextContent(
+	settings *Settings,
+	folder *bolt.Bucket,
+	card *cardapi.Card,
+) ([]contentapi.Item, error) {
+	items, err := legacyTextItems(settings, folder.Bucket([]byte(cardsBucket)).Get([]byte(card.ID)))
 	if err != nil {
 		return nil, fmt.Errorf("read legacy text: %w", err)
 	}
@@ -568,8 +572,16 @@ func legacyTextContent(folder *bolt.Bucket, card *cardapi.Card) ([]contentapi.It
 	return items, nil
 }
 
-func legacyOrderedContent(folder *bolt.Bucket, card *cardapi.Card) ([]contentapi.Item, error) {
-	items, err := mergeLegacyItems(folder.Bucket([]byte(itemsBucket)).Bucket([]byte(card.ID)), card)
+func legacyOrderedContent(
+	settings *Settings,
+	folder *bolt.Bucket,
+	card *cardapi.Card,
+) ([]contentapi.Item, error) {
+	items, err := mergeLegacyItems(
+		settings,
+		folder.Bucket([]byte(itemsBucket)).Bucket([]byte(card.ID)),
+		card,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("read legacy ordered content: %w", err)
 	}
@@ -603,7 +615,7 @@ func (migration *schemaMigration) loadScheduledContent(
 	return nil
 }
 
-func legacyTextItems(data []byte) ([]contentapi.Item, error) {
+func legacyTextItems(settings *Settings, data []byte) ([]contentapi.Item, error) {
 	var previous legacyText
 
 	err := decodeRecord(data, &previous)
@@ -615,7 +627,7 @@ func legacyTextItems(data []byte) ([]contentapi.Item, error) {
 		return nil, errInvalidLegacyCard
 	}
 
-	items, err := createLegacyTextItems([]string{previous.Prompt, previous.Answer})
+	items, err := createLegacyTextItems(settings, []string{previous.Prompt, previous.Answer})
 	if err != nil {
 		return nil, fmt.Errorf("create legacy text content: %w", err)
 	}
@@ -623,10 +635,10 @@ func legacyTextItems(data []byte) ([]contentapi.Item, error) {
 	return items, nil
 }
 
-func createLegacyTextItems(texts []string) ([]contentapi.Item, error) {
+func createLegacyTextItems(settings *Settings, texts []string) ([]contentapi.Item, error) {
 	items := make([]contentapi.Item, zero, len(texts))
 	for position := range texts {
-		item, err := legacyTextItem(texts[position], position)
+		item, err := legacyTextItem(settings, texts[position], position)
 		if err != nil {
 			return nil, fmt.Errorf("create legacy text item: %w", err)
 		}
@@ -637,7 +649,7 @@ func createLegacyTextItems(texts []string) ([]contentapi.Item, error) {
 	return items, nil
 }
 
-func legacyTextItem(text string, position int) (contentapi.Item, error) {
+func legacyTextItem(settings *Settings, text string, position int) (contentapi.Item, error) {
 	var item contentapi.Item
 
 	id, err := newItemID()
@@ -646,7 +658,7 @@ func legacyTextItem(text string, position int) (contentapi.Item, error) {
 	}
 
 	item.ID = id
-	item.Kind = textKind
+	item.Kind = settings.Rules.TextKind
 	item.Position = position
 	item.Text = text
 
@@ -702,12 +714,16 @@ func (migration *schemaMigration) verifyCard(transaction *bolt.Tx, card *cardapi
 }
 
 // Merge prompt items followed by answer items, retaining every item ID and file.
-func mergeLegacyItems(bucket *bolt.Bucket, card *cardapi.Card) ([]contentapi.Item, error) {
+func mergeLegacyItems(
+	settings *Settings,
+	bucket *bolt.Bucket,
+	card *cardapi.Card,
+) ([]contentapi.Item, error) {
 	if bucket == nil {
 		return nil, errMissingLegacyCardContent
 	}
 
-	old, err := collectLegacyItems(bucket, card)
+	old, err := collectLegacyItems(settings, bucket, card)
 	if err != nil {
 		return nil, fmt.Errorf(mergeLegacyItemsErrorFormat, err)
 	}
@@ -720,19 +736,14 @@ func mergeLegacyItems(bucket *bolt.Bucket, card *cardapi.Card) ([]contentapi.Ite
 	return items, nil
 }
 
-func collectLegacyItems(bucket *bolt.Bucket, card *cardapi.Card) ([]*legacyItem, error) {
+func collectLegacyItems(
+	settings *Settings,
+	bucket *bolt.Bucket,
+	card *cardapi.Card,
+) ([]*legacyItem, error) {
 	old := []*legacyItem{}
 
-	err := bucket.ForEach(func(id, data []byte) error {
-		item, err := readLegacyItem(id, data, card)
-		if err != nil {
-			return fmt.Errorf(mergeLegacyItemsErrorFormat, err)
-		}
-
-		old = append(old, item)
-
-		return nil
-	})
+	err := bucket.ForEach(settings.legacyCollector(card, &old))
 	if err != nil {
 		return nil, fmt.Errorf(mergeLegacyItemsErrorFormat, err)
 	}
@@ -740,7 +751,7 @@ func collectLegacyItems(bucket *bolt.Bucket, card *cardapi.Card) ([]*legacyItem,
 	return old, nil
 }
 
-func readLegacyItem(id, data []byte, card *cardapi.Card) (*legacyItem, error) {
+func (settings *Settings) readLegacyItem(id, data []byte, card *cardapi.Card) (*legacyItem, error) {
 	item := &legacyItem{Item: new(contentapi.Item), Side: ""}
 
 	err := decodeRecord(data, item)
@@ -752,7 +763,7 @@ func readLegacyItem(id, data []byte, card *cardapi.Card) (*legacyItem, error) {
 		return nil, errInvalidLegacyContentOwnershipOrSide
 	}
 
-	err = library.ValidateItem(item.Item)
+	err = settings.Rules.ValidateItem(item.Item)
 	if err != nil {
 		return nil, fmt.Errorf("validate legacy content: %w", err)
 	}
@@ -826,8 +837,8 @@ func (storage *Store) mediaPath(relative string) string {
 	return filepath.Join(storage.mediaDir, filepath.Base(relative))
 }
 
-func inspectMedia(file *os.File, kind, source string) (string, error) {
-	declared := library.MediaType(strings.ToLower(filepath.Ext(source)))
+func (settings *Settings) inspectMedia(file *os.File, kind, source string) (string, error) {
+	declared := settings.Rules.MediaType(strings.ToLower(filepath.Ext(source)))
 	if !supportedMediaKind(kind) || !strings.HasPrefix(declared, kind+"/") {
 		return "", errChooseASupportedFileForThisMedia
 	}
@@ -837,7 +848,7 @@ func inspectMedia(file *os.File, kind, source string) (string, error) {
 		return "", fmt.Errorf("read selected media header: %w", err)
 	}
 
-	if !compatibleMedia(declared, header) {
+	if !compatibleMedia(settings, declared, header) {
 		return "", fmt.Errorf("%w %s", errMediaContentTypeMismatch, declared)
 	}
 
@@ -864,21 +875,21 @@ func readMediaHeader(file *os.File) ([]byte, error) {
 	return header[:count], nil
 }
 
-func compatibleMedia(declared string, header []byte) bool {
+func compatibleMedia(settings *Settings, declared string, header []byte) bool {
 	detected := http.DetectContentType(header)
 
-	return detected == declared || detected == mediaAlias(declared) ||
+	return detected == declared || detected == mediaAlias(settings, declared) ||
 		compatibleSignature(declared, header)
 }
 
-func mediaAlias(declared string) string {
+func mediaAlias(settings *Settings, declared string) string {
 	switch declared {
 	case "audio/wav":
 		return "audio/wave"
-	case "audio/ogg", "video/ogg":
+	case settings.Rules.MIMEOggAudio, "video/ogg":
 		return "application/ogg"
 	case "audio/mp4":
-		return "video/mp4"
+		return settings.Rules.MIMEMP4Video
 	default:
 		return ""
 	}
@@ -937,7 +948,7 @@ func (storage *Store) importOpenedMedia(
 ) (contentapi.Item, string, error) {
 	imported := *item
 
-	err := inspectImportedMedia(file, source, &imported)
+	err := storage.settings.inspectImportedMedia(file, source, &imported)
 	if err != nil {
 		return *item, "", fmt.Errorf(importMediaErrorFormat, err)
 	}
@@ -950,13 +961,16 @@ func (storage *Store) importOpenedMedia(
 	return imported, path, nil
 }
 
-func inspectImportedMedia(file *os.File, source string, item *contentapi.Item) error {
+func (settings *Settings) inspectImportedMedia(file *os.File,
+	source string,
+	item *contentapi.Item,
+) error {
 	size, err := regularMediaSize(file)
 	if err != nil {
 		return fmt.Errorf("inspect selected file: %w", err)
 	}
 
-	mimeType, err := inspectMedia(file, item.Kind, source)
+	mimeType, err := settings.inspectMedia(file, item.Kind, source)
 	if err != nil {
 		return fmt.Errorf("inspect media content: %w", err)
 	}
@@ -1074,7 +1088,7 @@ func (storage *Store) cleanupMedia() error {
 		return fmt.Errorf(cleanupMediaErrorFormat, err)
 	}
 
-	err = storage.removeUnreferencedMedia(referencedMedia(cards))
+	err = storage.removeUnreferencedMedia(referencedMedia(storage.settings, cards))
 	if err != nil {
 		return fmt.Errorf(cleanupMediaErrorFormat, err)
 	}
@@ -1082,20 +1096,20 @@ func (storage *Store) cleanupMedia() error {
 	return nil
 }
 
-func referencedMedia(cards []cardapi.Card) map[string]bool {
+func referencedMedia(settings *Settings, cards []cardapi.Card) map[string]bool {
 	referenced := make(map[string]bool)
 
 	for index := range cards {
-		referenceCardMedia(&cards[index], referenced)
+		referenceCardMedia(settings, &cards[index], referenced)
 	}
 
 	return referenced
 }
 
-func referenceCardMedia(card *cardapi.Card, referenced map[string]bool) {
+func referenceCardMedia(settings *Settings, card *cardapi.Card, referenced map[string]bool) {
 	for index := range card.Items {
 		item := &card.Items[index]
-		if item.Kind != textKind {
+		if item.Kind != settings.Rules.TextKind {
 			referenced[filepath.Base(item.RelativePath)] = true
 		}
 	}
@@ -1118,7 +1132,7 @@ func (storage *Store) removeUnreferencedMedia(referenced map[string]bool) error 
 }
 
 func (storage *Store) cleanMediaEntry(entry os.DirEntry, referenced map[string]bool) error {
-	if !removableMedia(entry, referenced) {
+	if !removableMedia(storage.settings, entry, referenced) {
 		return nil
 	}
 
@@ -1130,10 +1144,10 @@ func (storage *Store) cleanMediaEntry(entry os.DirEntry, referenced map[string]b
 	return nil
 }
 
-func removableMedia(entry os.DirEntry, referenced map[string]bool) bool {
+func removableMedia(settings *Settings, entry os.DirEntry, referenced map[string]bool) bool {
 	name := entry.Name()
 	managed := strings.HasPrefix(name, ".import-") ||
-		library.ValidMediaPath("media/"+name, strings.TrimSuffix(name, filepath.Ext(name)))
+		settings.Rules.ValidMediaPath("media/"+name, strings.TrimSuffix(name, filepath.Ext(name)))
 
 	return !entry.IsDir() && managed && !referenced[name]
 }
@@ -1159,8 +1173,11 @@ func (storage *Store) serveMedia(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	parts := strings.Split(strings.TrimPrefix(request.URL.Path, mediaRoutePrefix), "/")
-	if !validMediaRoute(request.URL.Path, parts) {
+	parts := strings.Split(
+		strings.TrimPrefix(request.URL.Path, storage.settings.MediaRoutePrefix),
+		"/",
+	)
+	if !validMediaRoute(storage.settings, request.URL.Path, parts) {
 		http.NotFound(writer, request)
 
 		return
@@ -1169,8 +1186,8 @@ func (storage *Store) serveMedia(writer http.ResponseWriter, request *http.Reque
 	storage.serveOwnedMedia(writer, request, parts)
 }
 
-func validMediaRoute(path string, parts []string) bool {
-	return strings.HasPrefix(path, mediaRoutePrefix) && len(parts) == mediaRouteParts &&
+func validMediaRoute(settings *Settings, path string, parts []string) bool {
+	return strings.HasPrefix(path, settings.MediaRoutePrefix) && len(parts) == mediaRouteParts &&
 		itemIDPattern.MatchString(parts[mediaItemPart])
 }
 
@@ -1257,7 +1274,7 @@ func (storage *Store) lookupMedia(
 
 	for index := range card.Items {
 		item := &card.Items[index]
-		if item.ID == parts[mediaItemPart] && item.Kind != textKind {
+		if item.ID == parts[mediaItemPart] && item.Kind != storage.settings.Rules.TextKind {
 			return *item, nil
 		}
 	}
@@ -1276,8 +1293,8 @@ func DefaultPath() (string, error) {
 }
 
 // Open opens and migrates library persistence, then reconciles saved media.
-func Open(path string, scheduler library.Scheduler, loggers ...*slog.Logger) (*Store, error) {
-	storage := New(path, scheduler, storageLogger(loggers))
+func Open(path string, deps *Dependencies) (*Store, error) {
+	storage := New(path, deps)
 
 	err := storage.Start()
 	if err != nil {
@@ -1288,10 +1305,10 @@ func Open(path string, scheduler library.Scheduler, loggers ...*slog.Logger) (*S
 }
 
 // New constructs persistence without acquiring the database lock.
-func New(path string, scheduler library.Scheduler, logger *slog.Logger) *Store {
-	storage := newStore(nil, scheduler, path)
+func New(path string, deps *Dependencies) *Store {
+	storage := newStore(nil, path, deps)
 
-	storage.logger = logger
+	storage.logger = storageLogger([]*slog.Logger{deps.Logger})
 
 	return storage
 }
@@ -1362,12 +1379,15 @@ func openDatabase(path string) (*bolt.DB, error) {
 	return db, nil
 }
 
-func newStore(db *bolt.DB, scheduler library.Scheduler, path string) *Store {
+func newStore(db *bolt.DB, path string, deps *Dependencies) *Store {
+	settings := deps.Settings
+
 	return &Store{
+		settings:  &settings,
 		path:      path,
 		ready:     atomic.Bool{},
 		db:        db,
-		scheduler: scheduler,
+		scheduler: deps.Scheduler,
 		mediaDir:  filepath.Join(filepath.Dir(path), "media"),
 		mediaMu:   sync.Mutex{},
 		logger:    nil,
@@ -1399,7 +1419,12 @@ func (storage *Store) prepare(path string) error {
 func (storage *Store) closeMediaFile(ctx context.Context, file *os.File) {
 	err := file.Close()
 	if err != nil {
-		storage.logger.WarnContext(ctx, "could not close media file", slog.Any(logErrorKey, err))
+		storage.logger.WarnContext(
+			ctx,
+			"could not close media file",
+			//nolint:sloglint // Log field names come from validated embedded configuration.
+			slog.Any(storage.settings.LogErrorKey, err),
+		)
 	}
 }
 
@@ -1417,7 +1442,8 @@ func (storage *Store) reportCleanupFailure(err error) {
 		storage.logger.WarnContext(
 			context.Background(),
 			"could not clean up media",
-			slog.Any(logErrorKey, err),
+			//nolint:sloglint // Log field names come from validated embedded configuration.
+			slog.Any(storage.settings.LogErrorKey, err),
 		)
 	}
 }
@@ -1808,6 +1834,7 @@ func newCardContentReader(
 	card *cardapi.Card,
 ) *cardContentReader {
 	return &cardContentReader{
+		settings:  storage.settings,
 		card:      card,
 		scheduler: storage.scheduler,
 		schema:    readSchemaVersion(transaction),
@@ -1824,7 +1851,7 @@ func (reader *cardContentReader) readItems(items *bolt.Bucket) error {
 }
 
 func (reader *cardContentReader) appendItem(id, data []byte) error {
-	item, err := decodeContentItem(data)
+	item, err := decodeContentItem(reader.settings, data)
 	if err != nil {
 		return fmt.Errorf("decode card content: %w", err)
 	}
@@ -1843,7 +1870,7 @@ func (reader *cardContentReader) appendItem(id, data []byte) error {
 	return nil
 }
 
-func decodeContentItem(data []byte) (contentapi.Item, error) {
+func decodeContentItem(settings *Settings, data []byte) (contentapi.Item, error) {
 	var item contentapi.Item
 
 	err := decodeRecord(data, &item)
@@ -1851,7 +1878,7 @@ func decodeContentItem(data []byte) (contentapi.Item, error) {
 		return item, fmt.Errorf("decode content item: %w", err)
 	}
 
-	err = library.ValidateItem(&item)
+	err = settings.Rules.ValidateItem(&item)
 	if err != nil {
 		return item, fmt.Errorf("validate content item: %w", err)
 	}
@@ -2114,7 +2141,7 @@ func (write *cardWrite) prepare(drafts []contentapi.Draft) error {
 		return fmt.Errorf("read previous card: %w", err)
 	}
 
-	write.items, write.imported, err = library.PrepareItems(
+	write.items, write.imported, err = write.storage.settings.Rules.PrepareItems(
 		drafts, write.previous.Items,
 		&library.PreparationDependencies{ImportMedia: write.storage.importMedia, NewID: newItemID},
 	)
@@ -2344,7 +2371,7 @@ func (write *cardWrite) removeObsoleteMedia() {
 
 	for index := range write.previous.Items {
 		item := &write.previous.Items[index]
-		if item.Kind != textKind && !kept[item.ID] {
+		if item.Kind != write.storage.settings.Rules.TextKind && !kept[item.ID] {
 			write.storage.removeMediaFile(write.storage.mediaPath(item.RelativePath))
 		}
 	}
@@ -2448,7 +2475,7 @@ func (review *cardRating) rateItem(item *contentapi.Item) error {
 		review.now = time.Now()
 	}
 
-	err := library.ApplyReview(
+	err := review.storage.settings.Rules.ApplyReview(
 		item, &reviewapi.Attempt{At: review.now, Rating: review.rating}, review.storage.scheduler,
 	)
 	if err != nil {
@@ -2667,5 +2694,21 @@ func lowercaseLegacyKey(key string) string {
 		return strings.ToLower(key)
 	default:
 		return key
+	}
+}
+
+func (settings *Settings) legacyCollector(
+	card *cardapi.Card,
+	old *[]*legacyItem,
+) func([]byte, []byte) error {
+	return func(id, data []byte) error {
+		item, err := settings.readLegacyItem(id, data, card)
+		if err != nil {
+			return fmt.Errorf(mergeLegacyItemsErrorFormat, err)
+		}
+
+		*old = append(*old, item)
+
+		return nil
 	}
 }

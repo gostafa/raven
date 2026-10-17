@@ -15,6 +15,8 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
+	configyaml "raven/internal/features/configuration/adapters/yaml"
+	configuration "raven/internal/features/configuration/domain"
 	desktopports "raven/internal/features/desktop/ports"
 	"raven/internal/features/library/adapters/boltstore"
 	"raven/internal/features/library/adapters/scheduling"
@@ -55,6 +57,7 @@ func (e *events) Emit(string) {
 func modules(path string, n *native, e *events) fx.Option {
 	return fx.Options(
 		librarycomposition.Module,
+		fx.Supply(configurationFixture()),
 		composition.Module,
 		fx.Provide(
 			lifetime.New,
@@ -137,7 +140,14 @@ func TestLifecycleOrderingReadinessAndLockRelease(t *testing.T) {
 	}
 	control.Start()
 	control.Wake()
-	reopened, err := boltstore.Open(path, scheduling.New())
+	reopened, err := boltstore.Open(
+		path,
+		&boltstore.Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    nil,
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("shutdown retained database lock: %v", err)
 	}
@@ -192,7 +202,14 @@ func TestPartialStartupRollsBackEveryStartedResource(t *testing.T) {
 	if stops != 1 {
 		t.Fatalf("notifications stopped %d times", stops)
 	}
-	store, err := boltstore.Open(path, scheduling.New())
+	store, err := boltstore.Open(
+		path,
+		&boltstore.Dependencies{
+			Scheduler: scheduling.New(&configurationFixture().Library),
+			Logger:    nil,
+			Settings:  *storeSettingsFixture(),
+		},
+	)
 	if err != nil {
 		t.Fatalf("rollback retained database lock: %v", err)
 	}
@@ -212,4 +229,21 @@ func TestDatabaseFailurePreventsNativeStartup(t *testing.T) {
 		t.Fatal("database startup unexpectedly succeeded")
 	}
 	graph.RequireStop()
+}
+
+func configurationFixture() *configuration.Settings {
+	settings, err := (configyaml.Loader{}).Load()
+	if err != nil {
+		panic(err)
+	}
+	return settings
+}
+
+func storeSettingsFixture() *boltstore.Settings {
+	settings := configurationFixture()
+	return &boltstore.Settings{
+		Rules:            settings.Library,
+		MediaRoutePrefix: settings.MediaRoutePrefix,
+		LogErrorKey:      settings.LogErrorKey,
+	}
 }

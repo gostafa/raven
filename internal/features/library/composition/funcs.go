@@ -11,12 +11,14 @@ import (
 
 	"go.uber.org/fx"
 
+	configuration "raven/internal/features/configuration/domain"
 	"raven/internal/features/library/adapters/boltstore"
 	"raven/internal/features/library/adapters/desktopmedia"
+	"raven/internal/features/library/adapters/scheduling"
 )
 
-func newStore(params storeParams) storeResult {
-	store := boltstore.New(string(params.Path), params.Scheduler, params.Logger)
+func newStore(params storeParams, settings *configuration.Settings) storeResult {
+	store := boltstore.New(string(params.Path), storeDependencies(params, settings))
 	params.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error { return store.Start() },
 		OnStop:  func(context.Context) error { return store.Close() },
@@ -40,10 +42,40 @@ func defaultPath() (DatabasePath, error) {
 	return DatabasePath(path), nil
 }
 
-func newRegistry(store *boltstore.Store, logger *slog.Logger) *desktopmedia.Registry {
-	return desktopmedia.NewRegistry(func() http.Handler { return store.MediaHandler() }, logger)
+func newRegistry(
+	store *boltstore.Store,
+	logger *slog.Logger,
+	settings *configuration.Settings,
+) *desktopmedia.Registry {
+	return desktopmedia.NewRegistry(
+		func() http.Handler { return store.MediaHandler() },
+		logger,
+		&desktopmedia.Settings{
+			MediaRoutePrefix:   settings.MediaRoutePrefix,
+			PreviewRoutePrefix: settings.PreviewRoutePrefix,
+			LogErrorKey:        settings.LogErrorKey,
+		},
+	)
 }
 
 func newSelection(params mediaParams) *desktopmedia.Picker {
 	return desktopmedia.NewPicker(params.App, params.Handles.Main, params.Registry)
+}
+
+func newScheduler(settings *configuration.Settings) scheduling.Scheduler {
+	return scheduling.New(&settings.Library)
+}
+
+func storeDependencies(
+	params storeParams,
+	settings *configuration.Settings,
+) *boltstore.Dependencies {
+	return &boltstore.Dependencies{
+		Scheduler: params.Scheduler, Logger: params.Logger,
+		Settings: boltstore.Settings{
+			Rules:            settings.Library,
+			MediaRoutePrefix: settings.MediaRoutePrefix,
+			LogErrorKey:      settings.LogErrorKey,
+		},
+	}
 }
