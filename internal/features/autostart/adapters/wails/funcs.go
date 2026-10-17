@@ -11,43 +11,57 @@ import (
 	autostartports "raven/internal/features/autostart/ports"
 )
 
-// EnableWithOptions enables login startup with the supplied application options.
-func (backend Backend) EnableWithOptions(visibility *autostartports.Options) error {
-	forwardErr3 := backend.native.EnableWithOptions(
-		application.AutostartOptions{
-			Identifier: visibility.Identifier,
-			Arguments:  visibility.Arguments,
-		},
+// EnableWithOptions registers the supplied application identity and arguments.
+func (backend Backend) EnableWithOptions(options *autostartports.Options) error {
+	_, err := backend.execute(
+		"enable",
+		application.AutostartOptions{Identifier: options.Identifier, Arguments: options.Arguments},
 	)
-	if forwardErr3 != nil {
-		return fmt.Errorf("enable with options: %w", forwardErr3)
-	}
-
-	return nil
+	return registrationError("enable with options", err)
 }
 
-// Disable disables login startup registration.
+// Disable removes login startup registration.
 func (backend Backend) Disable() error {
-	forwardErr := backend.native.Disable()
-	if forwardErr != nil {
-		return fmt.Errorf("disable: %w", forwardErr)
-	}
+	_, err := backend.execute("disable", application.AutostartOptions{})
+	return registrationError("disable", err)
+}
 
+// IsEnabled reports the observed operating system registration.
+func (backend Backend) IsEnabled() (bool, error) {
+	enabled, err := backend.execute("status", application.AutostartOptions{})
+	return enabled, registrationError("is enabled", err)
+}
+
+func registrationError(operation string, err error) error {
+	if err != nil {
+		return fmt.Errorf("%s: %w", operation, err)
+	}
 	return nil
 }
 
-// IsEnabled returns the current operating system login startup state.
-func (backend Backend) IsEnabled() (bool, error) {
-	result, forwardErr2 := backend.native.IsEnabled()
-	if forwardErr2 != nil {
-		return result, fmt.Errorf("is enabled: %w", forwardErr2)
+// New binds the consumer-owned registration port to its native implementation.
+func New(native NativeAutostart) Backend {
+	return Backend{
+		execute: func(operation string, options application.AutostartOptions) (bool, error) {
+			return nativeRegistration(native, operation, options)
+		},
 	}
-
-	return result, nil
 }
 
-// New constructs the adapter with its required runtime dependencies.
-func New(native NativeAutostart) Backend { return Backend{native: native} }
+func nativeRegistration(
+	native NativeAutostart,
+	operation string,
+	options application.AutostartOptions,
+) (bool, error) {
+	switch operation {
+	case "enable":
+		return false, native.EnableWithOptions(options)
+	case "disable":
+		return false, native.Disable()
+	default:
+		return native.IsEnabled()
+	}
+}
 
 // NewDetector constructs native login launch detection.
 func NewDetector() Detector { return Detector{} }

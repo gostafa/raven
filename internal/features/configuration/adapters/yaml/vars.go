@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	_ ports.Loader    = Loader{}
-	_ domain.Settings = (*settings)(nil)
+	_ ports.Loader[*Settings] = Load
+	_ domain.Settings         = (*Settings)(nil)
 	//go:embed app.yml
 	appDefaults string
 	//go:embed shared.yml

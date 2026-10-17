@@ -61,17 +61,37 @@ func (window *testWindow) DispatchWailsEvent(event *application.CustomEvent) {
 	window.events = append(window.events, event.Name)
 }
 
-func testWindows() (*Windows, *testWindow, *testWindow, *testWindow) {
+type windowFixture struct {
+	*Windows
+	*windowState
+}
+
+func testWindows() (*windowFixture, *testWindow, *testWindow, *testWindow) {
 	main, widget, review := new(testWindow), new(testWindow), new(testWindow)
-	return &Windows{
-		settings:   *windowSettingsFixture(),
-		mainWindow: main, widget: widget, reviewWindow: review, reviewPlacement: review,
-		invoke:        func(operation func()) { operation() },
-		primaryScreen: func() *application.Screen { return nil },
-		quit:          func() {},
-		configuration: testConfiguration(func() error { return nil }),
-		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}, main, widget, review
+	state := &windowState{
+		showMain:          main.Show,
+		hideMain:          main.Hide,
+		restoreMain:       main.Restore,
+		focusMain:         main.Focus,
+		showWidget:        widget.Show,
+		widgetPosition:    widget.Position,
+		setWidgetPosition: widget.SetPosition,
+		getWidgetScreen:   widget.GetScreen,
+		showReview:        review.Show,
+		hideReview:        review.Hide,
+		focusReview:       review.Focus,
+		reviewVisible:     review.IsVisible,
+		dispatchReview:    review.DispatchWailsEvent,
+		setReviewSize:     review.SetSize,
+		setReviewPosition: review.SetPosition,
+		invoke:            func(operation func()) { operation() },
+		primaryScreen:     func() *application.Screen { return nil },
+		quit:              func() {},
+		configure:         func() error { return nil },
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	bindWindowSettings(state, windowSettingsFixture())
+	return &windowFixture{newWindowOperations(state), state}, main, widget, review
 }
 
 func TestWindowVisibilityAndReviewEvents(t *testing.T) {
@@ -102,7 +122,7 @@ func TestWindowVisibilityAndReviewEvents(t *testing.T) {
 	if !widget.visible {
 		t.Fatal("reset did not show widget")
 	}
-	windows.reviewWindow = nil
+	windows.reviewVisible = nil
 	windows.PositionFloatingReview()
 	quits := 0
 	windows.quit = func() { quits++ }
@@ -159,7 +179,7 @@ func TestNativeWidgetConfigurationUsesDispatcherAndReportsFailure(t *testing.T) 
 	dispatched, configured := 0, 0
 	windows.invoke = func(operation func()) { dispatched++; operation() }
 	failure := errors.New("native styling failed")
-	windows.configuration = testConfiguration(func() error {
+	windows.configure = testConfiguration(func() error {
 		configured++
 		return failure
 	})
@@ -167,7 +187,7 @@ func TestNativeWidgetConfigurationUsesDispatcherAndReportsFailure(t *testing.T) 
 	if dispatched != 1 || configured != 1 || !strings.Contains(output.String(), failure.Error()) {
 		t.Fatal("native failure was not dispatched and reported")
 	}
-	windows.configuration = testConfiguration(func() error { return nil })
+	windows.configure = testConfiguration(func() error { return nil })
 	output.Reset()
 	windows.ConfigureWidget()
 	if output.Len() != 0 {
@@ -185,51 +205,43 @@ func TestConstructorBindsNativeWindowsAndRuntime(t *testing.T) {
 		application.WebviewWindow,
 	)
 	configured := 0
-	configuration := testConfiguration(func() error { configured++; return nil })
-	windows := New(
-		&Dependencies{
-			App:           app,
-			Handles:       WindowSet{Main: main, Widget: widget, Review: review},
-			Configuration: configuration,
-			Settings:      *windowSettingsFixture(),
-		},
-	)
-	if windows.mainWindow != main || windows.widget != widget || windows.reviewWindow != review ||
-		windows.configuration == nil || windows.invoke == nil ||
-		windows.primaryScreen == nil || windows.quit == nil || windows.logger != app.Logger {
+	deps := &Dependencies{
+		App: app, Main: main, Widget: widget, Review: review,
+		Configure: func() error { configured++; return nil },
+	}
+	state := newWindowState(deps, windowSettingsFixture())
+	if state.showMain == nil || state.showWidget == nil || state.showReview == nil ||
+		state.configure == nil || state.invoke == nil || state.primaryScreen == nil || state.quit == nil || state.logger != app.Logger {
 		t.Fatal("constructor did not bind window capabilities")
 	}
-	windows.invoke = func(operation func()) { operation() }
-	windows.ConfigureWidget()
+	state.invoke = func(operation func()) { operation() }
+	newWindowOperations(state).ConfigureWidget()
 	if configured != 1 {
-		t.Fatal("constructor did not retain the supplied native configuration")
+		t.Fatal("constructor did not retain supplied widget configuration")
 	}
-	windows = New(
-		&Dependencies{
-			App:           app,
-			Handles:       WindowSet{Main: main, Widget: widget, Review: nil},
-			Configuration: configuration,
-			Settings:      *windowSettingsFixture(),
-		},
-	)
-	if windows.reviewWindow != nil || windows.reviewPlacement != nil {
-		t.Fatal("missing review window became a non-nil interface")
+	deps.Review = nil
+	state = newWindowState(deps, windowSettingsFixture())
+	if state.reviewVisible != nil || state.setReviewSize != nil {
+		t.Fatal("missing review window retained capabilities")
 	}
-	windows.PositionFloatingReview()
+	New(deps, windowSettingsFixture()).PositionFloatingReview()
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
 }
 
 func windowSettingsFixture() *Settings {
 	settings := configurationFixture()
 	return &Settings{
-		Layout:              settings.Layout(),
+		WidgetSize:          configuration.Layout(settings).WidgetSize,
+		ReviewWidth:         configuration.Layout(settings).ReviewWidth,
+		ReviewHeight:        configuration.Layout(settings).ReviewHeight,
+		ReviewGap:           configuration.Layout(settings).ReviewGap,
 		LogErrorKey:         settings.LogErrorKey(),
 		OpenFloatingReview:  settings.OpenFloatingReview(),
 		CloseFloatingReview: settings.CloseFloatingReview(),
@@ -238,11 +250,11 @@ func windowSettingsFixture() *Settings {
 
 func TestConfiguredEventsGeometryAndLogFieldsReachConsumers(t *testing.T) {
 	windows, _, widget, review := testWindows()
-	windows.settings.OpenFloatingReview = "custom:open"
-	windows.settings.CloseFloatingReview = "custom:close"
-	windows.settings.LogErrorKey = "custom_error"
-	windows.settings.Layout.ReviewWidth = 300
-	windows.settings.Layout.ReviewHeight = 400
+	windows.openFloatingReview = "custom:open"
+	windows.closeFloatingReview = "custom:close"
+	windows.logErrorKey = "custom_error"
+	windows.reviewWidth = 300
+	windows.reviewHeight = 400
 	widget.screen = &application.Screen{WorkArea: application.Rect{Width: 1000, Height: 800}}
 	windows.ToggleFloatingReview()
 	windows.ToggleFloatingReview()
@@ -253,7 +265,7 @@ func TestConfiguredEventsGeometryAndLogFieldsReachConsumers(t *testing.T) {
 	}
 	var output bytes.Buffer
 	windows.logger = slog.New(slog.NewTextHandler(&output, nil))
-	windows.configuration = testConfiguration(func() error { return errors.New("styling failed") })
+	windows.configure = testConfiguration(func() error { return errors.New("styling failed") })
 	windows.ConfigureWidget()
 	if !strings.Contains(output.String(), "custom_error=") {
 		t.Fatal(output.String())

@@ -8,7 +8,6 @@ import (
 	"context"
 	"io/fs"
 	"log/slog"
-	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
@@ -53,12 +52,7 @@ type (
 	}
 	// Bridge delegates Wails service lifecycle to Fx exactly once.
 	Bridge struct {
-		graph    Lifecycle
-		startErr error
-		stopErr  error
-		runtime  *lifetime.Runtime
-		start    sync.Once
-		stop     sync.Once
+		lifecycle func(context.Context, bool) error
 	}
 	lifecycleError struct{ message string }
 

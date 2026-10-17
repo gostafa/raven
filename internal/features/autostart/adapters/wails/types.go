@@ -10,7 +10,9 @@ import (
 
 type (
 	// Backend translates login startup registration to Wails.
-	Backend struct{ native NativeAutostart }
+	Backend struct {
+		execute func(string, application.AutostartOptions) (bool, error)
+	}
 
 	// NativeAutostart supplies the native operations used by the adapter.
 	NativeAutostart interface {

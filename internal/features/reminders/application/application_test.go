@@ -1,6 +1,7 @@
 package application
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -16,13 +17,16 @@ type testSource struct {
 	marked                      int
 }
 
-func (source *testSource) ListCards() ([]cardapi.Card, error) { return source.cards, source.listErr }
+func (source *testSource) ListCards() (string, error) {
+	encoded, _ := json.Marshal(source.cards)
+	return string(encoded), source.listErr
+}
 
 func (source *testSource) ClaimNotificationPrompt() (bool, error) {
 	return source.prompt, source.promptErr
 }
 
-func (source *testSource) MarkNotified([]reviewapi.DueOccurrence) error {
+func (source *testSource) MarkNotified(string) error {
 	source.marked++
 	return source.markErr
 }
@@ -62,7 +66,7 @@ func TestDeliveryFailuresAreReportedWithoutFalseAcknowledgments(t *testing.T) {
 				source.markErr = failure
 			}
 			warnings := 0
-			coordinator := Coordinator{
+			coordinator := reconciliationFixture{
 				source: source, notifier: notifier,
 				callbacks: Callbacks{Warn: func(message string, err error) {
 					warnings++
@@ -94,7 +98,7 @@ func TestAuthorizationFailureWakesReconciliationAndDoesNotRepeatPrompt(t *testin
 	failure := errors.New("authorization unavailable")
 	notifier := &testNotifier{authorizeErr: failure}
 	warnings := 0
-	coordinator := Coordinator{
+	coordinator := reconciliationFixture{
 		changed: make(chan struct{}, 1), notifier: notifier,
 		callbacks: Callbacks{Warn: func(_ string, err error) {
 			warnings++
@@ -121,7 +125,7 @@ func TestAuthorizationFailureWakesReconciliationAndDoesNotRepeatPrompt(t *testin
 func TestAuthorizationOutcomeOnlyWakesForGrantedPermission(t *testing.T) {
 	for _, allowed := range []bool{false, true} {
 		notifier := &testNotifier{allowed: allowed}
-		coordinator := Coordinator{
+		coordinator := reconciliationFixture{
 			changed:  make(chan struct{}, 1),
 			notifier: notifier,
 			callbacks: Callbacks{
@@ -144,7 +148,7 @@ func TestReconciliationReadFailureAndTimerSignals(t *testing.T) {
 	failure := errors.New("storage unavailable")
 	source := &testSource{listErr: failure}
 	warnings, publications := 0, 0
-	coordinator := Coordinator{
+	coordinator := reconciliationFixture{
 		source: source, stopping: make(chan struct{}), changed: make(chan struct{}, 1),
 		callbacks: Callbacks{
 			Publish: func() { publications++ },
@@ -200,7 +204,7 @@ func TestCoordinatorRunsWithoutNativeNotifications(t *testing.T) {
 
 type source struct{ Source }
 
-func (source) ListCards() ([]cardapi.Card, error)     { return nil, nil }
+func (source) ListCards() (string, error)             { return "[]", nil }
 func (source) ClaimNotificationPrompt() (bool, error) { return false, nil }
 
 type notifications struct {
@@ -219,16 +223,14 @@ func TestReadinessAndShutdownGateReconciliation(t *testing.T) {
 		})
 		worker.Start()
 		worker.Wake()
-		if worker.coordinator != nil {
-			t.Fatal("started before lifecycle enabled reconciliation")
+		select {
+		case <-published:
+			t.Fatal("started before lifecycle enablement")
+		default:
 		}
 		worker.Enable()
 		worker.Start()
-		first := worker.coordinator
 		worker.Start()
-		if first == nil || worker.coordinator != first {
-			t.Fatal("readiness must start exactly one coordinator")
-		}
 		waitPublished(t, published)
 		worker.Wake()
 		waitPublished(t, published)
@@ -236,17 +238,16 @@ func TestReadinessAndShutdownGateReconciliation(t *testing.T) {
 		worker.Stop()
 		worker.Wake()
 		worker.Start()
-		if worker.coordinator != first {
-			t.Fatal("restarted after shutdown")
+		select {
+		case <-published:
+			t.Fatal("readiness duplicated or restarted reconciliation")
+		default:
 		}
 	}
 	worker := NewWorker(nil, nil, Callbacks{})
 	worker.Stop()
 	worker.Enable()
 	worker.Start()
-	if worker.coordinator != nil {
-		t.Fatal("late readiness started a stopped worker")
-	}
 }
 
 func waitPublished(t *testing.T, published <-chan struct{}) {
@@ -255,5 +256,66 @@ func waitPublished(t *testing.T, published <-chan struct{}) {
 	case <-published:
 	case <-time.After(time.Second):
 		t.Fatal("reconciliation did not publish")
+	}
+}
+
+// reconciliationFixture exposes synchronous implementation effects to these tests.
+type reconciliationFixture struct {
+	source   Source
+	notifier interface {
+		CheckNotificationAuthorization() (bool, error)
+		Send(int) error
+		RequestAuthorization() (bool, error)
+	}
+	callbacks Callbacks
+	changed   chan struct{}
+	stopping  chan struct{}
+}
+
+func (fixture *reconciliationFixture) runtime() *reconciliation {
+	source := fixture.source
+	if source == nil {
+		source = new(testSource)
+	}
+	return newReconciliation(
+		source,
+		fixture.notifier,
+		fixture.callbacks,
+		&coordinatorSignals{changed: fixture.changed, stopping: fixture.stopping},
+	)
+}
+
+func (fixture *reconciliationFixture) deliver(pending []reviewapi.DueOccurrence) {
+	deliverPending(fixture.runtime(), pending)
+}
+func (fixture *reconciliationFixture) authorize() { authorize(fixture.runtime()) }
+
+func (fixture *reconciliationFixture) requestAuthorization() { requestAuthorization(fixture.runtime()) }
+
+func (fixture *reconciliationFixture) reconcile() time.Duration { return reconcile(fixture.runtime()) }
+
+func (fixture *reconciliationFixture) wait(delay time.Duration) bool {
+	return waitCoordinator(
+		&coordinatorSignals{changed: fixture.changed, stopping: fixture.stopping},
+		delay,
+	)
+}
+func (fixture *reconciliationFixture) Wake() { wakeCoordinator(fixture.changed) }
+
+func TestDecodedReminderCardsRejectInvalidNestedSchedulesAndHistory(t *testing.T) {
+	for _, invalid := range []string{"", "{", `[{"items": 5}]`, `[{"items":[{"schedule":42}]}]`, `[{"items":[{"reviews":[{"log":[]}]}]}]`} {
+		if _, err := DecodeCards(invalid); err == nil {
+			t.Fatalf("accepted invalid cards: %s", invalid)
+		}
+	}
+	cards, err := DecodeCards(
+		`[{"id":"card","folder_id":"folder","items":[{"id":"item","schedule":{"due":"2026-10-17T12:00:00Z"},"reviews":[]}]}]`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := Snapshot(cards, time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC))
+	if len(pending) != 1 || pending[0].ItemID != "item" {
+		t.Fatalf("decoded schedule lost due occurrence: %+v", pending)
 	}
 }

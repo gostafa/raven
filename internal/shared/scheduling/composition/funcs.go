@@ -9,5 +9,5 @@ import (
 )
 
 func newScheduler(settings configuration.Settings) scheduling.Scheduler {
-	return scheduling.New(new(settings.Library()))
+	return scheduling.New(new(configuration.Library(settings)))
 }

@@ -10,11 +10,5 @@ import (
 
 type (
 	// Loader reads and validates application settings.
-	Loader interface {
-		Load() (Snapshot, error)
-	}
-	// Snapshot carries a successfully loaded immutable configuration.
-	Snapshot struct {
-		Settings domain.Settings
-	}
+	Loader[Value domain.Settings] func() (Value, error)
 )

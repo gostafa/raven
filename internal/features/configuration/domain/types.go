@@ -5,8 +5,7 @@
 package domain
 
 import (
-	companion "raven/internal/features/companion/domain"
-	library "raven/internal/shared/boltstore/domain"
+	"encoding/json"
 )
 
 type (
@@ -42,7 +41,7 @@ type (
 	}
 	// reviews supplies review rules and floating window geometry by value.
 	reviews interface {
-		Library() library.Rules
-		Layout() companion.Layout
+		Library() json.RawMessage
+		Layout() json.RawMessage
 	}
 )

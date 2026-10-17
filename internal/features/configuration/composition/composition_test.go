@@ -17,19 +17,19 @@ type testLoader struct {
 	failure error
 }
 
-func (loader *testLoader) Load() (ports.Snapshot, error) {
+func (loader *testLoader) Load() (*yaml.Settings, error) {
 	loader.calls++
 	if loader.failure != nil {
-		return ports.Snapshot{}, loader.failure
+		return nil, loader.failure
 	}
-	return (yaml.Loader{}).Load()
+	return yaml.Load()
 }
 
 func TestGraphLoadsOnceAndSharesSnapshot(t *testing.T) {
 	loader := &testLoader{}
 	var first, second domain.Settings
 	graph := fxtest.New(t, Module,
-		fx.Replace(fx.Annotate(loader, fx.As(new(ports.Loader)))),
+		fx.Replace(ports.Loader[*yaml.Settings](loader.Load)),
 		fx.Invoke(func(settings domain.Settings) { first = settings }),
 		fx.Invoke(func(settings domain.Settings) { second = settings }),
 	)
@@ -42,7 +42,7 @@ func TestGraphLoadsOnceAndSharesSnapshot(t *testing.T) {
 func TestLoadPreservesFailureAndDefaultLoaderWorks(t *testing.T) {
 	cause := errors.New("invalid embedded configuration")
 	if settings, err := load(
-		&testLoader{failure: cause},
+		(&testLoader{failure: cause}).Load,
 	); settings.Settings != nil ||
 		!errors.Is(err, cause) {
 		t.Fatal(settings, err)

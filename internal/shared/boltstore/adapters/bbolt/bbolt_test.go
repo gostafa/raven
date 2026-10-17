@@ -57,8 +57,8 @@ func (file *failedDurableFile) Close() error { file.closed = true; return os.Err
 
 type failedScheduler struct{ libraryports.Scheduler }
 
-func (failedScheduler) Initialize(time.Time) (reviewapi.Schedule, reviewapi.Log, error) {
-	return reviewapi.Schedule{}, reviewapi.Log{}, io.ErrUnexpectedEOF
+func (failedScheduler) Initialize(time.Time) (json.RawMessage, json.RawMessage, error) {
+	return nil, nil, io.ErrUnexpectedEOF
 }
 
 func TestStorageBoundariesPreserveEncodingEntropyAndDurabilityFailures(t *testing.T) {
@@ -78,7 +78,7 @@ func TestStorageBoundariesPreserveEncodingEntropyAndDurabilityFailures(t *testin
 		!file.closed {
 		t.Fatalf("sync and close: %v", err)
 	}
-	if err := (&Store{db: failedDatabase{}}).Close(); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := storeClose((&Store{db: failedDatabase{}})); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatal(err)
 	}
 	if err := writeRecord(nil, nil, make(chan int)); err == nil {
@@ -138,7 +138,7 @@ func TestLegacyCorruptionAndFailedScheduleInitialization(t *testing.T) {
 		}
 	}
 	migration.state.version = "unsupported"
-	if _, err := migration.unscheduledItems(
+	if _, err := schemaMigrationUnscheduledItems(migration,
 		nil,
 		&cardapi.Card{},
 	); !errors.Is(
@@ -159,7 +159,7 @@ func TestLegacyCorruptionAndFailedScheduleInitialization(t *testing.T) {
 	}
 	card := &cardapi.Card{ID: "card", FolderID: "folder"}
 	for _, data := range []string{"{", `{"id":"wrong"}`, `{"id":"item","folder_id":"folder","card_id":"card","side":"prompt","kind":"text","text":""}`} {
-		if _, err := store.settings.readLegacyItem([]byte("item"), []byte(data), card); err == nil {
+		if _, err := settingsReadLegacyItem(store.settings, []byte("item"), []byte(data), card); err == nil {
 			t.Fatalf("accepted corrupt item %s", data)
 		}
 	}
@@ -174,11 +174,11 @@ func TestLegacyCorruptionAndFailedScheduleInitialization(t *testing.T) {
 	store.scheduler = failedScheduler{}
 	migration.state.version = schemaV1
 	card.Items = []contentapi.Item{{ID: "item", Kind: "text", Text: "Prompt"}}
-	if err := migration.initializeSchedules(card); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := schemaMigrationInitializeSchedules(migration, card); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatal(err)
 	}
-	write := &cardWrite{storage: store, items: card.Items}
-	if err := write.persistPreparedCard(nil, nil); !errors.Is(err, io.ErrUnexpectedEOF) {
+	write := &cardWrite{storage: store, items: contentapi.Items(card.Items)}
+	if err := cardWritePersistPreparedCard(write, nil, nil); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatal(err)
 	}
 }
@@ -199,7 +199,7 @@ func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 			storage: store,
 			state:   schemaState{version: schemaV2, existing: true},
 		}
-		if err := migration.migrateFolder(
+		if err := schemaMigrationMigrateFolder(migration,
 			nil,
 			nil,
 			[]byte("invalid"),
@@ -209,7 +209,7 @@ func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 		) {
 			t.Errorf("invalid folder: %v", err)
 		}
-		if _, err := migration.prepareFolder(
+		if _, err := schemaMigrationPrepareFolder(migration,
 			folder,
 			nil,
 		); !errors.Is(
@@ -222,7 +222,7 @@ func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 		if err := folder.Put([]byte(itemsBucket), []byte("scalar")); err != nil {
 			return err
 		}
-		if _, err := migration.prepareFolder(
+		if _, err := schemaMigrationPrepareFolder(migration,
 			folder,
 			nil,
 		); !errors.Is(
@@ -275,7 +275,7 @@ func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 		if err := root.DeleteBucket([]byte("legacy")); err != nil {
 			return err
 		}
-		if err := migration.apply(transaction); !errors.Is(err, bolt.ErrIncompatibleValue) {
+		if err := schemaMigrationApply(migration, transaction); !errors.Is(err, bolt.ErrIncompatibleValue) {
 			t.Errorf("schema collision: %v", err)
 		}
 		return nil
@@ -294,7 +294,7 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 	t.Cleanup(func() { _ = file.Close() })
 	item := &contentapi.Item{ID: strings.Repeat("a", 32), Kind: "image"}
 	store.mediaDir = filepath.Join(t.TempDir(), "missing")
-	if _, _, err := store.importOpenedMedia(file, item, path); !errors.Is(err, os.ErrNotExist) {
+	if _, _, err := storeImportOpenedMedia(store, file, item, path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
 	if _, err := openDatabase(filepath.Join(path, "child", "raven.db")); err == nil {
@@ -327,7 +327,7 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(store.mediaDir, "item.png"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.stageAndCommitMedia(temp, file, item); err == nil {
+	if _, err := storeStageAndCommitMedia(store, temp, file, item); err == nil {
 		t.Fatal("renamed media over directory")
 	}
 	source, err := os.CreateTemp(t.TempDir(), "commit-*")
@@ -340,7 +340,7 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "target.png")
 	store.mediaDir = filepath.Join(t.TempDir(), "missing")
 	if runtime.GOOS != "windows" {
-		if _, err := store.commitMedia(source.Name(), target); !errors.Is(err, os.ErrNotExist) {
+		if _, err := storeCommitMedia(store, source.Name(), target); !errors.Is(err, os.ErrNotExist) {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
@@ -359,16 +359,16 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 	if err := os.Remove(stale); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.cleanMediaEntry(entries[0], nil); !errors.Is(err, os.ErrNotExist) {
+	if err := storeCleanMediaEntry(store, entries[0], nil); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := store.cleanMediaEntries(entries, nil); !errors.Is(err, os.ErrNotExist) {
+	if err := storeCleanMediaEntries(store, entries, nil); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.cleanupMedia(); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+	if err := storeCleanupMedia(store); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
 		t.Fatal(err)
 	}
 	if path, err := DefaultPath(); err != nil || path == "" {
@@ -384,11 +384,11 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 
 func TestMalformedCardContentAndWriteFailures(t *testing.T) {
 	store := openTestStore(t)
-	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Corrupt"})
+	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Corrupt"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.CreateCard(
+	card, err := storeCreateCard(store,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")},
 	)
 	if err != nil {
@@ -405,8 +405,11 @@ func TestMalformedCardContentAndWriteFailures(t *testing.T) {
 			state:   schemaState{version: schemaV4, existing: true},
 		}
 		expected := card
-		expected.Items = append(append([]contentapi.Item{}, card.Items...), card.Items[0])
-		if err := migration.verifyCard(
+		expected.Items = append(
+			append([]contentapi.Item{}, contentapi.Items(card.Items)...),
+			contentapi.Items(card.Items)[0],
+		)
+		if err := schemaMigrationVerifyCard(migration,
 			transaction,
 			&expected,
 		); !errors.Is(
@@ -416,24 +419,28 @@ func TestMalformedCardContentAndWriteFailures(t *testing.T) {
 			t.Errorf("missing migrated item: %v", err)
 		}
 		bad := card
-		bad.Items = append([]contentapi.Item{}, card.Items...)
-		bad.Items[0].Schedule.Stability = math.NaN()
+		bad.Items = append([]contentapi.Item{}, contentapi.Items(card.Items)...)
+		badSchedule := contentapi.Schedule(contentapi.Items(bad.Items)[0].Schedule)
+		badSchedule.Stability = math.NaN()
+		contentapi.Items(bad.Items)[0].Schedule = badSchedule
 		if err := putItemsInRoot(items, &bad); err == nil {
 			t.Error("accepted unencodable schedule")
 		}
-		bad.Items[0].Schedule = card.Items[0].Schedule
-		bad.Items[0].Position = 3
-		if err := migration.persistCard(
+		contentapi.Items(bad.Items)[0].Schedule = contentapi.Schedule(
+			contentapi.Items(card.Items)[0].Schedule,
+		)
+		contentapi.Items(bad.Items)[0].Position = 3
+		if err := schemaMigrationPersistCard(migration,
 			&migrationFolder{parent: parent, items: items},
 			&bad,
 		); err == nil {
 			t.Error("accepted invalid migrated order")
 		}
-		if err := (&cardListing{storage: store}).read(transaction); err == nil {
+		if err := cardListingRead((&cardListing{storage: store}), transaction); err == nil {
 			t.Error("listed invalid content order")
 		}
 		write := &cardWrite{storage: store, folderID: folder.ID, card: bad}
-		if err := write.writeRecords(transaction, metadata); err == nil {
+		if err := cardWriteWriteRecords(write, transaction, metadata); err == nil {
 			t.Error("accepted invalid saved content order")
 		}
 		if err := writeCardRecords(transaction, metadata, &card); err != nil {
@@ -483,7 +490,7 @@ func TestMalformedCardContentAndWriteFailures(t *testing.T) {
 	}
 	if err := store.db.View(func(transaction *bolt.Tx) error {
 		write := &cardWrite{storage: store, folderID: "missing"}
-		if err := write.persist(transaction); !errors.Is(err, errFolderNotFoundOrInvalid) {
+		if err := cardWritePersist(write, transaction); !errors.Is(err, errFolderNotFoundOrInvalid) {
 			t.Errorf("missing destination: %v", err)
 		}
 		return nil
@@ -494,11 +501,11 @@ func TestMalformedCardContentAndWriteFailures(t *testing.T) {
 
 func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 	store := openTestStore(t)
-	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Stages"})
+	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Stages"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.CreateCard(
+	card, err := storeCreateCard(store,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")},
 	)
 	if err != nil {
@@ -511,7 +518,7 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 			storage: store,
 			state:   schemaState{version: schemaV4, existing: true},
 		}
-		if err := migration.migrateCard(
+		if err := schemaMigrationMigrateCard(migration,
 			&migrationFolder{parent: parent, items: items},
 			[]byte(folder.ID),
 			[]byte(card.ID),
@@ -521,25 +528,30 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 		) {
 			t.Errorf("read-only migration: %v", err)
 		}
-		write := &cardWrite{storage: store, folderID: folder.ID, cardID: card.ID, items: card.Items}
-		if err := write.persist(transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
+		write := &cardWrite{
+			storage:  store,
+			folderID: folder.ID,
+			cardID:   card.ID,
+			items:    contentapi.Items(card.Items),
+		}
+		if err := cardWritePersist(write, transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
 			t.Errorf("read-only prepared card: %v", err)
 		}
 		review := &cardRating{
 			storage:  store,
 			folderID: folder.ID,
 			cardID:   card.ID,
-			itemID:   card.Items[0].ID,
+			itemID:   contentapi.Items(card.Items)[0].ID,
 			rating:   3,
-			now:      card.Items[0].Schedule.Due,
+			now:      contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).Due,
 		}
-		if err := review.apply(transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
+		if err := cardRatingApply(review, transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
 			t.Errorf("read-only review: %v", err)
 		}
-		if err := review.persistItem(transaction, &contentapi.Item{}); err == nil {
+		if err := cardRatingPersistItem(review, transaction, &contentapi.Item{}); err == nil {
 			t.Error("accepted missing reviewed schedule")
 		}
-		if _, err := store.lookupMedia(
+		if _, err := storeLookupMedia(store,
 			transaction,
 			[]string{folder.ID, card.ID, "missing"},
 		); !errors.Is(
@@ -553,7 +565,7 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&cardRating{}).hydrate(); err == nil {
+	if err := cardRatingHydrate((&cardRating{})); err == nil {
 		t.Fatal("hydrated an empty reviewed card")
 	}
 	if err := store.db.Update(func(transaction *bolt.Tx) error {
@@ -561,7 +573,7 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 		if err := root.Put([]byte("scalar"), []byte("invalid")); err != nil {
 			return err
 		}
-		if err := (&cardListing{storage: store, root: root}).appendFolder(
+		if err := cardListingAppendFolder((&cardListing{storage: store, root: root}),
 			[]byte("scalar"),
 			[]byte("invalid"),
 		); !errors.Is(
@@ -586,7 +598,7 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 		}
 		store.scheduler = failedScheduler{}
 		migration := &schemaMigration{storage: store, state: schemaState{version: schemaV1}}
-		if err := migration.prepareCardContent(
+		if err := schemaMigrationPrepareCardContent(migration,
 			parent,
 			&card,
 		); !errors.Is(
@@ -609,7 +621,7 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 	if err := transaction.Rollback(); err != nil {
 		t.Fatal(err)
 	}
-	if err := (&schemaMigration{}).migrateFolderCards(
+	if err := schemaMigrationMigrateFolderCards((&schemaMigration{}),
 		nil,
 		cards,
 		nil,
@@ -649,16 +661,16 @@ func TestPersistentMarkersRejectReadOnlyAndCorruptBuckets(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ClaimAutostartInitialization(); !errors.Is(err, bolt.ErrIncompatibleValue) {
+	if _, err := storeClaimAutostartInitialization(store); !errors.Is(err, bolt.ErrIncompatibleValue) {
 		t.Fatalf("corrupt login marker: %v", err)
 	}
-	if _, err := store.ClaimNotificationPrompt(); !errors.Is(err, errMissingMetadata) {
+	if _, err := storeClaimNotificationPrompt(store); !errors.Is(err, errMissingMetadata) {
 		t.Fatalf("missing prompt metadata: %v", err)
 	}
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ClaimNotificationPrompt(); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+	if _, err := storeClaimNotificationPrompt(store); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
 		t.Fatal(err)
 	}
 }
@@ -670,14 +682,14 @@ func TestMigrationBackupFailuresPreserveCauses(t *testing.T) {
 		state:   schemaState{version: schemaV1, existing: true},
 	}
 	missing := filepath.Join(t.TempDir(), "missing", "raven.db")
-	if err := migration.backup(missing); !errors.Is(err, os.ErrNotExist) {
+	if err := schemaMigrationBackup(migration, missing); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("backup path: %v", err)
 	}
 	file, err := os.CreateTemp(t.TempDir(), "backup-*")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = migration.finishBackup(file, filepath.Dir(missing))
+	err = schemaMigrationFinishBackup(migration, file, filepath.Dir(missing))
 	if runtime.GOOS == "windows" {
 		if err != nil {
 			t.Fatal(err)
@@ -690,7 +702,7 @@ func TestMigrationBackupFailuresPreserveCauses(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.planMigration(missing); !errors.Is(err, os.ErrNotExist) {
+	if _, err := storePlanMigration(store, missing); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("migration backup: %v", err)
 	}
 	file, err = os.CreateTemp(t.TempDir(), "closed-backup-*")
@@ -700,13 +712,13 @@ func TestMigrationBackupFailuresPreserveCauses(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := migration.finishBackup(file, t.TempDir()); !errors.Is(err, os.ErrClosed) {
+	if err := schemaMigrationFinishBackup(migration, file, t.TempDir()); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("closed backup: %v", err)
 	}
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
-	if err := migration.backup(
+	if err := schemaMigrationBackup(migration,
 		filepath.Join(t.TempDir(), "raven.db"),
 	); !errors.Is(
 		err,
@@ -715,18 +727,18 @@ func TestMigrationBackupFailuresPreserveCauses(t *testing.T) {
 		t.Fatalf("closed database backup: %v", err)
 	}
 	state := schemaState{version: schemaV2}
-	if err := state.validate(); !errors.Is(err, errMissingFoldersBucket) {
+	if err := schemaStateValidate(&state); !errors.Is(err, errMissingFoldersBucket) {
 		t.Fatal(err)
 	}
 }
 
 func TestReadOnlyFolderAndCardWritesPreserveTransactionFailures(t *testing.T) {
 	store := openTestStore(t)
-	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Read-only"})
+	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Read-only"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.CreateCard(
+	card, err := storeCreateCard(store,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("prompt", "answer")},
 	)
 	if err != nil {
@@ -741,14 +753,14 @@ func TestReadOnlyFolderAndCardWritesPreserveTransactionFailures(t *testing.T) {
 			state:   schemaState{version: schemaV4, existing: true},
 		}
 		for name, operation := range map[string]func() error{
-			"migration metadata":    func() error { return migration.apply(transaction) },
-			"migration root":        func() error { return migration.migrateRoot(transaction) },
+			"migration metadata":    func() error { return schemaMigrationApply(migration, transaction) },
+			"migration root":        func() error { return schemaMigrationMigrateRoot(migration, transaction) },
 			"folder sequence":       func() error { return assignFolderID(root, &folderapi.Folder{}) },
 			"new folder":            func() error { return persistNewFolder(transaction, &folderapi.Folder{Title: "New"}) },
 			"folder metadata":       func() error { return writeFolderMetadata(bucket, &folder) },
 			"folder initialization": func() error { return initializeFolder(bucket, &folder) },
 			"card deletion":         func() error { return deleteOwnedCard(bucket, card.ID) },
-			"card record deletion":  func() error { return store.deleteCardRecords(transaction, folder.ID, card.ID) },
+			"card record deletion":  func() error { return storeDeleteCardRecords(store, transaction, folder.ID, card.ID) },
 			"item replacement":      func() error { _, err := replaceItemBucket(items, card.ID); return err },
 			"item allocation":       func() error { _, err := replaceItemBucket(items, "new"); return err },
 			"card metadata":         func() error { return putCard(metadata, &card) },
@@ -756,9 +768,11 @@ func TestReadOnlyFolderAndCardWritesPreserveTransactionFailures(t *testing.T) {
 			"card buckets":          func() error { return writeCardBuckets(metadata, items, &card) },
 			"card records":          func() error { return writeCardRecords(transaction, metadata, &card) },
 			"card allocation":       func() error { _, err := allocateCard(metadata, folder.ID); return err },
-			"migration persistence": func() error { return migration.persistCard(&migrationFolder{parent: bucket, items: items}, &card) },
+			"migration persistence": func() error {
+				return schemaMigrationPersistCard(migration, &migrationFolder{parent: bucket, items: items}, &card)
+			},
 			"notification acknowledgment": func() error {
-				return store.markOccurrences(transaction, []reviewapi.DueOccurrence{{FolderID: folder.ID, CardID: card.ID, ItemID: card.Items[0].ID, Due: card.Items[0].Schedule.Due.UnixMilli()}})
+				return storeMarkOccurrences(store, transaction, []reviewapi.DueOccurrence{{FolderID: folder.ID, CardID: card.ID, ItemID: contentapi.Items(card.Items)[0].ID, Due: contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).Due.UnixMilli()}})
 			},
 		} {
 			if err := operation(); !errors.Is(err, bolt.ErrTxNotWritable) {
@@ -800,8 +814,8 @@ func TestCorruptLibraryRootsAndExhaustedSequences(t *testing.T) {
 			return err
 		}
 		for _, operation := range []func() error{
-			func() error { return (&folderListing{}).read(transaction) },
-			func() error { return (&cardListing{}).read(transaction) },
+			func() error { return folderListingRead((&folderListing{}), transaction) },
+			func() error { return cardListingRead((&cardListing{}), transaction) },
 			func() error { return persistNewFolder(transaction, &folderapi.Folder{}) },
 			func() error { return validateDestinationFolder(transaction, "folder") },
 		} {
@@ -832,10 +846,10 @@ func TestCorruptLibraryRootsAndExhaustedSequences(t *testing.T) {
 	) {
 		t.Fatal(err)
 	}
-	if err := (&cardContentReader{}).load(nil); !errors.Is(err, errMissingCardContent) {
+	if err := cardContentReaderLoad((&cardContentReader{}), nil); !errors.Is(err, errMissingCardContent) {
 		t.Fatal(err)
 	}
-	if _, err := store.UpdateCard(&cardapi.UpdateInput{}); !errors.Is(err, errCardIDIsRequired) {
+	if _, err := storeUpdateCard(store, &cardapi.UpdateInput{}); !errors.Is(err, errCardIDIsRequired) {
 		t.Fatal(err)
 	}
 }
@@ -875,7 +889,7 @@ func TestMediaSignaturesAndFailedFileOperations(t *testing.T) {
 	if _, err := readMediaHeader(file); !errors.Is(err, os.ErrClosed) {
 		t.Fatal(err)
 	}
-	if _, err := settings.inspectMedia(
+	if _, err := settingsInspectMedia(settings,
 		file,
 		"image",
 		"selected.png",
@@ -887,13 +901,13 @@ func TestMediaSignaturesAndFailedFileOperations(t *testing.T) {
 	}
 	var logs bytes.Buffer
 	store.logger = slog.New(slog.NewTextHandler(&logs, nil))
-	store.closeMediaFile(t.Context(), file)
-	store.reportCleanupFailure(io.ErrUnexpectedEOF)
+	storeCloseMediaFile(store, t.Context(), file)
+	storeReportCleanupFailure(store, io.ErrUnexpectedEOF)
 	if logs.Len() == 0 {
 		t.Fatal("file cleanup errors were not logged")
 	}
 	response := httptest.NewRecorder()
-	(&ownedMedia{file: file}).serve(
+	ownedMediaServe((&ownedMedia{file: file}),
 		response,
 		httptest.NewRequest(http.MethodGet, "/media/test", nil),
 	)
@@ -901,14 +915,14 @@ func TestMediaSignaturesAndFailedFileOperations(t *testing.T) {
 		t.Fatal("served a closed media file")
 	}
 	store.mediaDir = filepath.Join(t.TempDir(), "missing")
-	if err := store.removeUnreferencedMedia(nil); !errors.Is(err, os.ErrNotExist) {
+	if err := storeRemoveUnreferencedMedia(store, nil); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
 	store.mediaDir = file.Name()
-	if err := store.cleanupMedia(); err == nil {
+	if err := storeCleanupMedia(store); err == nil {
 		t.Fatal("accepted a regular file as media directory")
 	}
-	if err := store.prepare(store.path); err == nil {
+	if err := storePrepare(store, store.path); err == nil {
 		t.Fatal("startup accepted an invalid media directory")
 	}
 }
@@ -919,39 +933,41 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
-	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Spanish"})
+	t.Cleanup(func() { _ = storeClose(store) })
+	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Spanish"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := store.CreateCard(&cardapi.CreateInput{
+	card, err := storeCreateCard(store, &cardapi.CreateInput{
 		FolderID: folder.ID,
 		Items:    textItems("  See you tomorrow? ", " Hasta mañana. "),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if card.Items[0].Text != "See you tomorrow?" || card.Items[1].Text != "Hasta mañana." ||
+	if contentapi.Items(card.Items)[0].Text != "See you tomorrow?" ||
+		contentapi.Items(card.Items)[1].Text != "Hasta mañana." ||
 		card.LastReviewed != 0 {
 		t.Fatalf("unexpected new card: %+v", card)
 	}
-	initial := card.Items[0]
+	initial := contentapi.Items(card.Items)[0]
 	expected, err := fsrs.NewFSRS(fsrs.DefaultParam()).
-		Next(fsrs.NewCard(initial.Schedule.LastReview), initial.Schedule.LastReview, fsrs.Again)
-	if err != nil || !reflect.DeepEqual(nativeSchedule(initial.Schedule), expected.Card) ||
-		!initial.Reviews[0].Automatic {
+		Next(fsrs.NewCard(contentapi.Schedule(initial.Schedule).LastReview), contentapi.Schedule(initial.Schedule).LastReview, fsrs.Again)
+	if err != nil ||
+		!reflect.DeepEqual(nativeSchedule(contentapi.Schedule(initial.Schedule)), expected.Card) ||
+		!contentapi.Reviews(initial.Reviews)[0].Automatic {
 		t.Fatal("initialization differs from FSRS Again")
 	}
-	sibling := card.Items[1]
-	now := initial.Schedule.Due
+	sibling := contentapi.Items(card.Items)[1]
+	now := contentapi.Schedule(initial.Schedule).Due
 	for _, rating := range []int{1, 2, 3, 4} {
-		before := card.Items[0].Schedule
+		before := contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule)
 		expected, err := fsrs.NewFSRS(fsrs.DefaultParam()).
 			Next(nativeSchedule(before), now, fsrs.Rating(rating))
 		if err != nil {
 			t.Fatal(err)
 		}
-		card, err = store.reviewItemAt(
+		card, err = storeReviewItemAt(store,
 			&cardapi.ReviewInput{
 				FolderID: folder.ID,
 				CardID:   card.ID,
@@ -963,21 +979,24 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(nativeSchedule(card.Items[0].Schedule), expected.Card) ||
-			!reflect.DeepEqual(card.Items[1], sibling) ||
+		if !reflect.DeepEqual(
+			nativeSchedule(contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule)),
+			expected.Card,
+		) ||
+			!reflect.DeepEqual(contentapi.Items(card.Items)[1], sibling) ||
 			card.LastReviewed != now.UnixMilli() {
 			t.Fatal("rating differs from FSRS or changed sibling")
 		}
 		now = expected.Card.Due
 	}
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
 	store, err = openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cards, err := store.ListCards()
+	cards, err := storeListCards(store)
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("cards after reopen: %+v, %v", cards, err)
 	}
@@ -992,8 +1011,8 @@ func markItemBucket(t *testing.T, store *Store, card *cardapi.Card) map[string][
 		if err := bucket.SetSequence(42); err != nil {
 			return err
 		}
-		for index := range card.Items {
-			item := &card.Items[index]
+		for index := range contentapi.Items(card.Items) {
+			item := &contentapi.Items(card.Items)[index]
 			data := append([]byte(" \n"), bucket.Get([]byte(item.ID))...)
 			if err := bucket.Put([]byte(item.ID), data); err != nil {
 				return err
@@ -1035,26 +1054,28 @@ func TestReviewWritesOnlyOwnedItemAndReturnsHydratedCard(t *testing.T) {
 	store, cards := persistenceFixture(t, 3)
 	card := &cards[0]
 	before := markItemBucket(t, store, card)
-	item := &card.Items[0]
-	now := item.Schedule.Due.Add(time.Second)
-	updated, err := store.reviewItemAt(&cardapi.ReviewInput{
+	item := &contentapi.Items(card.Items)[0]
+	now := contentapi.Schedule(item.Schedule).Due.Add(time.Second)
+	updated, err := storeReviewItemAt(store, &cardapi.ReviewInput{
 		FolderID: card.FolderID, CardID: card.ID, ItemID: item.ID, Rating: 4,
 	}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	after := snapshotItemRecords(t, store, card)
-	for index := range card.Items {
-		id := card.Items[index].ID
+	for index := range contentapi.Items(card.Items) {
+		id := contentapi.Items(card.Items)[index].ID
 		if bytes.Equal(before[id], after[id]) != (index != 0) {
 			t.Fatalf("unexpected record change for item %d", index)
 		}
 	}
 	if updated.LastReviewed != now.UnixMilli() ||
-		updated.DueAt != card.Items[1].Schedule.Due.UnixMilli() {
+		updated.DueAt != contentapi.Schedule(
+			contentapi.Items(card.Items)[1].Schedule,
+		).Due.UnixMilli() {
 		t.Fatal("returned aggregate schedule is stale")
 	}
-	listed, err := store.ListCards()
+	listed, err := storeListCards(store)
 	if err != nil || !reflect.DeepEqual(listed[0], updated) {
 		t.Fatalf("returned card differs from stored card: %v", err)
 	}
@@ -1064,27 +1085,27 @@ func TestReviewWritesOnlyOwnedItemAndReturnsHydratedCard(t *testing.T) {
 func assertReopenedCards(t *testing.T, store *Store, expected []cardapi.Card) {
 	t.Helper()
 	path := store.db.Path()
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = reopened.Close() })
-	actual, err := reopened.ListCards()
+	t.Cleanup(func() { _ = storeClose(reopened) })
+	actual, err := storeListCards(reopened)
 	if err != nil || !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("cards changed after reopening: %v", err)
 	}
 }
 
 func notificationOccurrence(card *cardapi.Card, index int) reviewapi.DueOccurrence {
-	item := &card.Items[index]
+	item := &contentapi.Items(card.Items)[index]
 	return reviewapi.DueOccurrence{
 		FolderID: card.FolderID,
 		CardID:   card.ID,
 		ItemID:   item.ID,
-		Due:      item.Schedule.Due.UnixMilli(),
+		Due:      contentapi.Schedule(item.Schedule).Due.UnixMilli(),
 	}
 }
 
@@ -1102,12 +1123,12 @@ func TestNotificationBatchWritesOnlyChangedItems(t *testing.T) {
 	missing := first
 	missing.ItemID = "missing"
 	batch := []reviewapi.DueOccurrence{first, other, first, stale, missing, second}
-	if err := store.MarkNotified(batch); err != nil {
+	if err := storeMarkNotified(store, batch); err != nil {
 		t.Fatal(err)
 	}
 	for index := range cards {
 		after := snapshotItemRecords(t, store, &cards[index])
-		for position, item := range cards[index].Items {
+		for position, item := range contentapi.Items(cards[index].Items) {
 			changed := (index == 0 && position < 2) || (index == 1 && position == 0)
 			if bytes.Equal(before[index][item.ID], after[item.ID]) == changed {
 				t.Fatalf("unexpected change for card %d item %d", index, position)
@@ -1115,7 +1136,7 @@ func TestNotificationBatchWritesOnlyChangedItems(t *testing.T) {
 		}
 	}
 	err := store.db.Update(func(tx *bolt.Tx) error {
-		if err := store.markOccurrences(tx, batch); err != nil {
+		if err := storeMarkOccurrences(store, tx, batch); err != nil {
 			return err
 		}
 		stats := tx.Stats()
@@ -1127,13 +1148,13 @@ func TestNotificationBatchWritesOnlyChangedItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed, err := store.ListCards()
+	listed, err := storeListCards(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if listed[0].Items[0].LastNotifiedDue != first.Due ||
-		listed[0].Items[1].LastNotifiedDue != second.Due ||
-		listed[1].Items[0].LastNotifiedDue != other.Due {
+	if contentapi.Items(listed[0].Items)[0].LastNotifiedDue != first.Due ||
+		contentapi.Items(listed[0].Items)[1].LastNotifiedDue != second.Due ||
+		contentapi.Items(listed[1].Items)[0].LastNotifiedDue != other.Due {
 		t.Fatal("acknowledgments did not persist")
 	}
 	assertReopenedCards(t, store, listed)
@@ -1151,7 +1172,7 @@ func TestNotificationBatchRollsBackEarlierCards(t *testing.T) {
 				missing.FolderID = "missing"
 				expected = errFolderNotFoundOrInvalid
 			}
-			err := store.MarkNotified([]reviewapi.DueOccurrence{
+			err := storeMarkNotified(store, []reviewapi.DueOccurrence{
 				notificationOccurrence(&cards[0], 0), missing,
 			})
 			if !errors.Is(err, expected) {
@@ -1171,18 +1192,24 @@ func TestTargetedUpdatesStillValidateSiblingContent(t *testing.T) {
 			card := &cards[0]
 			markItemBucket(t, store, card)
 			if err := store.db.Update(func(tx *bolt.Tx) error {
-				return testItemBucket(tx, card).Put([]byte(card.Items[1].ID), []byte("invalid"))
+				return testItemBucket(
+					tx,
+					card,
+				).Put([]byte(contentapi.Items(card.Items)[1].ID), []byte("invalid"))
 			}); err != nil {
 				t.Fatal(err)
 			}
 			before := snapshotItemRecords(t, store, card)
 			var err error
 			if operation == "review" {
-				_, err = store.ReviewItem(&cardapi.ReviewInput{
-					FolderID: card.FolderID, CardID: card.ID, ItemID: card.Items[0].ID, Rating: 3,
+				_, err = storeReviewItem(store, &cardapi.ReviewInput{
+					FolderID: card.FolderID,
+					CardID:   card.ID,
+					ItemID:   contentapi.Items(card.Items)[0].ID,
+					Rating:   3,
 				})
 			} else {
-				err = store.MarkNotified([]reviewapi.DueOccurrence{notificationOccurrence(card, 0)})
+				err = storeMarkNotified(store, []reviewapi.DueOccurrence{notificationOccurrence(card, 0)})
 			}
 			if err == nil {
 				t.Fatal("corrupt sibling content was ignored")
@@ -1200,12 +1227,12 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 		path,
 		&Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    storageLogger(nil),
 			Settings:  *storeSettingsFixture(),
 		},
 	)
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -1214,24 +1241,24 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 	checkUnavailable := func() {
 		t.Helper()
 		response := httptest.NewRecorder()
-		store.MediaHandler().
+		storeMediaHandler(store).
 			ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/media/folder/card/item", nil))
 		if response.Code != http.StatusServiceUnavailable {
 			t.Fatalf("inactive media returned %d", response.Code)
 		}
 	}
 	checkUnavailable()
-	if err := store.Start(); err != nil {
+	if err := storeStart(store); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
-	if err := store.Start(); !errors.Is(err, errStoreAlreadyStarted) {
+	t.Cleanup(func() { _ = storeClose(store) })
+	if err := storeStart(store); !errors.Is(err, errStoreAlreadyStarted) {
 		t.Fatalf("repeated startup: %v", err)
 	}
-	if _, err := store.ListFolders(); err != nil {
+	if _, err := storeListFolders(store); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
 	checkUnavailable()
@@ -1239,7 +1266,7 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 		path,
 		&Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -1247,7 +1274,7 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 	if err != nil {
 		t.Fatalf("managed shutdown retained lock: %v", err)
 	}
-	if err := reopened.Close(); err != nil {
+	if err := storeClose(reopened); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1274,15 +1301,15 @@ func TestFailedPreparationReleasesManagedDatabase(t *testing.T) {
 		path,
 		&Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    storageLogger(nil),
 			Settings:  *storeSettingsFixture(),
 		},
 	)
-	if err := store.Start(); err == nil {
+	if err := storeStart(store); err == nil {
 		t.Fatal("accepted unsupported schema")
 	}
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
@@ -1296,58 +1323,58 @@ func TestFailedPreparationReleasesManagedDatabase(t *testing.T) {
 
 func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 	store := openTestStore(t)
-	first, _ := store.CreateFolder(&folderapi.CreateInput{Title: "First"})
-	second, _ := store.CreateFolder(&folderapi.CreateInput{Title: "Second"})
+	first, _ := storeCreateFolder(store, &folderapi.CreateInput{Title: "First"})
+	second, _ := storeCreateFolder(store, &folderapi.CreateInput{Title: "Second"})
 	for _, input := range []cardapi.CreateInput{
 		{FolderID: first.ID, Items: textItems(" ", "answer")},
 		{FolderID: first.ID, Items: textItems("question", " \n")},
 		{FolderID: "missing", Items: textItems("question", "answer")},
 	} {
-		if _, err := store.CreateCard(&input); err == nil {
+		if _, err := storeCreateCard(store, &input); err == nil {
 			t.Fatalf("accepted invalid card: %+v", input)
 		}
 	}
-	cards, err := store.ListCards()
+	cards, err := storeListCards(store)
 	if err != nil || cards == nil || len(cards) != 0 {
 		t.Fatalf("failed save wrote cards: %+v, %v", cards, err)
 	}
-	card, err := store.CreateCard(
+	card, err := storeCreateCard(store,
 		&cardapi.CreateInput{FolderID: first.ID, Items: textItems("Question", "Answer")},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReviewItem(
+	if _, err := storeReviewItem(store,
 		&cardapi.ReviewInput{
 			FolderID: second.ID,
 			CardID:   card.ID,
-			ItemID:   card.Items[0].ID,
+			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   3,
 		},
 	); err == nil {
 		t.Fatal("reviewed a card through the wrong folder")
 	}
-	if _, err := store.ReviewItem(
+	if _, err := storeReviewItem(store,
 		&cardapi.ReviewInput{
 			FolderID: first.ID,
 			CardID:   "missing",
-			ItemID:   card.Items[0].ID,
+			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   3,
 		},
 	); err == nil {
 		t.Fatal("reviewed a missing card")
 	}
-	cards, err = store.ListCards()
+	cards, err = storeListCards(store)
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("failed review changed cards: %+v, %v", cards, err)
 	}
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ListCards(); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+	if _, err := storeListCards(store); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
 		t.Fatalf("closed list: %v", err)
 	}
-	if _, err := store.CreateCard(
+	if _, err := storeCreateCard(store,
 		&cardapi.CreateInput{FolderID: first.ID, Items: textItems("Question", "Answer")},
 	); !errors.Is(
 		err,
@@ -1355,11 +1382,11 @@ func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 	) {
 		t.Fatalf("closed create: %v", err)
 	}
-	if _, err := store.ReviewItem(
+	if _, err := storeReviewItem(store,
 		&cardapi.ReviewInput{
 			FolderID: first.ID,
 			CardID:   card.ID,
-			ItemID:   card.Items[0].ID,
+			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   3,
 		},
 	); !errors.Is(
@@ -1403,8 +1430,8 @@ func mediaFixture(t *testing.T, ext string) (string, []byte) {
 }
 
 func itemDrafts(card cardapi.Card) []contentapi.Draft {
-	drafts := make([]contentapi.Draft, 0, len(card.Items))
-	for _, item := range card.Items {
+	drafts := make([]contentapi.Draft, 0, len(contentapi.Items(card.Items)))
+	for _, item := range contentapi.Items(card.Items) {
 		drafts = append(drafts, contentapi.Draft{ID: item.ID, Kind: item.Kind, Text: item.Text})
 	}
 	return drafts
@@ -1412,7 +1439,7 @@ func itemDrafts(card cardapi.Card) []contentapi.Draft {
 
 func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Mixed"})
+	folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Mixed"})
 	drafts := []contentapi.Draft{}
 	for batch := range 2 {
 		for i := range 2 {
@@ -1426,19 +1453,19 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 			}
 		}
 	}
-	card, err := s.CreateCard(&cardapi.CreateInput{FolderID: folder.ID, Items: drafts})
+	card, err := storeCreateCard(s, &cardapi.CreateInput{FolderID: folder.ID, Items: drafts})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(card.Items) != 16 {
-		t.Fatalf("items: %+v", card.Items)
+	if len(contentapi.Items(card.Items)) != 16 {
+		t.Fatalf("items: %+v", contentapi.Items(card.Items))
 	}
-	for i, item := range card.Items {
+	for i, item := range contentapi.Items(card.Items) {
 		if item.Position != i || item.FolderID != folder.ID || item.CardID != card.ID {
 			t.Fatalf("relation/order: %+v", item)
 		}
 		if item.Kind != "text" {
-			data, err := os.ReadFile(s.mediaPath(item.RelativePath))
+			data, err := os.ReadFile(storeMediaPath(s, item.RelativePath))
 			if err != nil || int64(len(data)) != item.ByteSize {
 				t.Fatalf("managed copy: %v", err)
 			}
@@ -1464,11 +1491,11 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	card, err = s.ReviewItem(
+	card, err = storeReviewItem(s,
 		&cardapi.ReviewInput{
 			FolderID: folder.ID,
 			CardID:   card.ID,
-			ItemID:   card.Items[0].ID,
+			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   3,
 		},
 	)
@@ -1477,11 +1504,11 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	}
 	due, reviewed := card.DueAt, card.LastReviewed
 	edit := itemDrafts(card)
-	removed := card.Items[1]
+	removed := contentapi.Items(card.Items)[1]
 	edit = append(edit[:1], edit[2:]...)
 	edit[0], edit[1] = edit[1], edit[0]
 	edit[1].Text = "Updated text"
-	updated, err := s.UpdateCard(
+	updated, err := storeUpdateCard(s,
 		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: edit},
 	)
 	if err != nil {
@@ -1491,22 +1518,23 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 		updated.CreatedAt != card.CreatedAt {
 		t.Fatal("edit changed schedule")
 	}
-	if updated.Items[0].ID != edit[0].ID || updated.Items[1].Text != "Updated text" {
+	if contentapi.Items(updated.Items)[0].ID != edit[0].ID ||
+		contentapi.Items(updated.Items)[1].Text != "Updated text" {
 		t.Fatal("edit/reorder lost")
 	}
-	if _, err := os.Stat(s.mediaPath(removed.RelativePath)); !os.IsNotExist(err) {
+	if _, err := os.Stat(storeMediaPath(s, removed.RelativePath)); !os.IsNotExist(err) {
 		t.Fatal("removed media not cleaned")
 	}
 	path := s.db.Path()
-	if err := s.Close(); err != nil {
+	if err := storeClose(s); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
-	cards, err := reopened.ListCards()
+	defer storeClose(reopened)
+	cards, err := storeListCards(reopened)
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{updated}) {
 		t.Fatalf("reopen mismatch: %v", err)
 	}
@@ -1514,15 +1542,15 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 
 func TestContentValidationAndRollback(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "First"})
-	other, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Second"})
-	card, err := s.CreateCard(
+	folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "First"})
+	other, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Second"})
+	card, err := storeCreateCard(s,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherCard, err := s.CreateCard(
+	otherCard, err := storeCreateCard(s,
 		&cardapi.CreateInput{FolderID: other.ID, Items: textItems("Other", "Answer")},
 	)
 	if err != nil {
@@ -1537,10 +1565,10 @@ func TestContentValidationAndRollback(t *testing.T) {
 		{{Kind: "text", Text: " "}},
 		{{Kind: "html", Text: "Wrong kind"}},
 		foreign, duplicate,
-		{{ID: card.Items[0].ID, Kind: "image", SourcePath: "anything"}},
+		{{ID: contentapi.Items(card.Items)[0].ID, Kind: "image", SourcePath: "anything"}},
 	}
 	for _, drafts := range invalid {
-		if _, err := s.UpdateCard(
+		if _, err := storeUpdateCard(s,
 			&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: drafts},
 		); err == nil {
 			t.Fatalf("accepted invalid drafts: %+v", drafts)
@@ -1554,7 +1582,7 @@ func TestContentValidationAndRollback(t *testing.T) {
 	for range 6 {
 		failed = append(failed, contentapi.Draft{Kind: "image", SourcePath: image})
 	}
-	if _, err := s.UpdateCard(
+	if _, err := storeUpdateCard(s,
 		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: failed},
 	); err == nil {
 		t.Fatal("accepted missing import")
@@ -1569,7 +1597,7 @@ func TestContentValidationAndRollback(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateCard(&cardapi.CreateInput{
+	if _, err := storeCreateCard(s, &cardapi.CreateInput{
 		FolderID: folder.ID,
 		Items: []contentapi.Draft{
 			{Kind: "image", SourcePath: image},
@@ -1584,7 +1612,7 @@ func TestContentValidationAndRollback(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatal("transaction rollback left imported file")
 	}
-	cards, err := s.ListCards()
+	cards, err := storeListCards(s)
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card, otherCard}) {
 		t.Fatalf("failed edit changed data: %+v, %v", cards, err)
 	}
@@ -1592,11 +1620,11 @@ func TestContentValidationAndRollback(t *testing.T) {
 
 func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Media"})
-	other, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Other"})
+	folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Media"})
+	other, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Other"})
 	image, imageData := mediaFixture(t, ".png")
 	audio, _ := mediaFixture(t, ".wav")
-	card, err := s.CreateCard(&cardapi.CreateInput{
+	card, err := storeCreateCard(s, &cardapi.CreateInput{
 		FolderID: folder.ID,
 		Items: []contentapi.Draft{
 			{Kind: "image", SourcePath: image},
@@ -1606,18 +1634,19 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	copyCard, err := s.CreateCard(&cardapi.CreateInput{
+	copyCard, err := storeCreateCard(s, &cardapi.CreateInput{
 		FolderID: folder.ID,
 		Items: []contentapi.Draft{
 			{Kind: "image", SourcePath: image},
 			{Kind: "audio", SourcePath: audio},
 		},
 	})
-	if err != nil || copyCard.Items[0].RelativePath == card.Items[0].RelativePath {
+	if err != nil ||
+		contentapi.Items(copyCard.Items)[0].RelativePath == contentapi.Items(card.Items)[0].RelativePath {
 		t.Fatal("media was shared between cards")
 	}
-	url := "/media/" + folder.ID + "/" + card.ID + "/" + card.Items[0].ID
-	handler := s.MediaHandler()
+	url := "/media/" + folder.ID + "/" + card.ID + "/" + contentapi.Items(card.Items)[0].ID
+	handler := storeMediaHandler(s)
 	for _, test := range []struct {
 		method, url, byteRange string
 		status                 int
@@ -1627,7 +1656,7 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 		{"GET", url, "bytes=2-7", http.StatusPartialContent, imageData[2:8]},
 		{"HEAD", url, "", http.StatusOK, nil},
 		{"GET", url, "bytes=99999-", http.StatusRequestedRangeNotSatisfiable, nil},
-		{"GET", "/media/" + other.ID + "/" + card.ID + "/" + card.Items[0].ID, "", http.StatusNotFound, nil},
+		{"GET", "/media/" + other.ID + "/" + card.ID + "/" + contentapi.Items(card.Items)[0].ID, "", http.StatusNotFound, nil},
 		{"GET", "/media/../raven.db", "", http.StatusNotFound, nil},
 		{"GET", url + "/extra", "", http.StatusNotFound, nil},
 		{"POST", url, "", http.StatusMethodNotAllowed, nil},
@@ -1651,7 +1680,7 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 			t.Fatal("HEAD included body")
 		}
 	}
-	if err := os.Remove(s.mediaPath(card.Items[0].RelativePath)); err != nil {
+	if err := os.Remove(storeMediaPath(s, contentapi.Items(card.Items)[0].RelativePath)); err != nil {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
@@ -1670,14 +1699,14 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 		}
 	}
 	path := s.db.Path()
-	if err := s.Close(); err != nil {
+	if err := storeClose(s); err != nil {
 		t.Fatal(err)
 	}
 	s, err = openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer storeClose(s)
 	for _, name := range []string{orphan, ".import-abandoned"} {
 		if _, err := os.Stat(filepath.Join(s.mediaDir, name)); !os.IsNotExist(err) {
 			t.Fatal("startup orphan cleanup failed")
@@ -1686,24 +1715,26 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(s.mediaDir, "unrelated.txt")); err != nil {
 		t.Fatal("removed unmanaged file")
 	}
-	if _, err := os.Stat(s.mediaPath(copyCard.Items[0].RelativePath)); err != nil {
+	if _, err := os.Stat(
+		storeMediaPath(s, contentapi.Items(copyCard.Items)[0].RelativePath),
+	); err != nil {
 		t.Fatal("removed referenced media")
 	}
-	if cards, err := s.ListCards(); err != nil || len(cards) != 2 {
+	if cards, err := storeListCards(s); err != nil || len(cards) != 2 {
 		t.Fatalf("missing file prevented loading other content: %v", err)
 	}
 }
 
 func TestMediaTypeValidation(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Media"})
+	folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Media"})
 	path := filepath.Join(t.TempDir(), "fake.png")
 	if err := os.WriteFile(path, []byte("<html>not an image</html>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	image, _ := mediaFixture(t, ".png")
 	for _, draft := range []contentapi.Draft{{Kind: "image", SourcePath: path}, {Kind: "video", SourcePath: image}, {Kind: "image", SourcePath: filepath.Dir(image)}} {
-		if _, err := s.CreateCard(&cardapi.CreateInput{
+		if _, err := storeCreateCard(s, &cardapi.CreateInput{
 			FolderID: folder.ID,
 			Items: append(
 				[]contentapi.Draft{draft},
@@ -1714,7 +1745,7 @@ func TestMediaTypeValidation(t *testing.T) {
 		}
 	}
 	m4a, _ := mediaFixture(t, ".m4a")
-	if _, err := s.CreateCard(&cardapi.CreateInput{
+	if _, err := storeCreateCard(s, &cardapi.CreateInput{
 		FolderID: folder.ID,
 		Items: []contentapi.Draft{
 			{Kind: "audio", SourcePath: m4a},
@@ -1727,8 +1758,8 @@ func TestMediaTypeValidation(t *testing.T) {
 
 func TestConcurrentReviewAndContentEdit(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Concurrent"})
-	card, err := s.CreateCard(
+	folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Concurrent"})
+	card, err := storeCreateCard(s,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("prompt", "answer")},
 	)
 	if err != nil {
@@ -1737,11 +1768,11 @@ func TestConcurrentReviewAndContentEdit(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			if _, err := s.ReviewItem(
+			if _, err := storeReviewItem(s,
 				&cardapi.ReviewInput{
 					FolderID: folder.ID,
 					CardID:   card.ID,
-					ItemID:   card.Items[0].ID,
+					ItemID:   contentapi.Items(card.Items)[0].ID,
 					Rating:   3,
 				},
 			); err != nil {
@@ -1749,7 +1780,7 @@ func TestConcurrentReviewAndContentEdit(t *testing.T) {
 			}
 		})
 		wg.Go(func() {
-			if _, err := s.UpdateCard(&cardapi.UpdateInput{
+			if _, err := storeUpdateCard(s, &cardapi.UpdateInput{
 				FolderID: folder.ID,
 				CardID:   card.ID,
 				Items:    itemDrafts(card),
@@ -1759,8 +1790,9 @@ func TestConcurrentReviewAndContentEdit(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	cards, err := s.ListCards()
-	if err != nil || cards[0].Items[0].Schedule.Reps != 9 || cards[0].LastReviewed == 0 ||
+	cards, err := storeListCards(s)
+	if err != nil || contentapi.Schedule(contentapi.Items(cards[0].Items)[0].Schedule).Reps != 9 ||
+		cards[0].LastReviewed == 0 ||
 		cards[0].DueAt <= time.Now().UnixMilli() {
 		t.Fatalf("edit lost review: %+v, %v", cards, err)
 	}
@@ -1808,15 +1840,15 @@ func TestLegacyMigrationBackupAndIdempotence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cards, err := s.ListCards()
+	cards, err := storeListCards(s)
 	if err != nil || len(cards) != 1 {
 		t.Fatalf("migration: %v", err)
 	}
 	card := cards[0]
 	if card.CreatedAt != 1000 || card.DueAt <= 2000 || card.LastReviewed != 0 ||
-		len(card.Items) != 2 ||
-		card.Items[0].Text != "Old prompt" ||
-		card.Items[1].Text != "Old answer" {
+		len(contentapi.Items(card.Items)) != 2 ||
+		contentapi.Items(card.Items)[0].Text != "Old prompt" ||
+		contentapi.Items(card.Items)[1].Text != "Old answer" {
 		t.Fatalf("migration lost data: %+v", card)
 	}
 	backups, _ := filepath.Glob(path + ".v1-*.bak")
@@ -1841,13 +1873,13 @@ func TestLegacyMigrationBackupAndIdempotence(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = backup.Close()
-	_ = s.Close()
+	_ = storeClose(s)
 	s, err = openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
-	again, err := s.ListCards()
+	defer storeClose(s)
+	again, err := storeListCards(s)
 	if err != nil || !reflect.DeepEqual(cards, again) {
 		t.Fatal("migration repeated or duplicated items")
 	}
@@ -1855,7 +1887,7 @@ func TestLegacyMigrationBackupAndIdempotence(t *testing.T) {
 	if len(backups) != 1 {
 		t.Fatal("made another backup after migration")
 	}
-	next, err := s.CreateCard(
+	next, err := storeCreateCard(s,
 		&cardapi.CreateInput{FolderID: card.FolderID, Items: textItems("next", "answer")},
 	)
 	if err != nil || next.ID != "00000000000000000002" {
@@ -1867,7 +1899,7 @@ func TestFailedMigrationLeavesOriginalRecords(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
 	original := createLegacyDB(t, path, true)
 	if s, err := openStore(path); err == nil {
-		_ = s.Close()
+		_ = storeClose(s)
 		t.Fatal("accepted invalid legacy ownership")
 	}
 	db, err := bolt.Open(path, 0o600, nil)
@@ -1898,29 +1930,30 @@ func TestFailedMigrationLeavesOriginalRecords(t *testing.T) {
 
 func TestSingleContentCards(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Information"})
-	card, err := s.CreateCard(
+	folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Information"})
+	card, err := storeCreateCard(s,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("A fact worth remembering")},
 	)
-	if err != nil || len(card.Items) != 1 {
+	if err != nil || len(contentapi.Items(card.Items)) != 1 {
 		t.Fatalf("single text card: %+v, %v", card, err)
 	}
 	image, _ := mediaFixture(t, ".png")
-	updated, err := s.UpdateCard(&cardapi.UpdateInput{
+	updated, err := storeUpdateCard(s, &cardapi.UpdateInput{
 		FolderID: folder.ID,
 		CardID:   card.ID,
 		Items:    []contentapi.Draft{{Kind: "image", SourcePath: image}},
 	})
-	if err != nil || len(updated.Items) != 1 || updated.Items[0].Kind != "image" ||
-		updated.Items[0].Position != 0 {
+	if err != nil || len(contentapi.Items(updated.Items)) != 1 ||
+		contentapi.Items(updated.Items)[0].Kind != "image" ||
+		contentapi.Items(updated.Items)[0].Position != 0 {
 		t.Fatalf("single media card: %+v, %v", updated, err)
 	}
-	if _, err := s.UpdateCard(
+	if _, err := storeUpdateCard(s,
 		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: nil},
 	); err == nil {
 		t.Fatal("accepted an empty information card")
 	}
-	cards, err := s.ListCards()
+	cards, err := storeListCards(s)
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{updated}) {
 		t.Fatalf("empty edit changed saved content: %+v, %v", cards, err)
 	}
@@ -1934,9 +1967,9 @@ func TestSidedContentMigration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Existing content"})
+			folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Existing content"})
 			image, _ := mediaFixture(t, ".png")
-			card, err := s.CreateCard(&cardapi.CreateInput{
+			card, err := storeCreateCard(s, &cardapi.CreateInput{
 				FolderID: folder.ID,
 				Items: []contentapi.Draft{
 					{Kind: "text", Text: "Prompt text"},
@@ -1947,11 +1980,11 @@ func TestSidedContentMigration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			card, err = s.ReviewItem(
+			card, err = storeReviewItem(s,
 				&cardapi.ReviewInput{
 					FolderID: folder.ID,
 					CardID:   card.ID,
-					ItemID:   card.Items[0].ID,
+					ItemID:   contentapi.Items(card.Items)[0].ID,
 					Rating:   3,
 				},
 			)
@@ -1968,7 +2001,7 @@ func TestSidedContentMigration(t *testing.T) {
 					Bucket([]byte(folder.ID)).
 					Bucket([]byte(itemsBucket)).
 					Bucket([]byte(card.ID))
-				for i, item := range card.Items {
+				for i, item := range contentapi.Items(card.Items) {
 					old := struct {
 						contentapi.Item
 						Side string `json:"side"`
@@ -1996,13 +2029,13 @@ func TestSidedContentMigration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := s.Close(); err != nil {
+			if err := storeClose(s); err != nil {
 				t.Fatal(err)
 			}
 			s, err = openStore(path)
 			if malformed {
 				if err == nil {
-					_ = s.Close()
+					_ = storeClose(s)
 					t.Fatal("accepted invalid old item order")
 				}
 				db, err := bolt.Open(path, 0o600, nil)
@@ -2033,17 +2066,26 @@ func TestSidedContentMigration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cards, err := s.ListCards()
+			cards, err := storeListCards(s)
 			if err != nil || len(cards) != 1 {
 				t.Fatalf("migrated cards: %+v, %v", cards, err)
 			}
 			want := card
-			want.Items = []contentapi.Item{card.Items[1], card.Items[0], card.Items[2]}
-			for i := range want.Items {
-				want.Items[i].Position = i
-				want.Items[i].Schedule = cards[0].Items[i].Schedule
-				want.Items[i].Reviews = cards[0].Items[i].Reviews
-				if len(want.Items[i].Reviews) != 1 || !want.Items[i].Reviews[0].Automatic {
+			want.Items = []contentapi.Item{
+				contentapi.Items(card.Items)[1],
+				contentapi.Items(card.Items)[0],
+				contentapi.Items(card.Items)[2],
+			}
+			for i := range contentapi.Items(want.Items) {
+				contentapi.Items(want.Items)[i].Position = i
+				contentapi.Items(want.Items)[i].Schedule = contentapi.Schedule(
+					contentapi.Items(cards[0].Items)[i].Schedule,
+				)
+				contentapi.Items(want.Items)[i].Reviews = contentapi.Reviews(
+					contentapi.Items(cards[0].Items)[i].Reviews,
+				)
+				if len(contentapi.Reviews(contentapi.Items(want.Items)[i].Reviews)) != 1 ||
+					!contentapi.Reviews(contentapi.Items(want.Items)[i].Reviews)[0].Automatic {
 					t.Fatal("migration did not initialize Again")
 				}
 			}
@@ -2052,7 +2094,9 @@ func TestSidedContentMigration(t *testing.T) {
 			if !reflect.DeepEqual(cards[0], want) {
 				t.Fatalf("content/history lost: got %+v, want %+v", cards[0], want)
 			}
-			if _, err := os.Stat(s.mediaPath(want.Items[0].RelativePath)); err != nil {
+			if _, err := os.Stat(
+				storeMediaPath(s, contentapi.Items(want.Items)[0].RelativePath),
+			); err != nil {
 				t.Fatal("migration lost media file")
 			}
 			err = s.db.View(func(tx *bolt.Tx) error {
@@ -2073,13 +2117,13 @@ func TestSidedContentMigration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_ = s.Close()
+			_ = storeClose(s)
 			s, err = openStore(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer s.Close()
-			again, err := s.ListCards()
+			defer storeClose(s)
+			again, err := storeListCards(s)
 			if err != nil || !reflect.DeepEqual(cards, again) {
 				t.Fatal("migration repeated")
 			}
@@ -2096,18 +2140,18 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
-	first, err := s.CreateFolder(&folderapi.CreateInput{Title: "First"})
+	defer storeClose(s)
+	first, err := storeCreateFolder(s, &folderapi.CreateInput{Title: "First"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.CreateFolder(&folderapi.CreateInput{Title: "Second"})
+	second, err := storeCreateFolder(s, &folderapi.CreateInput{Title: "Second"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	create := func(folder string) cardapi.Card {
 		t.Helper()
-		card, err := s.CreateCard(
+		card, err := storeCreateCard(s,
 			&cardapi.CreateInput{FolderID: folder, Items: textItems("Remember")},
 		)
 		if err != nil {
@@ -2118,7 +2162,7 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 	removed := create(first.ID)
 	create(first.ID)
 	survivor := create(second.ID)
-	if err := s.DeleteCard(first.ID, removed.ID); err != nil {
+	if err := storeDeleteCard(s, first.ID, removed.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.db.View(func(tx *bolt.Tx) error {
@@ -2133,26 +2177,26 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	cards, err := s.ListCards()
+	cards, err := storeListCards(s)
 	if err != nil || len(cards) != 2 {
 		t.Fatalf("after card deletion: %v, %v", cards, err)
 	}
-	if err := s.DeleteCard(first.ID, removed.ID); err == nil {
+	if err := storeDeleteCard(s, first.ID, removed.ID); err == nil {
 		t.Fatal("expected missing card error")
 	}
-	if err := s.DeleteFolder(first.ID); err != nil {
+	if err := storeDeleteFolder(s, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	cards, err = s.ListCards()
+	cards, err = storeListCards(s)
 	if err != nil || len(cards) != 1 || cards[0].FolderID != survivor.FolderID ||
 		cards[0].ID != survivor.ID {
 		t.Fatalf("after folder deletion: %v, %v", cards, err)
 	}
-	folders, err := s.ListFolders()
+	folders, err := storeListFolders(s)
 	if err != nil || len(folders) != 1 || folders[0].ID != second.ID {
 		t.Fatalf("remaining folders: %v, %v", folders, err)
 	}
-	if err := s.DeleteFolder(first.ID); err == nil {
+	if err := storeDeleteFolder(s, first.ID); err == nil {
 		t.Fatal("expected missing folder error")
 	}
 }
@@ -2163,7 +2207,7 @@ func openTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = storeClose(store) })
 	return store
 }
 
@@ -2173,8 +2217,8 @@ func TestEmptyDatabaseAndPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-	folders, err := store.ListFolders()
+	defer storeClose(store)
+	folders, err := storeListFolders(store)
 	if err != nil || folders == nil || len(folders) != 0 {
 		t.Fatalf("empty database: folders=%v, error=%v", folders, err)
 	}
@@ -2201,10 +2245,10 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = storeClose(store) })
 	want := make([]folderapi.Folder, 0)
 	for i := range 12 {
-		folder, err := store.CreateFolder(&folderapi.CreateInput{
+		folder, err := storeCreateFolder(store, &folderapi.CreateInput{
 			Title: fmt.Sprintf("  Ideas %d  ", i), Description: "  Things to explore 新しい  ",
 			Tags: []string{" ideas ", "", "Personal", "IDEAS", "personal", " 新しい "},
 		})
@@ -2217,14 +2261,14 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 		}
 		want = append(want, folder)
 	}
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
 	store, err = openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.ListFolders()
+	got, err := storeListFolders(store)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("reopened folders: got=%+v, want=%+v, error=%v", got, want, err)
 	}
@@ -2245,7 +2289,7 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := store.CreateFolder(&folderapi.CreateInput{Title: "After restart"})
+	next, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "After restart"})
 	if err != nil || next.ID != fmt.Sprintf("%020d", len(want)+1) || next.Tags == nil {
 		t.Fatalf("sequence/tags after reopen: %+v, error=%v", next, err)
 	}
@@ -2254,15 +2298,15 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 func TestValidationDoesNotWrite(t *testing.T) {
 	store := openTestStore(t)
 	for _, title := range []string{"", " \n\t ", "\u3000"} {
-		if _, err := store.CreateFolder(&folderapi.CreateInput{Title: title}); err == nil {
+		if _, err := storeCreateFolder(store, &folderapi.CreateInput{Title: title}); err == nil {
 			t.Errorf("accepted empty title %q", title)
 		}
 	}
-	folders, err := store.ListFolders()
+	folders, err := storeListFolders(store)
 	if err != nil || len(folders) != 0 {
 		t.Fatalf("validation wrote folders: %v, error=%v", folders, err)
 	}
-	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Valid"})
+	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Valid"})
 	if err != nil || folder.ID != "00000000000000000001" || folder.Tags == nil {
 		t.Fatalf("invalid sequence or null tags: %+v, error=%v", folder, err)
 	}
@@ -2273,7 +2317,7 @@ func TestConcurrentFolderCreation(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 32 {
 		wg.Go(func() {
-			if _, err := store.CreateFolder(
+			if _, err := storeCreateFolder(store,
 				&folderapi.CreateInput{Title: fmt.Sprintf("folderapi.Folder %d", i)},
 			); err != nil {
 				t.Error(err)
@@ -2281,7 +2325,7 @@ func TestConcurrentFolderCreation(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	folders, err := store.ListFolders()
+	folders, err := storeListFolders(store)
 	if err != nil || len(folders) != 32 {
 		t.Fatalf("concurrent folders: count=%d, error=%v", len(folders), err)
 	}
@@ -2294,7 +2338,7 @@ func TestConcurrentFolderCreation(t *testing.T) {
 
 func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T) {
 	store := openTestStore(t)
-	original, err := store.CreateFolder(&folderapi.CreateInput{Title: "Original"})
+	original, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Original"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2304,7 +2348,7 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateFolder(
+	if _, err := storeCreateFolder(store,
 		&folderapi.CreateInput{Title: "Must not overwrite"},
 	); !errors.Is(
 		err,
@@ -2320,7 +2364,7 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	folders, err := store.ListFolders()
+	folders, err := storeListFolders(store)
 	if err != nil || !reflect.DeepEqual(folders, []folderapi.Folder{original}) {
 		t.Fatalf("failed transaction changed folders: %+v, error=%v", folders, err)
 	}
@@ -2331,7 +2375,7 @@ func TestDatabaseLockTimesOut(t *testing.T) {
 	start := time.Now()
 	other, err := openStore(store.db.Path())
 	if other != nil {
-		_ = other.Close()
+		_ = storeClose(other)
 	}
 	if !errors.Is(err, bolt.ErrTimeout) || !strings.Contains(err.Error(), store.db.Path()) {
 		t.Fatalf("expected lock timeout with path, got %v", err)
@@ -2349,7 +2393,7 @@ func TestUnreadableDatabaseIsNotReplaced(t *testing.T) {
 	}
 	store, err := openStore(path)
 	if store != nil {
-		_ = store.Close()
+		_ = storeClose(store)
 	}
 	if err == nil || !strings.Contains(err.Error(), path) {
 		t.Fatalf("expected open error with path, got %v", err)
@@ -2363,7 +2407,7 @@ func TestUnreadableDatabaseIsNotReplaced(t *testing.T) {
 func TestReadFailureDoesNotReturnPartialFolders(t *testing.T) {
 	store := openTestStore(t)
 	for range 2 {
-		if _, err := store.CreateFolder(&folderapi.CreateInput{Title: "Ideas"}); err != nil {
+		if _, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Ideas"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -2374,20 +2418,20 @@ func TestReadFailureDoesNotReturnPartialFolders(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if folders, err := store.ListFolders(); err == nil || folders != nil {
+	if folders, err := storeListFolders(store); err == nil || folders != nil {
 		t.Fatalf("expected error without partial results: %+v, error=%v", folders, err)
 	}
 }
 
 func TestClosedStoreReturnsErrors(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ListFolders(); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
+	if _, err := storeListFolders(store); !errors.Is(err, bolt.ErrDatabaseNotOpen) {
 		t.Fatalf("expected closed database error, got %v", err)
 	}
-	if _, err := store.CreateFolder(&folderapi.CreateInput{Title: "Ideas"}); !errors.Is(
+	if _, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Ideas"}); !errors.Is(
 		err,
 		bolt.ErrDatabaseNotOpen,
 	) {
@@ -2397,8 +2441,8 @@ func TestClosedStoreReturnsErrors(t *testing.T) {
 
 func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Learning"})
-	card, err := s.CreateCard(
+	folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Learning"})
+	card, err := storeCreateCard(s,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("one", "two")},
 	)
 	if err != nil {
@@ -2407,8 +2451,8 @@ func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 	for _, invalid := range []struct {
 		item   string
 		rating int
-	}{{card.Items[0].ID, 0}, {card.Items[0].ID, 5}, {"missing", 3}, {card.Items[1].ID, -1}} {
-		if _, err := s.ReviewItem(
+	}{{contentapi.Items(card.Items)[0].ID, 0}, {contentapi.Items(card.Items)[0].ID, 5}, {"missing", 3}, {contentapi.Items(card.Items)[1].ID, -1}} {
+		if _, err := storeReviewItem(s,
 			&cardapi.ReviewInput{
 				FolderID: folder.ID,
 				CardID:   card.ID,
@@ -2419,46 +2463,58 @@ func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 			t.Fatal("accepted invalid review")
 		}
 	}
-	cards, _ := s.ListCards()
+	cards, _ := storeListCards(s)
 	if !reflect.DeepEqual(cards[0], card) {
 		t.Fatal("invalid review mutated data")
 	}
 	// An invalid FSRS time must roll back both the schedule and its review log.
-	if _, err := s.reviewItemAt(
+	if _, err := storeReviewItemAt(s,
 		&cardapi.ReviewInput{
 			FolderID: folder.ID,
 			CardID:   card.ID,
-			ItemID:   card.Items[0].ID,
+			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   3,
 		},
-		card.Items[0].Schedule.LastReview.Add(-time.Second),
+		contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).LastReview.Add(-time.Second),
 	); err == nil {
 		t.Fatal("accepted review before last review")
 	}
-	cards, _ = s.ListCards()
+	cards, _ = storeListCards(s)
 	if !reflect.DeepEqual(cards[0], card) {
 		t.Fatal("failed FSRS operation mutated data")
 	}
-	updated, err := s.UpdateCard(
+	updated, err := storeUpdateCard(s,
 		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: []contentapi.Draft{
-			{ID: card.Items[1].ID, Kind: "text", Text: "edited"}, {Kind: "text", Text: "new"},
+			{
+				ID:   contentapi.Items(card.Items)[1].ID,
+				Kind: "text",
+				Text: "edited",
+			},
+			{Kind: "text", Text: "new"},
 		}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(updated.Items[0].Schedule, card.Items[1].Schedule) ||
-		!reflect.DeepEqual(updated.Items[0].Reviews, card.Items[1].Reviews) {
+	if !reflect.DeepEqual(
+		contentapi.Schedule(contentapi.Items(updated.Items)[0].Schedule),
+		contentapi.Schedule(contentapi.Items(card.Items)[1].Schedule),
+	) ||
+		!reflect.DeepEqual(
+			contentapi.Reviews(contentapi.Items(updated.Items)[0].Reviews),
+			contentapi.Reviews(contentapi.Items(card.Items)[1].Reviews),
+		) {
 		t.Fatal("edit reset schedule")
 	}
-	if updated.Items[1].Schedule.Reps != 1 || !updated.Items[1].Reviews[0].Automatic {
+	if contentapi.Schedule(contentapi.Items(updated.Items)[1].Schedule).Reps != 1 ||
+		!contentapi.Reviews(contentapi.Items(updated.Items)[1].Reviews)[0].Automatic {
 		t.Fatal("new item did not start Again")
 	}
-	if _, err := s.ReviewItem(
+	if _, err := storeReviewItem(s,
 		&cardapi.ReviewInput{
 			FolderID: folder.ID,
 			CardID:   card.ID,
-			ItemID:   card.Items[0].ID,
+			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   3,
 		},
 	); err == nil {
@@ -2468,50 +2524,52 @@ func TestItemReviewValidationAndScheduleEdits(t *testing.T) {
 
 func TestNotificationAcknowledgmentPersistsAndRejectsStaleSchedules(t *testing.T) {
 	s := openTestStore(t)
-	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "Reminders"})
-	card, _ := s.CreateCard(
+	folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "Reminders"})
+	card, _ := storeCreateCard(s,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("one", "two")},
 	)
-	first := card.Items[0]
+	first := contentapi.Items(card.Items)[0]
 	occurrence := reviewapi.DueOccurrence{
 		FolderID: folder.ID,
 		CardID:   card.ID,
 		ItemID:   first.ID,
-		Due:      first.Schedule.Due.UnixMilli(),
+		Due:      contentapi.Schedule(first.Schedule).Due.UnixMilli(),
 	}
-	if err := s.MarkNotified([]reviewapi.DueOccurrence{occurrence}); err != nil {
+	if err := storeMarkNotified(s, []reviewapi.DueOccurrence{occurrence}); err != nil {
 		t.Fatal(err)
 	}
-	card, err := s.ReviewItem(
+	card, err := storeReviewItem(s,
 		&cardapi.ReviewInput{FolderID: folder.ID, CardID: card.ID, ItemID: first.ID, Rating: 4},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkNotified([]reviewapi.DueOccurrence{occurrence}); err != nil {
+	if err := storeMarkNotified(s, []reviewapi.DueOccurrence{occurrence}); err != nil {
 		t.Fatal(err)
 	}
-	cards, _ := s.ListCards()
-	if cards[0].Items[0].LastNotifiedDue != occurrence.Due ||
-		cards[0].Items[1].LastNotifiedDue != 0 ||
-		cards[0].Items[0].LastNotifiedDue == card.Items[0].Schedule.Due.UnixMilli() {
+	cards, _ := storeListCards(s)
+	if contentapi.Items(cards[0].Items)[0].LastNotifiedDue != occurrence.Due ||
+		contentapi.Items(cards[0].Items)[1].LastNotifiedDue != 0 ||
+		contentapi.Items(cards[0].Items)[0].LastNotifiedDue == contentapi.Schedule(
+			contentapi.Items(card.Items)[0].Schedule,
+		).Due.UnixMilli() {
 		t.Fatal("stale acknowledgment suppressed new review")
 	}
-	claimed, err := s.ClaimNotificationPrompt()
+	claimed, err := storeClaimNotificationPrompt(s)
 	if err != nil || !claimed {
 		t.Fatal("first authorization not claimed")
 	}
 	path := s.db.Path()
-	_ = s.Close()
+	_ = storeClose(s)
 	reopened, err := openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
-	if claimed, err := reopened.ClaimNotificationPrompt(); err != nil || claimed {
+	defer storeClose(reopened)
+	if claimed, err := storeClaimNotificationPrompt(reopened); err != nil || claimed {
 		t.Fatal("authorization prompted twice")
 	}
-	persisted, err := reopened.ListCards()
+	persisted, err := storeListCards(reopened)
 	if err != nil || !reflect.DeepEqual(persisted, cards) {
 		t.Fatal("notification metadata lost after restart")
 	}
@@ -2523,9 +2581,9 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	folder, _ := s.CreateFolder(&folderapi.CreateInput{Title: "V3"})
+	folder, _ := storeCreateFolder(s, &folderapi.CreateInput{Title: "V3"})
 	image, _ := mediaFixture(t, ".png")
-	card, err := s.CreateCard(&cardapi.CreateInput{
+	card, err := storeCreateCard(s, &cardapi.CreateInput{
 		FolderID: folder.ID,
 		Items: []contentapi.Draft{
 			{Kind: "text", Text: "text"},
@@ -2543,7 +2601,7 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 			Bucket([]byte(folder.ID)).
 			Bucket([]byte(itemsBucket)).
 			Bucket([]byte(card.ID))
-		for _, item := range card.Items {
+		for _, item := range contentapi.Items(card.Items) {
 			data, _ := json.Marshal(item)
 			var old map[string]json.RawMessage
 			_ = json.Unmarshal(data, &old)
@@ -2560,19 +2618,20 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = s.Close()
+	_ = storeClose(s)
 	s, err = openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cards, err := s.ListCards()
+	cards, err := storeListCards(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, item := range cards[0].Items {
-		if item.ID != card.Items[i].ID || item.RelativePath != card.Items[i].RelativePath ||
-			item.Schedule.Reps != 1 ||
-			!item.Reviews[0].Automatic {
+	for i, item := range contentapi.Items(cards[0].Items) {
+		if item.ID != contentapi.Items(card.Items)[i].ID ||
+			item.RelativePath != contentapi.Items(card.Items)[i].RelativePath ||
+			contentapi.Schedule(item.Schedule).Reps != 1 ||
+			!contentapi.Reviews(item.Reviews)[0].Automatic {
 			t.Fatal("migration lost content or failed to initialize Again")
 		}
 	}
@@ -2580,13 +2639,13 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 	if len(backups) != 1 {
 		t.Fatal("missing migration backup")
 	}
-	_ = s.Close()
+	_ = storeClose(s)
 	s, err = openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
-	again, err := s.ListCards()
+	defer storeClose(s)
+	again, err := storeListCards(s)
 	if err != nil || !reflect.DeepEqual(cards, again) {
 		t.Fatal("FSRS migration repeated")
 	}
@@ -2598,37 +2657,37 @@ func TestAutostartMarkerPersistsWithoutChangingContentOrSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = s.Close() })
-	folder, err := s.CreateFolder(
+	t.Cleanup(func() { _ = storeClose(s) })
+	folder, err := storeCreateFolder(s,
 		&folderapi.CreateInput{Title: "Existing folder", Tags: []string{"retained"}},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := s.CreateCard(
+	card, err := storeCreateCard(s,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Existing memory")},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first, err := s.ClaimAutostartInitialization(); err != nil || !first {
+	if first, err := storeClaimAutostartInitialization(s); err != nil || !first {
 		t.Fatalf("first claim=%v error=%v", first, err)
 	}
-	if err := s.Close(); err != nil {
+	if err := storeClose(s); err != nil {
 		t.Fatal(err)
 	}
 	s, err = openStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first, err := s.ClaimAutostartInitialization(); err != nil || first {
+	if first, err := storeClaimAutostartInitialization(s); err != nil || first {
 		t.Fatalf("reopened claim=%v error=%v", first, err)
 	}
-	folders, err := s.ListFolders()
+	folders, err := storeListFolders(s)
 	if err != nil || !reflect.DeepEqual(folders, []folderapi.Folder{folder}) {
 		t.Fatalf("folders changed: %+v, %v", folders, err)
 	}
-	cards, err := s.ListCards()
+	cards, err := storeListCards(s)
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("cards changed: %+v, %v", cards, err)
 	}
@@ -2648,7 +2707,7 @@ func TestAutostartMarkerClaimIsAtomic(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 10 {
 		wg.Go(func() {
-			first, err := s.ClaimAutostartInitialization()
+			first, err := storeClaimAutostartInitialization(s)
 			if err != nil {
 				t.Error(err)
 			}
@@ -2665,8 +2724,8 @@ func TestAutostartMarkerClaimIsAtomic(t *testing.T) {
 
 func TestAutostartMarkerFailsOnClosedDatabase(t *testing.T) {
 	s := openTestStore(t)
-	_ = s.Close()
-	if first, err := s.ClaimAutostartInitialization(); err == nil || first {
+	_ = storeClose(s)
+	if first, err := storeClaimAutostartInitialization(s); err == nil || first {
 		t.Fatalf("closed database claim=%v error=%v", first, err)
 	}
 }
@@ -2676,7 +2735,7 @@ func openStore(path string) (*Store, error) {
 		path,
 		&Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -2703,12 +2762,12 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	folder, err := storage.CreateFolder(&folderapi.CreateInput{Title: "Existing"})
+	folder, err := storeCreateFolder(storage, &folderapi.CreateInput{Title: "Existing"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	media, contents := mediaFixture(t, ".png")
-	card, err := storage.CreateCard(
+	card, err := storeCreateCard(storage,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: []contentapi.Draft{
 			{Kind: "text", Text: "Keep this schedule"}, {Kind: "image", SourcePath: media},
 		}},
@@ -2716,40 +2775,42 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err = storage.ReviewItem(
+	card, err = storeReviewItem(storage,
 		&cardapi.ReviewInput{
 			FolderID: folder.ID,
 			CardID:   card.ID,
-			ItemID:   card.Items[0].ID,
+			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   3,
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = storage.MarkNotified(
+	err = storeMarkNotified(storage,
 		[]reviewapi.DueOccurrence{
 			{
 				FolderID: folder.ID,
 				CardID:   card.ID,
-				ItemID:   card.Items[0].ID,
-				Due:      card.Items[0].Schedule.Due.UnixMilli(),
+				ItemID:   contentapi.Items(card.Items)[0].ID,
+				Due: contentapi.Schedule(
+					contentapi.Items(card.Items)[0].Schedule,
+				).Due.UnixMilli(),
 			},
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cards, err := storage.ListCards()
+	cards, err := storeListCards(storage)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := cards[0]
-	claimed, err := storage.ClaimAutostartInitialization()
+	claimed, err := storeClaimAutostartInitialization(storage)
 	if err != nil || !claimed {
 		t.Fatalf("claim startup: %v %v", claimed, err)
 	}
-	claimed, err = storage.ClaimNotificationPrompt()
+	claimed, err = storeClaimNotificationPrompt(storage)
 	if err != nil || !claimed {
 		t.Fatalf("claim prompt: %v %v", claimed, err)
 	}
@@ -2763,7 +2824,7 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 			return err
 		}
 		items := folderBucket.Bucket([]byte(itemsBucket)).Bucket([]byte(card.ID))
-		for _, item := range want.Items {
+		for _, item := range contentapi.Items(want.Items) {
 			if err := items.Put(
 				[]byte(item.ID),
 				v4JSON(t, items.Get([]byte(item.ID))),
@@ -2776,7 +2837,7 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := storage.Close(); err != nil {
+	if err := storeClose(storage); err != nil {
 		t.Fatal(err)
 	}
 	for attempt := range 2 {
@@ -2784,17 +2845,17 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := reopened.ListCards()
+		got, err := storeListCards(reopened)
 		if err != nil || !reflect.DeepEqual(got, []cardapi.Card{want}) {
 			t.Fatalf("lost records: %+v %v", got, err)
 		}
-		if claimed, err := reopened.ClaimAutostartInitialization(); err != nil || claimed {
+		if claimed, err := storeClaimAutostartInitialization(reopened); err != nil || claimed {
 			t.Fatalf("lost startup marker: %v %v", claimed, err)
 		}
-		if claimed, err := reopened.ClaimNotificationPrompt(); err != nil || claimed {
+		if claimed, err := storeClaimNotificationPrompt(reopened); err != nil || claimed {
 			t.Fatalf("lost prompt marker: %v %v", claimed, err)
 		}
-		data, err := os.ReadFile(reopened.mediaPath(want.Items[1].RelativePath))
+		data, err := os.ReadFile(storeMediaPath(reopened, contentapi.Items(want.Items)[1].RelativePath))
 		if err != nil || !bytes.Equal(data, contents) {
 			t.Fatalf("lost media: %v", err)
 		}
@@ -2815,7 +2876,7 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := reopened.Close(); err != nil {
+		if err := storeClose(reopened); err != nil {
 			t.Fatal(err)
 		}
 		backups, err := filepath.Glob(path + ".v4-*.bak")
@@ -2853,11 +2914,11 @@ func TestV4MigrationFailureRollsBackOriginalRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	folder, err := storage.CreateFolder(&folderapi.CreateInput{Title: "Existing"})
+	folder, err := storeCreateFolder(storage, &folderapi.CreateInput{Title: "Existing"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err := storage.CreateCard(
+	card, err := storeCreateCard(storage,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Keep me")},
 	)
 	if err != nil {
@@ -2876,7 +2937,10 @@ func TestV4MigrationFailureRollsBackOriginalRecords(t *testing.T) {
 			Bucket([]byte(folder.ID)).
 			Bucket([]byte(itemsBucket)).
 			Bucket([]byte(card.ID))
-		if err := items.Put([]byte(card.Items[0].ID), []byte(`{"invalid":`)); err != nil {
+		if err := items.Put(
+			[]byte(contentapi.Items(card.Items)[0].ID),
+			[]byte(`{"invalid":`),
+		); err != nil {
 			return err
 		}
 		return tx.Bucket([]byte(metaBucket)).Put([]byte(schemaKey), []byte("4"))
@@ -2884,11 +2948,11 @@ func TestV4MigrationFailureRollsBackOriginalRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := storage.Close(); err != nil {
+	if err := storeClose(storage); err != nil {
 		t.Fatal(err)
 	}
 	if failed, err := openStore(path); err == nil {
-		failed.Close()
+		storeClose(failed)
 		t.Fatal("accepted corrupted legacy record")
 	}
 	db, err := bolt.Open(path, 0o600, nil)
@@ -2969,14 +3033,14 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 		}
 	})
 	item := contentapi.Item{ID: strings.Repeat("a", 32), Kind: "image"}
-	if err = storeSettingsFixture().inspectImportedMedia(source, path, &item); err != nil {
+	if err = settingsInspectImportedMedia(storeSettingsFixture(), source, path, &item); err != nil {
 		t.Fatal(err)
 	}
 	if item.ByteSize != int64(len(content)) || item.MIMEType != "image/png" {
 		t.Fatalf("unexpected imported metadata: %+v", item)
 	}
 	item.ByteSize++
-	if _, err = store.persistMedia(
+	if _, err = storePersistMedia(store,
 		source,
 		&item,
 	); !errors.Is(
@@ -3007,7 +3071,7 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 	if err = target.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("copy failure left destination open: %v", err)
 	}
-	if err = storeSettingsFixture().inspectImportedMedia(
+	if err = settingsInspectImportedMedia(storeSettingsFixture(),
 		closed,
 		path,
 		&item,
@@ -3017,9 +3081,9 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 	) {
 		t.Fatalf("expected stat failure, got %v", err)
 	}
-	if _, err = store.commitMedia(
+	if _, err = storeCommitMedia(store,
 		filepath.Join(t.TempDir(), "missing"),
-		store.mediaPath(item.RelativePath),
+		storeMediaPath(store, item.RelativePath),
 	); err == nil {
 		t.Fatal("missing staged file committed")
 	}
@@ -3034,28 +3098,46 @@ func TestStoredContentIsValidatedWhenRead(t *testing.T) {
 		{"card ownership", func(item *contentapi.Item) { item.CardID = "other" }},
 		{"folder ownership", func(item *contentapi.Item) { item.FolderID = "other" }},
 		{"content structure", func(item *contentapi.Item) { item.Text = "" }},
-		{"missing due", func(item *contentapi.Item) { item.Schedule.Due = time.Time{} }},
+		{
+			"missing due",
+			func(item *contentapi.Item) {
+				schedule := contentapi.Schedule(item.Schedule)
+				schedule.Due = time.Time{}
+				item.Schedule = schedule
+			},
+		},
 		{
 			"missing review time",
-			func(item *contentapi.Item) { item.Schedule.LastReview = time.Time{} },
+			func(item *contentapi.Item) {
+				schedule := contentapi.Schedule(item.Schedule)
+				schedule.LastReview = time.Time{}
+				item.Schedule = schedule
+			},
 		},
 		{"missing history", func(item *contentapi.Item) { item.Reviews = nil }},
-		{"invalid schedule", func(item *contentapi.Item) { item.Schedule.State = -1 }},
+		{
+			"invalid schedule",
+			func(item *contentapi.Item) {
+				schedule := contentapi.Schedule(item.Schedule)
+				schedule.State = -1
+				item.Schedule = schedule
+			},
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			store := openTestStore(t)
-			folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Stored validation"})
+			folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Stored validation"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			card, err := store.CreateCard(
+			card, err := storeCreateCard(store,
 				&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("content")},
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			item := card.Items[0]
+			item := contentapi.Items(card.Items)[0]
 			test.mutate(&item)
 			data, err := json.Marshal(item)
 			if err != nil {
@@ -3064,12 +3146,12 @@ func TestStoredContentIsValidatedWhenRead(t *testing.T) {
 			err = store.db.Update(func(tx *bolt.Tx) error {
 				return tx.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID)).
 					Bucket([]byte(itemsBucket)).
-					Bucket([]byte(card.ID)).Put([]byte(card.Items[0].ID), data)
+					Bucket([]byte(card.ID)).Put([]byte(contentapi.Items(card.Items)[0].ID), data)
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cards, readErr := store.ListCards(); readErr == nil || cards != nil {
+			if cards, readErr := storeListCards(store); readErr == nil || cards != nil {
 				t.Fatalf("invalid stored content returned: %+v, %v", cards, readErr)
 			}
 		})
@@ -3078,18 +3160,18 @@ func TestStoredContentIsValidatedWhenRead(t *testing.T) {
 
 func TestCardReadFailureDoesNotReturnPartialResults(t *testing.T) {
 	store := openTestStore(t)
-	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Partial reads"})
+	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Partial reads"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for index := 0; index < 2; index++ {
-		if _, err = store.CreateCard(
+		if _, err = storeCreateCard(store,
 			&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("valid")},
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
-	cards, err := store.ListCards()
+	cards, err := storeListCards(store)
 	if err != nil || len(cards) != 2 {
 		t.Fatalf("cards=%v error=%v", cards, err)
 	}
@@ -3102,7 +3184,7 @@ func TestCardReadFailureDoesNotReturnPartialResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cards, readErr := store.ListCards(); readErr == nil || cards != nil {
+	if cards, readErr := storeListCards(store); readErr == nil || cards != nil {
 		t.Fatalf("returned partial cards after corruption: %v, %v", cards, readErr)
 	}
 }
@@ -3115,17 +3197,17 @@ func TestRecordEncoderRejectsNonFiniteScheduleValues(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
 }
 
 func storeSettingsFixture() *Settings {
 	settings := configurationFixture()
 	return &Settings{
-		Rules:            settings.Library(),
+		Rules:            configuration.Library(settings),
 		MediaRoutePrefix: settings.MediaRoutePrefix(),
 		LogErrorKey:      settings.LogErrorKey(),
 	}
@@ -3145,13 +3227,13 @@ func TestConfiguredContentAndMediaRouteSurvivePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
-	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Configured"})
+	t.Cleanup(func() { _ = storeClose(store) })
+	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Configured"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	image, contents := mediaFixture(t, ".png")
-	card, err := store.CreateCard(
+	card, err := storeCreateCard(store,
 		&cardapi.CreateInput{FolderID: folder.ID, Items: []contentapi.Draft{
 			{Kind: "plain", Text: "Remember"}, {Kind: "image", SourcePath: image},
 		}},
@@ -3159,21 +3241,21 @@ func TestConfiguredContentAndMediaRouteSurvivePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Close(); err != nil {
+	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
 	reopened, err := Open(path, deps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = reopened.Close() })
-	cards, err := reopened.ListCards()
+	t.Cleanup(func() { _ = storeClose(reopened) })
+	cards, err := storeListCards(reopened)
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatal(cards, err)
 	}
-	route := "/saved/" + folder.ID + "/" + card.ID + "/" + card.Items[1].ID
+	route := "/saved/" + folder.ID + "/" + card.ID + "/" + contentapi.Items(card.Items)[1].ID
 	response := httptest.NewRecorder()
-	reopened.MediaHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
+	storeMediaHandler(reopened).ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
 	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), contents) {
 		t.Fatalf("configured media route failed: %d %q", response.Code, response.Body.String())
 	}

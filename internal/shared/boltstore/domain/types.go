@@ -5,42 +5,54 @@
 package domain
 
 import (
-	contentapi "raven/api/content"
-	"raven/internal/shared/boltstore/ports"
+	"context"
+	"encoding/json"
 )
 
 type (
 	// Rules supplies the shared content identifiers and supported rating range.
 	Rules struct {
-		TextKind      string `yaml:"text_kind"`
-		MIMEJPEG      string `yaml:"mime_jpeg"`
-		MIMEOggAudio  string `yaml:"mime_ogg_audio"`
-		MIMEMP4Video  string `yaml:"mime_mp4_video"`
-		MinimumRating int    `yaml:"minimum_rating"`
-		MaximumRating int    `yaml:"maximum_rating"`
+		// TextKind identifies plain text content.
+		TextKind string `json:"text_kind" yaml:"text_kind"`
+		// MIMEJPEG is the canonical content type for JPEG images.
+		MIMEJPEG string `json:"mime_jpeg" yaml:"mime_jpeg"`
+		// MIMEOggAudio is the canonical content type for Ogg audio.
+		MIMEOggAudio string `json:"mime_ogg_audio" yaml:"mime_ogg_audio"`
+		// MIMEMP4Video is the canonical content type for MP4 video.
+		MIMEMP4Video string `json:"mime_mp4_video" yaml:"mime_mp4_video"`
+		// MinimumRating is the lowest supported review grade.
+		MinimumRating int `json:"minimum_rating" yaml:"minimum_rating"`
+		// MaximumRating is the highest supported review grade.
+		MaximumRating int `json:"maximum_rating" yaml:"maximum_rating"`
 	}
 
 	// PreparationInput supplies draft content and its previous owned records.
 	PreparationInput struct {
-		Drafts   []contentapi.Draft
-		Previous []contentapi.Item
+		// Drafts contains JSON-valued editable content.
+		Drafts any
+		// Previous contains JSON-valued records owned by this card.
+		Previous any
 	}
 	// PreparationDependencies supplies media import and identifier generation.
 	PreparationDependencies struct {
-		Batch       ports.BatchExecutor
-		ImportMedia func(*contentapi.Item, string) (contentapi.Item, string, error)
-		NewID       func() (string, error)
+		// Batch runs independent media imports to completion.
+		Batch func(context.Context, []func(context.Context) error) error
+		// ImportMedia copies media for a JSON-valued content record.
+		ImportMedia func(json.RawMessage, string) (json.RawMessage, string, error)
+		// NewID allocates a unique content identifier.
+		NewID func() (string, error)
 	}
 
 	mediaPreparation struct {
-		dependencies *PreparationDependencies
-		textKind     string
-		items        []contentapi.Item
-		drafts       []contentapi.Draft
-		paths        []string
+		items       any
+		drafts      any
+		batch       func(context.Context, []func(context.Context) error) error
+		importMedia func(json.RawMessage, string) (json.RawMessage, string, error)
+		textKind    string
+		paths       []string
 	}
 	itemPreparation struct {
-		previous map[string]contentapi.Item
+		previous any
 		seen     map[string]bool
 		newID    func() (string, error)
 	}

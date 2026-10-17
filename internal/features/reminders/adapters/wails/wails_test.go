@@ -146,3 +146,17 @@ func TestAuthorizationDenialIsReturnedWithoutAnError(t *testing.T) {
 		)
 	}
 }
+
+func TestRuntimeSharesNotificationCapabilities(t *testing.T) {
+	native := &fakeRuntime{}
+	runtime := NewRuntime(native, slog.New(slog.NewTextHandler(io.Discard, nil)), "error")
+	if allowed, err := runtime.CheckNotificationAuthorization(); err != nil || allowed {
+		t.Fatalf("authorization=%v error=%v", allowed, err)
+	}
+	if allowed, err := runtime.RequestAuthorization(); err != nil || allowed || !native.requested {
+		t.Fatalf("request=%v error=%v", allowed, err)
+	}
+	if err := runtime.Send(3); err != nil || !strings.Contains(native.options.Body, "3 items") {
+		t.Fatalf("notification=%+v error=%v", native.options, err)
+	}
+}

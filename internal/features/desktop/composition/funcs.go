@@ -6,6 +6,7 @@ package composition
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
@@ -19,31 +20,55 @@ import (
 
 func newApplication(params appParams, settings configuration.Settings) *application.App {
 	return desktopwails.NewApplication(&desktopwails.ApplicationDependencies{
-		Configuration: desktopConfiguration(settings),
-		Assets:        params.Assets.Files,
-		Icon:          params.Assets.Icon,
-		Media:         params.Media,
-		Visibility:    params.Visibility,
-		Logger:        params.Logger,
+		ApplicationID: settings.ApplicationID(), Assets: params.Assets.Files,
+		Icon: params.Assets.Icon, Middleware: params.Media.Middleware,
+		SecondInstance: params.Visibility.SecondInstance, Logger: params.Logger,
 	})
 }
 
 func newDesktop(params desktopParams, settings configuration.Settings) *desktopwails.Desktop {
-	desktop := desktopwails.New(&desktopwails.Dependencies{
-		Configuration: desktopConfiguration(settings),
-		App:           params.App,
-		Handles:       params.Handles,
-		Windows:       params.Windows,
-		Visibility:    params.Visibility,
-		Startup:       params.Startup,
-		Reminders:     params.Reminders,
-		Notifications: params.Notifications,
-		Assets:        params.Assets.Files,
-		Icon:          params.Assets.Icon,
-	})
+	deps := desktopDependencies(params)
+	deps.ShowReviews, deps.LogErrorKey = settings.ShowReviews(), settings.LogErrorKey()
+	desktop := desktopwails.New(deps)
 	params.Lifecycle.Append(desktopLifecycle(desktop, params.Runtime, params.Requests))
-
 	return desktop
+}
+
+func desktopDependencies(params desktopParams) *desktopwails.Dependencies {
+	deps := &desktopwails.Dependencies{
+		App:                 params.App,
+		Main:                params.Handles.Main,
+		Widget:              params.Handles.Widget,
+		Review:              params.Handles.Review,
+		ApplicationStarted:  params.Visibility.ApplicationStarted,
+		RequestOpen:         params.Visibility.RequestOpen,
+		InitializeStartup:   params.Startup.Initialize,
+		RefreshStartup:      params.Startup.Refresh,
+		ToggleStartup:       params.Startup.Toggle,
+		SetStartupPublisher: params.Startup.SetPublisher,
+		OnReview:            params.Notifications.OnReview,
+		Icon:                params.Assets.Icon,
+	}
+	bindDesktopWindows(deps, params)
+	bindDesktopReminders(deps, params)
+	return deps
+}
+
+func bindDesktopWindows(deps *desktopwails.Dependencies, params desktopParams) {
+	if params.Windows == nil {
+		return
+	}
+	deps.ShowMain, deps.HideMain = params.Windows.ShowMain, params.Windows.HideMain
+	deps.ConfigureWidget, deps.ResetWidget = params.Windows.ConfigureWidget, params.Windows.ResetWidget
+	deps.PositionFloatingReview = params.Windows.PositionFloatingReview
+	deps.RequestFloatingReviewClose, deps.Quit = params.Windows.RequestFloatingReviewClose, params.Windows.Quit
+}
+
+func bindDesktopReminders(deps *desktopwails.Dependencies, params desktopParams) {
+	if params.Reminders == nil {
+		return
+	}
+	deps.StartReminders, deps.WakeReminders = params.Reminders.Start, params.Reminders.Wake
 }
 
 //nolint:contextcheck // The request loop must outlive the bounded startup context.
@@ -97,48 +122,49 @@ func waitForDesktop(ctx context.Context, done <-chan struct{}) error {
 
 func configureDesktop(desktop *desktopwails.Desktop) { desktop.Configure() }
 
-// NewBridge supplies graph control after construction, before running the native event loop.
+// NewBridge binds graph control before the native event loop starts.
 func NewBridge(graph Lifecycle, runtime *lifetime.Runtime) *Bridge {
-	var bridge Bridge
-
-	bridge.graph = graph
-	bridge.runtime = runtime
-
-	return &bridge
+	var startOnce, stopOnce sync.Once
+	var startErr, stopErr error
+	return &Bridge{lifecycle: func(ctx context.Context, starting bool) error {
+		if starting {
+			startOnce.Do(func() { startErr = startBridge(ctx, runtime, graph.Start) })
+			return startErr
+		}
+		stopOnce.Do(func() { stopErr = stopBridge(runtime.Cancel, graph.Stop) })
+		return stopErr
+	}}
 }
 
-// ServiceStartup starts the graph with a bounded context and an independent worker lifetime.
+func startBridge(
+	ctx context.Context,
+	runtime *lifetime.Runtime,
+	start func(context.Context) error,
+) error {
+	runtime.Attach(ctx)
+	startup, cancel := context.WithTimeout(ctx, lifecycleTimeout)
+	defer cancel()
+	err := isolate(start(startup))
+	if err != nil {
+		runtime.Cancel()
+	}
+	return err
+}
+
+func stopBridge(cancelRuntime func(), stop func(context.Context) error) error {
+	cancelRuntime()
+	ctx, cancel := context.WithTimeout(context.Background(), lifecycleTimeout)
+	defer cancel()
+	return isolate(stop(ctx))
+}
+
+// ServiceStartup starts the graph with an independent worker lifetime.
 func (bridge *Bridge) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
-	bridge.start.Do(func() {
-		bridge.runtime.Attach(ctx)
-
-		startup, cancel := context.WithTimeout(ctx, lifecycleTimeout)
-
-		defer cancel()
-
-		bridge.startErr = isolate(bridge.graph.Start(startup))
-		if bridge.startErr != nil {
-			bridge.runtime.Cancel()
-		}
-	})
-
-	return bridge.startErr
+	return bridge.lifecycle(ctx, true)
 }
 
 // ServiceShutdown releases the graph once, including after an unsuccessful Run.
-func (bridge *Bridge) ServiceShutdown() error {
-	bridge.stop.Do(func() {
-		bridge.runtime.Cancel()
-
-		ctx, cancel := context.WithTimeout(context.Background(), lifecycleTimeout)
-
-		defer cancel()
-
-		bridge.stopErr = isolate(bridge.graph.Stop(ctx))
-	})
-
-	return bridge.stopErr
-}
+func (bridge *Bridge) ServiceShutdown() error { return bridge.lifecycle(context.Background(), false) }
 
 func isolate(err error) error {
 	if err != nil {
@@ -151,9 +177,10 @@ func isolate(err error) error {
 func (failure *lifecycleError) Error() string { return failure.message }
 
 func desktopConfiguration(settings configuration.Settings) *desktopwails.Configuration {
+	layout := configuration.Layout(settings)
 	return &desktopwails.Configuration{
-		Layout: settings.Layout(), ApplicationID: settings.ApplicationID(),
-		LogErrorKey: settings.LogErrorKey(), ShowReviews: settings.ShowReviews(),
+		ApplicationID: settings.ApplicationID(), WidgetSize: layout.WidgetSize,
+		ReviewWidth: layout.ReviewWidth, ReviewHeight: layout.ReviewHeight,
 	}
 }
 

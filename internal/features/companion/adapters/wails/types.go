@@ -8,72 +8,69 @@ import (
 	"log/slog"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
-
-	companion "raven/internal/features/companion/domain"
-	companionports "raven/internal/features/companion/ports"
 )
 
 type (
-	// Dependencies supplies native windows, styling, and immutable window settings.
+	// Dependencies supplies native handles and widget styling.
 	Dependencies struct {
-		App           *application.App
-		Handles       WindowSet
-		Configuration companionports.WidgetConfiguration
-		Settings      Settings
+		// App owns the native application lifetime.
+		App *application.App
+		// Main is the main library window.
+		Main *application.WebviewWindow
+		// Widget is the floating launcher.
+		Widget *application.WebviewWindow
+		// Review is the floating review window, when present.
+		Review *application.WebviewWindow
+		// Configure applies platform widget styling.
+		Configure func() error
 	}
-
-	// Settings supplies geometry and shared event/log names to window orchestration.
+	// Settings supplies native geometry and event names.
 	Settings struct {
-		LogErrorKey         string
-		OpenFloatingReview  string
+		// LogErrorKey names the structured error attribute.
+		LogErrorKey string
+		// OpenFloatingReview names the review opening event.
+		OpenFloatingReview string
+		// CloseFloatingReview names the review closing event.
 		CloseFloatingReview string
-		Layout              companion.Layout
+		// WidgetSize is the launcher width and height.
+		WidgetSize int
+		// ReviewWidth is the preferred review width.
+		ReviewWidth int
+		// ReviewHeight is the preferred review height.
+		ReviewHeight int
+		// ReviewGap separates the launcher and review.
+		ReviewGap int
 	}
-
-	// Windows owns the Wails windows used by Raven.
-	Windows struct {
-		mainWindow      restorableWindow
-		widget          widgetSurface
-		reviewWindow    reviewSurface
-		reviewPlacement windowFrame
-		configuration   companionports.WidgetConfiguration
-		invoke          func(func())
-		primaryScreen   func() *application.Screen
-		quit            func()
-		logger          *slog.Logger
-		settings        Settings
-	}
-	windowVisibility interface {
-		Show() application.Window
-		Hide() application.Window
-	}
-	windowFocus  interface{ Focus() }
-	windowEvents interface {
-		DispatchWailsEvent(event *application.CustomEvent)
-	}
-	windowPosition interface {
-		Position() (int, int)
-		SetPosition(horizontal, vertical int)
-	}
-	restorableWindow interface {
-		windowVisibility
-		windowFocus
-		Restore()
-	}
-	widgetSurface interface {
-		windowPosition
-		Show() application.Window
-		GetScreen() (*application.Screen, error)
-	}
-	reviewSurface interface {
-		windowVisibility
-		windowFocus
-		windowEvents
-		IsVisible() bool
-	}
-	windowFrame interface {
-		SetSize(width, height int) application.Window
-		SetPosition(horizontal, vertical int)
+	// Windows dispatches the consumer-owned native window operations.
+	Windows     struct{ operations map[string]func() }
+	windowState struct {
+		showMain            func() application.Window
+		hideMain            func() application.Window
+		restoreMain         func()
+		focusMain           func()
+		showWidget          func() application.Window
+		widgetPosition      func() (int, int)
+		setWidgetPosition   func(int, int)
+		getWidgetScreen     func() (*application.Screen, error)
+		showReview          func() application.Window
+		hideReview          func() application.Window
+		focusReview         func()
+		reviewVisible       func() bool
+		dispatchReview      func(*application.CustomEvent)
+		setReviewSize       func(int, int) application.Window
+		setReviewPosition   func(int, int)
+		configure           func() error
+		invoke              func(func())
+		primaryScreen       func() *application.Screen
+		quit                func()
+		logger              *slog.Logger
+		logErrorKey         string
+		openFloatingReview  string
+		closeFloatingReview string
+		widgetSize          int
+		reviewWidth         int
+		reviewHeight        int
+		reviewGap           int
 	}
 	// WindowSet contains the Wails windows controlled by this adapter.
 	WindowSet struct {

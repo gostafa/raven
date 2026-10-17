@@ -6,11 +6,12 @@ import (
 	"testing"
 
 	companion "raven/internal/features/companion/domain"
+	configuration "raven/internal/features/configuration/domain"
 	library "raven/internal/shared/boltstore/domain"
 )
 
 func TestEmbeddedDefaultsPreserveExistingContracts(t *testing.T) {
-	snapshot, err := (Loader{}).Load()
+	snapshot, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,8 +37,9 @@ func TestEmbeddedDefaultsPreserveExistingContracts(t *testing.T) {
 			MIMEJPEG: "image/jpeg", MIMEOggAudio: "audio/ogg", MIMEMP4Video: "video/mp4",
 		},
 	}
-	if !reflect.DeepEqual(snapshot.Settings, &settings{values: want}) {
-		t.Fatalf("defaults changed: %+v", snapshot.Settings)
+	want.Library, want.Layout = encodeContract(want.Library), encodeContract(want.Layout)
+	if !reflect.DeepEqual(snapshot, &Settings{values: want}) {
+		t.Fatalf("defaults changed: %+v", snapshot)
 	}
 }
 
@@ -70,7 +72,7 @@ func TestAlternateSettingsReachTypedValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Layout().ReviewWidth != 300 ||
+	if configuration.Layout(settings).ReviewWidth != 300 ||
 		settings.PreferencesStorageKey() != "custom.preferences" ||
 		settings.ShowReviews() != "custom:reviews" {
 		t.Fatalf("settings not populated: %+v", settings)
@@ -81,22 +83,59 @@ func TestLoadReportsEmbeddedParseFailure(t *testing.T) {
 	previous := appDefaults
 	appDefaults = "layout: ["
 	t.Cleanup(func() { appDefaults = previous })
-	if snapshot, err := (Loader{}).Load(); snapshot.Settings != nil || err == nil {
+	if snapshot, err := Load(); snapshot != nil || err == nil {
 		t.Fatal("embedded parse failure was discarded")
 	}
 }
 
 func TestLoadedSettingsReturnOwnedGeometryAndLibraryValues(t *testing.T) {
-	snapshot, err := (Loader{}).Load()
+	snapshot, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := snapshot.Settings
-	layout, rules := settings.Layout(), settings.Library()
+	settings := snapshot
+	layout, rules := configuration.Layout(settings), configuration.Library(settings)
 	wantLayout, wantRules := layout, rules
 	layout.WidgetSize++
 	rules.TextKind = "changed"
-	if settings.Layout() != wantLayout || settings.Library() != wantRules {
+	if configuration.Layout(settings) != wantLayout ||
+		configuration.Library(settings) != wantRules {
 		t.Fatal("settings exposed mutable configuration")
+	}
+}
+
+func TestNestedContractsRejectUnknownAndInvalidValues(t *testing.T) {
+	for name, shared := range map[string]string{
+		"unknown library field": strings.Replace(sharedDefaults, "  text_kind: text", "  text_kind: text\n  unknown: value", 1),
+		"invalid library type":  strings.Replace(sharedDefaults, "  minimum_rating: 1", "  minimum_rating: []", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if settings, err := read(
+				strings.NewReader(appDefaults),
+				strings.NewReader(shared),
+			); err == nil ||
+				settings != nil {
+				t.Fatal("accepted invalid nested configuration", settings, err)
+			}
+		})
+	}
+}
+
+func TestSerializedContractsAreOwnedAndRejectUnsupportedValues(t *testing.T) {
+	settings, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	library, layout := settings.Library(), settings.Layout()
+	library[0], layout[0] = '[', '['
+	if configuration.Library(settings).TextKind != "text" ||
+		configuration.Layout(settings).WidgetSize != 48 {
+		t.Fatal("serialized values exposed mutable configuration")
+	}
+	if encodeContract(func() {}) != nil {
+		t.Fatal("unsupported configuration produced JSON")
+	}
+	if empty := new(Settings); empty.Library() != nil || empty.Layout() != nil {
+		t.Fatal("uninitialized configuration produced JSON")
 	}
 }

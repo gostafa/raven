@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	_ libraryports.Media       = (*Picker)(nil)
+	_ libraryports.Selection   = (*Picker)(nil)
 	_ libraryports.MediaRoutes = (*Registry)(nil)
 
 	errInvalidMediaType                 = errors.New("invalid media type")

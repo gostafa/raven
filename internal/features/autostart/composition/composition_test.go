@@ -42,9 +42,9 @@ func TestControllerProvider(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	snapshot, err := (configyaml.Loader{}).Load()
+	snapshot, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return snapshot.Settings
+	return snapshot
 }

@@ -310,7 +310,7 @@ func (service *RavenService) GetConfiguration() configurationapi.Settings {
 	return configurationapi.Settings{
 		PreferencesStorageKey: settings.PreferencesStorageKey(),
 		MediaRoutePrefix:      settings.MediaRoutePrefix(),
-		TextKind:              settings.Library().TextKind,
+		TextKind:              configuration.Library(settings).TextKind,
 		SchedulesChanged:      settings.SchedulesChanged(),
 		ShowReviews:           settings.ShowReviews(),
 		OpenFloatingReview:    settings.OpenFloatingReview(),

@@ -4,15 +4,19 @@ import (
 	"testing"
 	"time"
 
+	contentapi "raven/api/content"
+	reviewapi "raven/api/reviews"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
 
 func TestSchedulesAdvanceAndValidateAcrossRoundTrips(t *testing.T) {
-	scheduler := scheduling.New(new(configurationFixture().Library()))
+	scheduler := scheduling.New(new(configuration.Library(configurationFixture())))
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	schedule, initial, err := scheduler.Initialize(now)
+	scheduleValue, initialValue, err := scheduler.Initialize(now)
+	schedule := decodeSchedule(t, scheduleValue)
+	initial := decodeLog(t, initialValue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +27,9 @@ func TestSchedulesAdvanceAndValidateAcrossRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, rating := range []int{1, 2, 3, 4} {
-		updated, log, err := scheduler.Next(&schedule, now.Add(time.Minute), rating)
+		updatedValue, logValue, err := scheduler.Next(&schedule, now.Add(time.Minute), rating)
+		updated := decodeSchedule(t, updatedValue)
+		log := decodeLog(t, logValue)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -53,9 +59,27 @@ func TestSchedulesAdvanceAndValidateAcrossRoundTrips(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
+}
+
+func decodeSchedule(t *testing.T, value any) reviewapi.Schedule {
+	t.Helper()
+	schedule, err := contentapi.Decode[reviewapi.Schedule](value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schedule
+}
+
+func decodeLog(t *testing.T, value any) reviewapi.Log {
+	t.Helper()
+	log, err := contentapi.Decode[reviewapi.Log](value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return log
 }

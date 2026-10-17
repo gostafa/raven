@@ -10,7 +10,7 @@ import (
 )
 
 func TestWindowProvidersRetainConfiguration(t *testing.T) {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestWindowProvidersRetainConfiguration(t *testing.T) {
 			Handles:       handles,
 			Configuration: configuration,
 		},
-		settings.Settings,
+		settings,
 	)
 	if windows == nil {
 		t.Fatal("window provider returned no controller")

@@ -5,68 +5,99 @@
 package wails
 
 import (
+	"context"
 	"io/fs"
 	"log/slog"
+	"net/http"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
-
-	companionwails "raven/internal/features/companion/adapters/wails"
-	companion "raven/internal/features/companion/domain"
-	"raven/internal/features/desktop/ports"
-	reminderwails "raven/internal/features/reminders/adapters/wails"
-	reminderports "raven/internal/features/reminders/ports"
-	mediaports "raven/internal/shared/desktopmedia/ports"
 )
 
 type (
-	// Configuration supplies shared geometry, identity, events, and logging names.
+	// Configuration supplies native geometry and application identity.
 	Configuration struct {
+		// ApplicationID identifies the single native application instance.
 		ApplicationID string
-		LogErrorKey   string
-		ShowReviews   string
-		Layout        companion.Layout
+		// WidgetSize is the floating launcher diameter.
+		WidgetSize int
+		// ReviewWidth is the preferred review width.
+		ReviewWidth int
+		// ReviewHeight is the preferred review height.
+		ReviewHeight int
 	}
-
-	// ApplicationDependencies supplies the shell without depending on native windows.
+	// ApplicationDependencies supplies the shell before native windows exist.
 	ApplicationDependencies struct {
-		Configuration *Configuration
-		Media         mediaports.MediaRoutes
-		Visibility    ports.LaunchVisibility
-		Logger        *slog.Logger
-		Assets        fs.FS
-		Icon          []byte
+		// ApplicationID identifies the single native application instance.
+		ApplicationID string
+		// Middleware serves application-owned media.
+		Middleware func(http.Handler) http.HandlerFunc
+		// SecondInstance handles subsequent launch arguments.
+		SecondInstance func([]string)
+		// Logger receives structured native logs.
+		Logger *slog.Logger
+		// Assets contains the embedded frontend.
+		Assets fs.FS
+		// Icon contains the native application icon.
+		Icon []byte
 	}
-	// Dependencies supplies stable runtime contracts to desktop orchestration.
+	// Dependencies supplies native handles and consumer-owned operation capabilities.
 	Dependencies struct {
-		Configuration *Configuration
-		App           *application.App
-		Handles       companionwails.WindowSet
-		Windows       companion.Windows
-		Visibility    ports.LaunchVisibility
-		Startup       ports.Startup
-		Reminders     reminderports.Control
-		Notifications *reminderwails.Runtime
-		Assets        fs.FS
+		// App owns the native application.
+		App *application.App
+		// Main is the main library window.
+		Main *application.WebviewWindow
+		// Widget is the launcher window.
+		Widget *application.WebviewWindow
+		// Review is the floating review window.
+		Review *application.WebviewWindow
+		// ShowMain reveals the main library.
+		ShowMain func()
+		// HideMain hides the main library.
+		HideMain func()
+		// ConfigureWidget applies native launcher styling.
+		ConfigureWidget func()
+		// ResetWidget restores launcher placement.
+		ResetWidget func()
+		// PositionFloatingReview places the review beside the launcher.
+		PositionFloatingReview func()
+		// RequestFloatingReviewClose asks the frontend to finish and close.
+		RequestFloatingReviewClose func()
+		// Quit terminates the application.
+		Quit func()
+		// ApplicationStarted releases launch visibility after native readiness.
+		ApplicationStarted func()
+		// RequestOpen requests visible launch behavior.
+		RequestOpen func()
+		// InitializeStartup reconciles login registration after readiness.
+		InitializeStartup func() error
+		// RefreshStartup reads the current login registration state.
+		RefreshStartup func() error
+		// ToggleStartup changes login registration.
+		ToggleStartup func() error
+		// SetStartupPublisher observes checkbox state and availability.
+		SetStartupPublisher func(func(bool, bool))
+		// StartReminders releases reminders after native readiness.
+		StartReminders func()
+		// WakeReminders reconciles reminders after wake.
+		WakeReminders func()
+		// OnReview observes successful default notification actions.
+		OnReview func(func())
+		// ShowReviews names the frontend review event.
+		ShowReviews string
+		// LogErrorKey names the structured error attribute.
+		LogErrorKey string
+		// Icon contains the native application icon.
 		Icon          []byte
-	}
-	// Desktop owns native desktop orchestration for the lifetime of Wails.
-	Desktop struct {
 		run           func() error
 		invoke        func(func())
 		showDialog    func(*application.MessageDialog)
-		windows       companion.Windows
-		reminders     reminderports.Control
-		mainWindow    *application.WebviewWindow
-		widget        *application.WebviewWindow
-		reviewWindow  *application.WebviewWindow
-		app           *application.App
-		visibility    ports.LaunchVisibility
-		startup       ports.Startup
-		notifications *reminderwails.Runtime
 		subscriptions []func()
-		icon          []byte
-		configuration Configuration
 	}
+	// Desktop dispatches registered native lifecycle operations.
+	Desktop struct {
+		operations map[string]func(context.Context, *application.Service, <-chan struct{}) desktopResult
+	}
+	desktopResult struct{ failure error }
 	// EventPublisher publishes Wails events through a consumer-owned contract.
 	EventPublisher struct{ app *application.App }
 )

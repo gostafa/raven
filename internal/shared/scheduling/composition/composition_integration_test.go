@@ -14,11 +14,11 @@ import (
 )
 
 func TestModuleProvidesConfiguredScheduler(t *testing.T) {
-	snapshot, err := (configyaml.Loader{}).Load()
+	snapshot, err := configyaml.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := snapshot.Settings
+	settings := snapshot
 	var scheduler ports.Scheduler
 	graph := fxtest.New(
 		t,
@@ -36,7 +36,7 @@ func TestModuleProvidesConfiguredScheduler(t *testing.T) {
 	if err := scheduler.Validate(&schedule); err != nil {
 		t.Fatal(err)
 	}
-	next, _, err := scheduler.Next(&schedule, now, settings.Library().MinimumRating)
+	next, _, err := scheduler.Next(&schedule, now, configuration.Library(settings).MinimumRating)
 	if err != nil {
 		t.Fatal(err)
 	}

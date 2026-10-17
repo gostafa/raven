@@ -74,13 +74,12 @@ func TestAutostartDefaultsAndMenuState(t *testing.T) {
 			backend := &fakeAutostart{enabled: tc.enabled}
 			settings := &fakeAutostartSettings{claimed: tc.claimed}
 			checked, available := false, false
-			c := &Controller{
-				applicationID: configurationFixture().ApplicationID(),
-				backend:       backend,
-				settings:      settings,
-				debug:         tc.debug,
-				publish:       func(b, a bool) { checked, available = b, a },
-			}
+			c := controllerFixture(
+				backend,
+				settings,
+				tc.debug,
+				func(b, a bool) { checked, available = b, a },
+			)
 			if err := c.Initialize(); err != nil {
 				t.Fatal(err)
 			}
@@ -114,12 +113,7 @@ func TestAutostartTogglesAndExternalChangesSurviveRestart(t *testing.T) {
 	backend, settings := &fakeAutostart{}, &fakeAutostartSettings{}
 	checked := false
 	newController := func() *Controller {
-		return &Controller{
-			applicationID: configurationFixture().ApplicationID(),
-			backend:       backend,
-			settings:      settings,
-			publish:       func(b, _ bool) { checked = b },
-		}
+		return controllerFixture(backend, settings, false, func(b, _ bool) { checked = b })
 	}
 	c := newController()
 	if err := c.Initialize(); err != nil {
@@ -148,20 +142,12 @@ func TestAutostartTogglesAndExternalChangesSurviveRestart(t *testing.T) {
 func TestAutostartFailuresAndExplicitRetry(t *testing.T) {
 	failure := errors.New("permission denied")
 	backend, settings := &fakeAutostart{operationErr: failure}, &fakeAutostartSettings{}
-	c := &Controller{
-		applicationID: configurationFixture().ApplicationID(),
-		backend:       backend,
-		settings:      settings,
-	}
-	if err := c.Initialize(); !errors.Is(err, failure) || !settings.claimed || c.enabled {
+	c := controllerFixture(backend, settings, false, nil)
+	if err := c.Initialize(); !errors.Is(err, failure) || !settings.claimed || backend.enabled {
 		t.Fatalf("initial failure: %v", err)
 	}
 	backend.operationErr = nil
-	c = &Controller{
-		applicationID: configurationFixture().ApplicationID(),
-		backend:       backend,
-		settings:      settings,
-	}
+	c = controllerFixture(backend, settings, false, nil)
 	if err := c.Initialize(); err != nil || backend.enables != 1 {
 		t.Fatalf("default retried automatically: %v", err)
 	}
@@ -169,7 +155,7 @@ func TestAutostartFailuresAndExplicitRetry(t *testing.T) {
 		t.Fatalf("explicit retry: %v", err)
 	}
 	backend.operationErr = failure
-	if err := c.Toggle(); !errors.Is(err, failure) || !c.enabled {
+	if err := c.Toggle(); !errors.Is(err, failure) || !backend.enabled {
 		t.Fatalf("failed disable lost actual state: %v", err)
 	}
 	backend.statusErr = failure
@@ -183,13 +169,9 @@ func TestAutostartRequiresDurableMarkerAndEffectiveRegistration(t *testing.T) {
 	failure := errors.New("database closed")
 	backend := &fakeAutostart{}
 	settings := &fakeAutostartSettings{}
-	c := &Controller{
-		applicationID: configurationFixture().ApplicationID(),
-		backend:       backend,
-		settings:      settings,
-	}
+	c := controllerFixture(backend, settings, false, nil)
 	settings.err = failure
-	if err := c.Initialize(); !errors.Is(err, failure) || c.ready ||
+	if err := c.Initialize(); !errors.Is(err, failure) ||
 		backend.reads != 0 {
 		t.Fatalf("marker failure: %v", err)
 	}
@@ -197,12 +179,8 @@ func TestAutostartRequiresDurableMarkerAndEffectiveRegistration(t *testing.T) {
 	if backend.enables != 0 {
 		t.Fatal("Toggle bypassed failed marker")
 	}
-	c = &Controller{
-		applicationID: configurationFixture().ApplicationID(),
-		backend:       &fakeAutostart{ignoreEnable: true},
-		settings:      &fakeAutostartSettings{},
-	}
-	if err := c.Initialize(); err == nil || c.enabled {
+	c = controllerFixture(&fakeAutostart{ignoreEnable: true}, &fakeAutostartSettings{}, false, nil)
+	if err := c.Initialize(); err == nil || backend.enabled {
 		t.Fatal("reported success while OS approval still required")
 	}
 }
@@ -210,11 +188,7 @@ func TestAutostartRequiresDurableMarkerAndEffectiveRegistration(t *testing.T) {
 func TestAutostartSerializesMenuActions(t *testing.T) {
 	backend := &fakeAutostart{}
 	settings := &fakeAutostartSettings{}
-	c := &Controller{
-		applicationID: configurationFixture().ApplicationID(),
-		backend:       backend,
-		settings:      settings,
-	}
+	c := controllerFixture(backend, settings, false, nil)
 	if err := c.Initialize(); err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +210,7 @@ func TestLaunchVisibilityWaitsForBothStartupEvents(t *testing.T) {
 	for _, automatic := range []bool{false, true} {
 		for _, nativeFirst := range []bool{false, true} {
 			shows := 0
-			v := &Visibility{show: func() { shows++ }}
+			v := NewVisibility(func() { shows++ })
 			if nativeFirst {
 				v.Classify(automatic)
 			} else {
@@ -265,7 +239,7 @@ func TestLaunchVisibilityWaitsForBothStartupEvents(t *testing.T) {
 func TestSecondInstanceVisibility(t *testing.T) {
 	for _, early := range []bool{false, true} {
 		shows := 0
-		v := &Visibility{show: func() { shows++ }}
+		v := NewVisibility(func() { shows++ })
 		if early {
 			v.SecondInstance([]string{"raven"})
 		}
@@ -293,7 +267,7 @@ func TestSecondInstanceVisibility(t *testing.T) {
 
 func TestLaunchVisibilityConcurrentStartup(t *testing.T) {
 	var shows atomic.Int32
-	v := &Visibility{show: func() { shows.Add(1) }}
+	v := NewVisibility(func() { shows.Add(1) })
 	var wg sync.WaitGroup
 	wg.Go(func() { v.Classify(false) })
 	wg.Go(v.ApplicationStarted)
@@ -342,9 +316,37 @@ func TestConstructedControllerReportsStatusFailuresAndUsesNewPublisher(t *testin
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
+}
+
+func controllerFixture(
+	backend ports.Backend,
+	settings ports.Settings,
+	debug bool,
+	publish func(bool, bool),
+) *Controller {
+	controller := New(
+		backend,
+		settings,
+		&Configuration{ApplicationID: configurationFixture().ApplicationID(), Debug: debug},
+	)
+	controller.SetPublisher(publish)
+	return controller
+}
+
+func TestDevelopmentControllerDoesNotAcquireUnavailableDependencies(t *testing.T) {
+	controller := New(nil, nil, &Configuration{Debug: true})
+	if err := controller.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Toggle(); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Refresh(); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -15,22 +15,29 @@ func New() *Executor { return &Executor{} }
 
 // Run executes all jobs unless canceled, preserving input-order error precedence.
 func (*Executor) Run(ctx context.Context, jobs []func(context.Context) error) error {
-	if len(jobs) == zero {
+	execute := batchRunner(len(jobs))
+	if execute == nil {
 		return nil
 	}
 
-	run := runBatch
-
-	if len(jobs) == one {
-		run = runSingle
-	}
-
-	err := run(ctx, jobs)
+	err := execute(ctx, jobs)
 	if err != nil {
 		return fmt.Errorf("run media batch: %w", err)
 	}
 
 	return nil
+}
+
+func batchRunner(count int) func(context.Context, []func(context.Context) error) error {
+	if count == zero {
+		return nil
+	}
+
+	if count == one {
+		return runSingle
+	}
+
+	return runBatch
 }
 
 func runSingle(ctx context.Context, jobs []func(context.Context) error) error {

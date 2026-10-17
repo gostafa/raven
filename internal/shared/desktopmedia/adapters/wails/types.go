@@ -5,41 +5,43 @@
 package wails
 
 import (
+	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync"
-
-	"raven/internal/shared/desktopmedia/ports"
 )
 
 type (
-	// Dependencies supplies the media registry's stable runtime dependencies.
-	Dependencies struct {
-		Saved  func() http.Handler
-		Logger *slog.Logger
-		Batch  ports.BatchExecutor
-	}
-
 	// Settings supplies the media endpoints and log field name.
 	Settings struct {
-		MediaRoutePrefix   string
+		// MediaRoutePrefix identifies persisted library media requests.
+		MediaRoutePrefix string
+		// PreviewRoutePrefix identifies temporary selected-file previews.
 		PreviewRoutePrefix string
-		LogErrorKey        string
+		// LogErrorKey names the structured field used for failures.
+		LogErrorKey string
 	}
 
-	// Picker owns file selection and the preview capabilities issued to selected paths.
+	// Picker selects native files and issues preview capabilities after complete validation.
 	Picker struct {
-		*Registry
-
-		choose func(kind, filter string) ([]string, error)
+		choose  func(string, string) ([]string, error)
+		inspect func([]string, string) (json.RawMessage, error)
 	}
 
-	// Registry owns HTTP media routes and preview capabilities without native dependencies.
+	// Registry binds HTTP media routes to a shared preview capability store.
 	Registry struct {
-		batch    ports.BatchExecutor
-		settings Settings
-		saved    func() http.Handler
-		logger   *slog.Logger
-		previews sync.Map
+		middleware func(http.Handler) http.HandlerFunc
+		inspect    func([]string, string) (json.RawMessage, error)
+	}
+
+	mediaState struct {
+		runBatch           func(context.Context, []func(context.Context) error) error
+		saved              func() http.Handler
+		logger             *slog.Logger
+		mediaRoutePrefix   string
+		previewRoutePrefix string
+		logErrorKey        string
+		previews           sync.Map
 	}
 )

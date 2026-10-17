@@ -6,14 +6,17 @@ package application
 import (
 	"fmt"
 
+	"raven/internal/features/configuration/domain"
 	"raven/internal/features/configuration/ports"
 )
 
 // Load obtains the validated application configuration before resources open.
-func Load(loader ports.Loader) (ports.Snapshot, error) {
-	snapshot, err := loader.Load()
+func Load[Value domain.Settings](loader ports.Loader[Value]) (Value, error) {
+	snapshot, err := loader()
 	if err != nil {
-		return ports.Snapshot{}, fmt.Errorf("load configuration: %w", err)
+		var empty Value
+
+		return empty, fmt.Errorf("load configuration: %w", err)
 	}
 
 	return snapshot, nil

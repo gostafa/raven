@@ -28,7 +28,9 @@ func TestFloatingReviewBounds(t *testing.T) {
 		{"widget outside work area", 1800, 1100, primary, image.Rect(1020, 355, 1440, 875)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := new(configurationFixture().Layout()).Bounds(test.x, test.y, &test.area)
+			got := new(
+				configuration.Layout(configurationFixture()),
+			).Bounds(test.x, test.y, &test.area)
 			if got != test.want {
 				t.Fatalf("got %+v, want %+v", got, test.want)
 			}
@@ -40,9 +42,9 @@ func TestFloatingReviewBounds(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
 }

@@ -6,6 +6,7 @@ package wails
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"mime"
@@ -17,40 +18,77 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	contentapi "raven/api/content"
 	mediaapi "raven/api/media"
+	"raven/internal/shared/desktopmedia/ports"
 	localfiles "raven/internal/shared/filesystem"
 )
 
-// NewPicker attaches native selection to an existing HTTP registry.
+// NewPicker attaches native selection to an existing HTTP preview registry.
 func NewPicker(
 	app *application.App,
 	window *application.WebviewWindow,
 	registry *Registry,
 ) *Picker {
 	return &Picker{
-		Registry: registry,
 		choose: nativeChooser(
 			app,
 			window,
 			(*application.OpenFileDialogStruct).PromptForMultipleSelection,
 		),
+		inspect: registry.inspect,
 	}
 }
 
-// NewRegistry creates media routes before native application construction.
-func NewRegistry(dependencies *Dependencies, settings *Settings) *Registry {
-	saved := dependencies.Saved
+// NewRegistry binds media routes, inspection, and preview storage to injected dependencies.
+func NewRegistry(
+	batch ports.BatchExecutor,
+	saved func() http.Handler,
+	logger *slog.Logger,
+	settings *Settings,
+) *Registry {
+	return bindRegistry(newMediaState(batch, saved, logger, settings))
+}
+
+func newMediaState(
+	batch ports.BatchExecutor,
+	saved func() http.Handler,
+	logger *slog.Logger,
+	settings *Settings,
+) *mediaState {
 	if saved == nil {
 		saved = func() http.Handler { return nil }
 	}
-
-	return &Registry{
-		settings: *settings,
-		batch:    dependencies.Batch,
-		saved:    saved,
-		previews: sync.Map{},
-		logger:   dependencies.Logger,
+	return &mediaState{
+		runBatch:           batch.Run,
+		saved:              saved,
+		logger:             logger,
+		mediaRoutePrefix:   settings.MediaRoutePrefix,
+		previewRoutePrefix: settings.PreviewRoutePrefix,
+		logErrorKey:        settings.LogErrorKey,
+		previews:           sync.Map{},
 	}
+}
+
+func bindRegistry(state *mediaState) *Registry {
+	return &Registry{
+		middleware: func(next http.Handler) http.HandlerFunc { return middleware(state, next) },
+		inspect: func(paths []string, filter string) (json.RawMessage, error) {
+			return inspectMedia(state, paths, filter)
+		},
+	}
+}
+
+func inspectMedia(state *mediaState, paths []string, filter string) (json.RawMessage, error) {
+	selected, err := describePaths(state, paths, filter)
+	if err != nil {
+		return nil, fmt.Errorf("inspect media: %w", err)
+	}
+	encoded, err := json.Marshal(selected)
+	if err != nil {
+		return nil, fmt.Errorf("encode media selection: %w", err)
+	}
+	return encoded, nil
 }
 
 func nativeChooser(
@@ -76,24 +114,41 @@ func nativeChooser(
 	}
 }
 
-// Select selects supported media files and issues temporary preview URLs.
+// Select selects supported media and returns its temporary preview capabilities.
 func (picker *Picker) Select(kind string) ([]mediaapi.Selection, error) {
+	return selectMedia(picker.choose, picker.inspect, kind)
+}
+
+func selectMedia(
+	choose func(string, string) ([]string, error),
+	inspect func([]string, string) (json.RawMessage, error),
+	kind string,
+) ([]mediaapi.Selection, error) {
 	filter := selectionFilter(kind)
 	if filter == "" {
 		return nil, errInvalidMediaType
 	}
-
-	paths, err := picker.choose(kind, filter)
+	paths, err := choose(kind, filter)
 	if err != nil {
 		return nil, fmt.Errorf("select media: %w", err)
 	}
+	return inspectedSelection(inspect, paths, filter)
+}
 
-	result, forwardErr := picker.describePaths(paths, filter)
-	if forwardErr != nil {
-		return result, fmt.Errorf("select: %w", forwardErr)
+func inspectedSelection(
+	inspect func([]string, string) (json.RawMessage, error),
+	paths []string,
+	filter string,
+) ([]mediaapi.Selection, error) {
+	encoded, err := inspect(paths, filter)
+	if err != nil {
+		return nil, fmt.Errorf("inspect selection: %w", err)
 	}
-
-	return result, nil
+	selected, err := contentapi.Decode[[]mediaapi.Selection](encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode media selection: %w", err)
+	}
+	return selected, nil
 }
 
 func selectionFilter(kind string) string {
@@ -104,7 +159,7 @@ func selectionFilter(kind string) string {
 	}[kind]
 }
 
-func (picker *Picker) describePaths(
+func describePaths(picker *mediaState,
 	paths []string,
 	filter string,
 ) ([]mediaapi.Selection, error) {
@@ -115,19 +170,19 @@ func (picker *Picker) describePaths(
 		})
 	}
 
-	jobs := picker.inspectionJobs(paths, selected, filter)
+	jobs := inspectionJobs(paths, selected, filter)
 
-	err := picker.batch.Run(context.Background(), jobs)
+	err := picker.runBatch(context.Background(), jobs)
 	if err != nil {
 		return nil, fmt.Errorf("inspect selection: %w", err)
 	}
 
-	picker.registerPreviews(selected)
+	registerPreviews(picker, selected)
 
 	return selected, nil
 }
 
-func (*Picker) inspectionJobs(
+func inspectionJobs(
 	paths []string,
 	selected []mediaapi.Selection,
 	filter string,
@@ -149,12 +204,12 @@ func (*Picker) inspectionJobs(
 	return jobs
 }
 
-func (picker *Picker) registerPreviews(selected []mediaapi.Selection) {
+func registerPreviews(picker *mediaState, selected []mediaapi.Selection) {
 	for index := range selected {
 		key := rand.Text()
 		picker.previews.Store(key, selected[index].SourcePath)
 
-		selected[index].PreviewURL = picker.settings.PreviewRoutePrefix + key
+		selected[index].PreviewURL = picker.previewRoutePrefix + key
 	}
 }
 
@@ -191,20 +246,25 @@ func validateSelection(info os.FileInfo, path, filter string) error {
 }
 
 // Middleware serves selected previews and saved media before delegating other routes.
-func (picker *Registry) Middleware(next http.Handler) http.HandlerFunc {
+// Middleware serves selected previews and saved media before delegating other routes.
+func (registry *Registry) Middleware(next http.Handler) http.HandlerFunc {
+	return registry.middleware(next)
+}
+
+func middleware(picker *mediaState, next http.Handler) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		switch {
-		case strings.HasPrefix(request.URL.Path, picker.settings.PreviewRoutePrefix):
-			picker.servePreview(writer, request)
-		case strings.HasPrefix(request.URL.Path, picker.settings.MediaRoutePrefix):
-			picker.serveSaved(writer, request)
+		case strings.HasPrefix(request.URL.Path, picker.previewRoutePrefix):
+			servePreview(picker, writer, request)
+		case strings.HasPrefix(request.URL.Path, picker.mediaRoutePrefix):
+			serveSaved(picker, writer, request)
 		default:
 			next.ServeHTTP(writer, request)
 		}
 	}
 }
 
-func (picker *Registry) serveSaved(writer http.ResponseWriter, request *http.Request) {
+func serveSaved(picker *mediaState, writer http.ResponseWriter, request *http.Request) {
 	handler := picker.saved()
 	if handler == nil {
 		http.Error(writer, "media storage is unavailable", http.StatusServiceUnavailable)
@@ -215,26 +275,26 @@ func (picker *Registry) serveSaved(writer http.ResponseWriter, request *http.Req
 	handler.ServeHTTP(writer, request)
 }
 
-func (picker *Registry) servePreview(writer http.ResponseWriter, request *http.Request) {
+func servePreview(picker *mediaState, writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 
 		return
 	}
 
-	path, ok := picker.previewPath(request.URL.Path)
+	path, ok := previewPath(picker, request.URL.Path)
 	if !ok {
 		http.NotFound(writer, request)
 
 		return
 	}
 
-	picker.servePreviewPath(writer, request, path)
+	servePreviewPath(picker, writer, request, path)
 }
 
-func (picker *Registry) previewPath(url string) (string, bool) {
+func previewPath(picker *mediaState, url string) (string, bool) {
 	value, exists := picker.previews.Load(
-		strings.TrimPrefix(url, picker.settings.PreviewRoutePrefix),
+		strings.TrimPrefix(url, picker.previewRoutePrefix),
 	)
 	if !exists {
 		return "", false
@@ -245,7 +305,7 @@ func (picker *Registry) previewPath(url string) (string, bool) {
 	return path, valid
 }
 
-func (picker *Registry) servePreviewPath(
+func servePreviewPath(picker *mediaState,
 	writer http.ResponseWriter,
 	request *http.Request,
 	path string,
@@ -256,19 +316,19 @@ func (picker *Registry) servePreviewPath(
 
 		return
 	}
-	defer picker.closePreview(request.Context(), file)
+	defer closePreview(picker, request.Context(), file)
 
 	servePreviewFile(writer, request, file)
 }
 
-func (picker *Registry) closePreview(ctx context.Context, file *os.File) {
+func closePreview(picker *mediaState, ctx context.Context, file *os.File) {
 	err := file.Close()
 	if err != nil {
 		picker.logger.WarnContext(
 			ctx,
 			"could not close media preview",
 			//nolint:sloglint // Log field names come from validated embedded configuration.
-			slog.Any(picker.settings.LogErrorKey, err),
+			slog.Any(picker.logErrorKey, err),
 		)
 	}
 }

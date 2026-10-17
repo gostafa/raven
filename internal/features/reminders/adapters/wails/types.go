@@ -6,8 +6,6 @@ package wails
 
 import (
 	"context"
-	"log/slog"
-	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
@@ -16,7 +14,7 @@ import (
 type (
 	// Notifier translates reminder delivery to native notifications.
 	Notifier struct {
-		native NativeNotifications
+		operations map[string]func(context.Context, int, func()) notificationResult
 	}
 
 	// NativeNotifications supplies the native operations used by the adapter.
@@ -36,11 +34,10 @@ type (
 
 	// Runtime tracks optional native notification availability for managed workers.
 	Runtime struct {
-		Notifier
-
-		native      NativeRuntime
-		logger      *slog.Logger
-		logErrorKey string
-		available   atomic.Bool
+		operations map[string]func(context.Context, int, func()) notificationResult
+	}
+	notificationResult struct {
+		allowed bool
+		failure error
 	}
 )

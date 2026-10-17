@@ -213,7 +213,8 @@ func TestFacadeOwnsErrorContract(t *testing.T) {
 
 func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 123000000, time.UTC)
-	schedule, log, err := scheduling.New(new(configurationFixture().Library())).Initialize(now)
+	schedule, log, err := scheduling.New(new(configuration.Library(configurationFixture()))).
+		Initialize(now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +222,7 @@ func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 		ID:        "card",
 		FolderID:  "folder",
 		CreatedAt: now.UnixMilli(),
-		DueAt:     schedule.Due.UnixMilli(),
+		DueAt:     contentapi.Schedule(schedule).Due.UnixMilli(),
 		Items: []contentapi.Item{
 			{
 				ID:              "item",
@@ -235,7 +236,7 @@ func TestFacadePreservesCompleteJSONContract(t *testing.T) {
 				RelativePath:    "media/item.png",
 				Schedule:        schedule,
 				Reviews:         []contentapi.Review{{Log: log, Automatic: true}},
-				LastNotifiedDue: schedule.Due.UnixMilli(),
+				LastNotifiedDue: contentapi.Schedule(schedule).Due.UnixMilli(),
 			},
 		},
 	}
@@ -276,7 +277,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -310,21 +311,23 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 		&cardapi.ReviewInput{
 			FolderID: folder.ID,
 			CardID:   card.ID,
-			ItemID:   card.Items[0].ID,
+			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   3,
 		},
 	)
-	if err != nil || card.Items[0].Schedule.Reps != 2 || card.DueAt <= card.LastReviewed {
+	if err != nil || contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).Reps != 2 ||
+		card.DueAt <= card.LastReviewed {
 		t.Fatalf("service review: %+v, error=%v", card, err)
 	}
 	due := card.DueAt
 	card, err = service.UpdateCard(
 		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: []contentapi.Draft{
-			{ID: card.Items[0].ID, Kind: "text", Text: "An edited question"},
-			{ID: card.Items[1].ID, Kind: "text", Text: "An edited answer"},
+			{ID: contentapi.Items(card.Items)[0].ID, Kind: "text", Text: "An edited question"},
+			{ID: contentapi.Items(card.Items)[1].ID, Kind: "text", Text: "An edited answer"},
 		}},
 	)
-	if err != nil || card.DueAt != due || card.Items[0].Text != "An edited question" {
+	if err != nil || card.DueAt != due ||
+		contentapi.Items(card.Items)[0].Text != "An edited question" {
 		t.Fatalf("service edit: %+v, error=%v", card, err)
 	}
 	cards, err := service.ListCards()
@@ -341,7 +344,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -372,7 +375,7 @@ func TestMediaMiddlewareAndPickerErrors(t *testing.T) {
 		status int
 	}{{"/", http.StatusAccepted}, {"/media/folder/card/item", http.StatusServiceUnavailable}} {
 		w := httptest.NewRecorder()
-		desktopmedia.NewRegistry(&desktopmedia.Dependencies{Saved: nil, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Batch: cffbatch.New()}, mediaSettingsFixture()).
+		desktopmedia.NewRegistry(cffbatch.New(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)), mediaSettingsFixture()).
 			Middleware(next).
 			ServeHTTP(w, httptest.NewRequest("GET", test.path, nil))
 		if w.Code != test.status {
@@ -415,7 +418,7 @@ func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
 		filepath.Join(t.TempDir(), "raven.db"),
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -445,17 +448,17 @@ func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
 }
 
 func storeSettingsFixture() *boltstore.Settings {
 	settings := configurationFixture()
 	return &boltstore.Settings{
-		Rules:            settings.Library(),
+		Rules:            configuration.Library(settings),
 		MediaRoutePrefix: settings.MediaRoutePrefix(),
 		LogErrorKey:      settings.LogErrorKey(),
 	}
@@ -476,7 +479,7 @@ func TestConfigurationFacadeReturnsOwnedFrontendSnapshot(t *testing.T) {
 	value := service.GetConfiguration()
 	if value.PreferencesStorageKey != settings.PreferencesStorageKey() ||
 		value.MediaRoutePrefix != settings.MediaRoutePrefix() ||
-		value.TextKind != settings.Library().TextKind ||
+		value.TextKind != configuration.Library(settings).TextKind ||
 		value.SchedulesChanged != settings.SchedulesChanged() ||
 		value.ShowReviews != settings.ShowReviews() ||
 		value.OpenFloatingReview != settings.OpenFloatingReview() ||

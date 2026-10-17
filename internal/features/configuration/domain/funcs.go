@@ -4,9 +4,13 @@
 package domain
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
+
+	companion "raven/internal/features/companion/domain"
+	library "raven/internal/shared/boltstore/domain"
 )
 
 // Validate rejects incomplete settings before any native or persistence resources open.
@@ -37,10 +41,10 @@ func requiredStrings(settings Settings) map[string]string {
 		"show_reviews":            settings.ShowReviews(),
 		"open_floating_review":    settings.OpenFloatingReview(),
 		"close_floating_review":   settings.CloseFloatingReview(),
-		"library.text_kind":       settings.Library().TextKind,
-		"library.mime_jpeg":       settings.Library().MIMEJPEG,
-		"library.mime_ogg_audio":  settings.Library().MIMEOggAudio,
-		"library.mime_mp4_video":  settings.Library().MIMEMP4Video,
+		"library.text_kind":       Library(settings).TextKind,
+		"library.mime_jpeg":       Library(settings).MIMEJPEG,
+		"library.mime_ogg_audio":  Library(settings).MIMEOggAudio,
+		"library.mime_mp4_video":  Library(settings).MIMEMP4Video,
 	}
 }
 
@@ -63,10 +67,10 @@ func validateValues(settings Settings) error {
 
 func geometry(settings Settings) map[string]int {
 	return map[string]int{
-		"layout.widget_size":   settings.Layout().WidgetSize,
-		"layout.review_width":  settings.Layout().ReviewWidth,
-		"layout.review_height": settings.Layout().ReviewHeight,
-		"layout.review_gap":    settings.Layout().ReviewGap,
+		"layout.widget_size":   Layout(settings).WidgetSize,
+		"layout.review_width":  Layout(settings).ReviewWidth,
+		"layout.review_height": Layout(settings).ReviewHeight,
+		"layout.review_gap":    Layout(settings).ReviewGap,
 	}
 }
 
@@ -112,8 +116,8 @@ func validateDistinctValues(settings Settings) error {
 
 func validateRatings(settings Settings) error {
 	// FSRS defines four ratings numbered 1 through 4; configuration must preserve that contract.
-	minimumMatches := settings.Library().MinimumRating == fsrsFirstRating
-	maximumMatches := settings.Library().MaximumRating == fsrsLastRating
+	minimumMatches := Library(settings).MinimumRating == fsrsFirstRating
+	maximumMatches := Library(settings).MaximumRating == fsrsLastRating
 
 	if !minimumMatches || !maximumMatches {
 		return errIncompatibleRatings
@@ -154,4 +158,32 @@ func routeShape(route string) bool {
 
 func routesOverlap(first, second string) bool {
 	return strings.HasPrefix(first, second) || strings.HasPrefix(second, first)
+}
+
+// Library projects a validated configuration's independent content rules.
+func Library(settings Settings) library.Rules {
+	var rules library.Rules
+
+	err := json.Unmarshal(settings.Library(), &rules)
+	if err != nil {
+		var empty library.Rules
+
+		return empty
+	}
+
+	return rules
+}
+
+// Layout projects a validated configuration's independent window geometry.
+func Layout(settings Settings) companion.Layout {
+	var layout companion.Layout
+
+	err := json.Unmarshal(settings.Layout(), &layout)
+	if err != nil {
+		var empty companion.Layout
+
+		return empty
+	}
+
+	return layout
 }

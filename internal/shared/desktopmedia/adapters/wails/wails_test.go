@@ -2,6 +2,7 @@ package wails
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	mediaapi "raven/api/media"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
@@ -267,11 +269,11 @@ func TestSelectedSymlinkMayReferToAnotherDirectory(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
 }
 
 func mediaSettingsFixture() *Settings {
@@ -283,30 +285,26 @@ func mediaSettingsFixture() *Settings {
 	}
 }
 
-func testPicker(saved func() http.Handler) *Picker {
-	return NewPicker(
-		nil,
-		nil,
-		NewRegistry(
-			&Dependencies{
-				Saved:  saved,
-				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-				Batch:  cffbatch.New(),
-			},
-			mediaSettingsFixture(),
-		),
+func testPicker(saved func() http.Handler) *testMedia {
+	state := newMediaState(
+		cffbatch.New(),
+		saved,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		mediaSettingsFixture(),
 	)
+	registry := bindRegistry(state)
+	return &testMedia{Picker: NewPicker(nil, nil, registry), Registry: registry, mediaState: state}
 }
 
 func TestConfiguredMediaRoutesReachPickerAndMiddleware(t *testing.T) {
 	settings := mediaSettingsFixture()
 	settings.MediaRoutePrefix = "/saved/"
 	settings.PreviewRoutePrefix = "/preview/"
-	registry := NewRegistry(&Dependencies{Saved: func() http.Handler {
+	registry := NewRegistry(cffbatch.New(), func() http.Handler {
 		return http.HandlerFunc(
 			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) },
 		)
-	}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Batch: cffbatch.New()}, settings)
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)), settings)
 	picker := NewPicker(nil, nil, registry)
 	path := filepath.Join(t.TempDir(), "selected.png")
 	if err := os.WriteFile(path, []byte("selected image"), 0o600); err != nil {
@@ -336,4 +334,23 @@ func TestConfiguredMediaRoutesReachPickerAndMiddleware(t *testing.T) {
 			t.Fatalf("%s: got %d, want %d", route, response.Code, status)
 		}
 	}
+}
+
+// testMedia exposes implementation seams only to implementation tests.
+type testMedia struct {
+	*Picker
+	*Registry
+	*mediaState
+}
+
+func (media *testMedia) describePaths(paths []string, filter string) ([]mediaapi.Selection, error) {
+	return describePaths(media.mediaState, paths, filter)
+}
+
+func (media *testMedia) previewPath(path string) (string, bool) {
+	return previewPath(media.mediaState, path)
+}
+
+func (media *testMedia) closePreview(ctx context.Context, file *os.File) {
+	closePreview(media.mediaState, ctx, file)
 }

@@ -72,7 +72,7 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -89,7 +89,7 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := card.Items[0].Schedule.Due.Add(time.Second)
+	now := contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).Due.Add(time.Second)
 	cards, _ := store.ListCards()
 	pending, _ := reminders.Snapshot(cards, now)
 	notifier := &fakeReminderNotifier{}
@@ -123,7 +123,7 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -141,15 +141,18 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 		&cardapi.ReviewInput{
 			FolderID: folder.ID,
 			CardID:   card.ID,
-			ItemID:   card.Items[0].ID,
+			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   4,
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending, _ = reminders.Snapshot([]cardapi.Card{updated}, updated.Items[0].Schedule.Due)
-	if len(pending) != 1 || pending[0].ItemID != card.Items[0].ID {
+	pending, _ = reminders.Snapshot(
+		[]cardapi.Card{updated},
+		contentapi.Schedule(contentapi.Items(updated.Items)[0].Schedule).Due,
+	)
+	if len(pending) != 1 || pending[0].ItemID != contentapi.Items(card.Items)[0].ID {
 		t.Fatal("new due occurrence suppressed")
 	}
 }
@@ -158,9 +161,9 @@ func (n *fakeReminderNotifier) RequestAuthorization() (bool, error) { return n.a
 
 type reminderSource struct{}
 
-func (reminderSource) ListCards() ([]cardapi.Card, error)           { return nil, nil }
-func (reminderSource) ClaimNotificationPrompt() (bool, error)       { return true, nil }
-func (reminderSource) MarkNotified([]reviewapi.DueOccurrence) error { return nil }
+func (reminderSource) ListCards() (string, error)             { return "[]", nil }
+func (reminderSource) ClaimNotificationPrompt() (bool, error) { return true, nil }
+func (reminderSource) MarkNotified(string) error              { return nil }
 
 type blockingNotifier struct {
 	fakeReminderNotifier
@@ -199,17 +202,17 @@ func TestCoordinatorShutdownDoesNotWaitForAuthorization(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
 }
 
 func storeSettingsFixture() *boltstore.Settings {
 	settings := configurationFixture()
 	return &boltstore.Settings{
-		Rules:            settings.Library(),
+		Rules:            configuration.Library(settings),
 		MediaRoutePrefix: settings.MediaRoutePrefix(),
 		LogErrorKey:      settings.LogErrorKey(),
 	}

@@ -38,13 +38,13 @@ func persistenceFixture(tb testing.TB, count int) (*Store, []cardapi.Card) {
 		tb.Fatal(err)
 	}
 	tb.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := storeClose(store); err != nil {
 			tb.Error(err)
 		}
 	})
 	cards := make([]cardapi.Card, 4)
 	for index := range cards {
-		folder, err := store.CreateFolder(
+		folder, err := storeCreateFolder(store,
 			&folderapi.CreateInput{Title: fmt.Sprintf("Folder %d", index)},
 		)
 		if err != nil {
@@ -57,7 +57,7 @@ func persistenceFixture(tb testing.TB, count int) (*Store, []cardapi.Card) {
 				Text: fmt.Sprintf("Item %d", position),
 			}
 		}
-		cards[index], err = store.CreateCard(
+		cards[index], err = storeCreateCard(store,
 			&cardapi.CreateInput{FolderID: folder.ID, Items: drafts},
 		)
 		if err != nil {
@@ -72,12 +72,12 @@ func benchmarkPersistence(b *testing.B, operation string, count int) {
 	store, cards := persistenceFixture(b, count)
 	occurrences := make([]reviewapi.DueOccurrence, 0, len(cards)*count)
 	for _, card := range cards {
-		for _, item := range card.Items {
+		for _, item := range contentapi.Items(card.Items) {
 			occurrences = append(occurrences, reviewapi.DueOccurrence{
 				FolderID: card.FolderID,
 				CardID:   card.ID,
 				ItemID:   item.ID,
-				Due:      item.Schedule.Due.UnixMilli(),
+				Due:      contentapi.Schedule(item.Schedule).Due.UnixMilli(),
 			})
 		}
 	}
@@ -88,22 +88,25 @@ func benchmarkPersistence(b *testing.B, operation string, count int) {
 		before := store.db.Stats()
 		switch operation {
 		case "list":
-			if _, err := store.ListCards(); err != nil {
+			if _, err := storeListCards(store); err != nil {
 				b.Fatal(err)
 			}
 		case "review":
 			card := &cards[0]
 			input := &cardapi.ReviewInput{
-				FolderID: card.FolderID, CardID: card.ID, ItemID: card.Items[0].ID, Rating: 3,
+				FolderID: card.FolderID,
+				CardID:   card.ID,
+				ItemID:   contentapi.Items(card.Items)[0].ID,
+				Rating:   3,
 			}
-			if _, err := store.reviewItemAt(
+			if _, err := storeReviewItemAt(store,
 				input,
-				card.Items[0].Schedule.Due.Add(time.Second),
+				contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).Due.Add(time.Second),
 			); err != nil {
 				b.Fatal(err)
 			}
 		case "acknowledge":
-			if err := store.MarkNotified(occurrences); err != nil {
+			if err := storeMarkNotified(store, occurrences); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -129,8 +132,11 @@ func resetPersistenceBenchmark(b *testing.B, store *Store, cards []cardapi.Card)
 			card := &cards[index]
 			bucket := tx.Bucket([]byte(foldersBucket)).Bucket([]byte(card.FolderID)).
 				Bucket([]byte(itemsBucket)).Bucket([]byte(card.ID))
-			for itemIndex := range card.Items {
-				if err := writeContentItem(bucket, &card.Items[itemIndex]); err != nil {
+			for itemIndex := range contentapi.Items(card.Items) {
+				if err := writeContentItem(
+					bucket,
+					&contentapi.Items(card.Items)[itemIndex],
+				); err != nil {
 					return err
 				}
 			}
@@ -174,7 +180,7 @@ func benchmarkImports(b *testing.B, size, count int, parallel bool) {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := storeClose(store); err != nil {
 			b.Error(err)
 		}
 	})
@@ -183,7 +189,7 @@ func benchmarkImports(b *testing.B, size, count int, parallel bool) {
 		batch = cffbatch.New()
 	}
 	store.batch = batch
-	folder, err := store.CreateFolder(&folderapi.CreateInput{Title: "Benchmark"})
+	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Benchmark"})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -201,12 +207,12 @@ func benchmarkImports(b *testing.B, size, count int, parallel bool) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		card, err := store.CreateCard(&cardapi.CreateInput{FolderID: folder.ID, Items: drafts})
+		card, err := storeCreateCard(store, &cardapi.CreateInput{FolderID: folder.ID, Items: drafts})
 		if err != nil {
 			b.Fatal(err)
 		}
 		b.StopTimer()
-		if err := store.DeleteCard(folder.ID, card.ID); err != nil {
+		if err := storeDeleteCard(store, folder.ID, card.ID); err != nil {
 			b.Fatal(err)
 		}
 		b.StartTimer()

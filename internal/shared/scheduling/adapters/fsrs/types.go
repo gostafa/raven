@@ -5,18 +5,23 @@
 package fsrs
 
 import (
+	"encoding/json"
 	"time"
 
 	fsrs "github.com/open-spaced-repetition/go-fsrs/v4"
-
-	library "raven/internal/shared/boltstore/domain"
 )
 
 type (
-	// Scheduler translates between FSRS state and library schedules.
+	// Scheduler translates JSON-valued schedules through the consumer-owned scheduling port.
 	Scheduler struct {
-		engine schedulingEngine
-		rules  *library.Rules
+		execute func(string, any, time.Time, int) (json.RawMessage, json.RawMessage, error)
+	}
+
+	schedulerRuntime struct {
+		next          func(fsrs.Card, time.Time, fsrs.Rating) (fsrs.SchedulingInfo, error)
+		repeat        func(fsrs.Card, time.Time) (fsrs.RecordLog, error)
+		minimumRating int
+		maximumRating int
 	}
 
 	schedulingEngine interface {

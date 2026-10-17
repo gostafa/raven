@@ -4,21 +4,17 @@
 // Package content defines Raven public content data contracts.
 package content
 
-import (
-	reviewapi "raven/api/reviews"
-)
-
 type (
 	// Item contains one text or media item and its review history.
 	Item struct {
-		// Text contains plain text for a text item.
-		Text string `json:"text,omitempty"`
-		// OriginalName is the original media filename.
-		OriginalName string `json:"original_name,omitempty"`
-		// ID identifies this record.
-		ID string `json:"id"`
+		// Reviews contains runtime-validated scheduling history.
+		Reviews any `json:"reviews"`
+		// Schedule contains runtime-validated scheduling state.
+		Schedule any `json:"schedule"`
 		// FolderID identifies the owning folder.
 		FolderID string `json:"folder_id"`
+		// Text contains plain text for a text item.
+		Text string `json:"text,omitempty"`
 		// CardID identifies the owning card.
 		CardID string `json:"card_id"`
 		// Kind identifies text, image, audio, or video content.
@@ -27,10 +23,10 @@ type (
 		MIMEType string `json:"mime_type,omitempty"`
 		// RelativePath is the media path relative to Raven storage.
 		RelativePath string `json:"relative_path,omitempty"`
-		// Reviews contains the item scheduling history.
-		Reviews []Review `json:"reviews"`
-		// Schedule contains the current item scheduling state.
-		Schedule reviewapi.Schedule `json:"schedule"`
+		// ID identifies this content item.
+		ID string `json:"id"`
+		// OriginalName is the original media filename.
+		OriginalName string `json:"original_name,omitempty"`
 		// LastNotifiedDue is the last acknowledged due time in Unix milliseconds.
 		LastNotifiedDue int64 `json:"last_notified_due"`
 		// Position is the zero-based position within the card.
@@ -42,7 +38,7 @@ type (
 	// Review records a scheduling decision and whether it was automatic.
 	Review struct {
 		// Log contains the scheduling result for this review.
-		Log reviewapi.Log `json:"log"`
+		Log any `json:"log"`
 		// Automatic marks initialization rather than a user rating.
 		Automatic bool `json:"automatic"`
 	}

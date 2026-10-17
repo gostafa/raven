@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -71,20 +72,33 @@ type testSettings struct {
 
 func newSettings(t *testing.T) *testSettings {
 	t.Helper()
-	snapshot, err := (yaml.Loader{}).Load()
+	snapshot, err := yaml.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &testSettings{
-		Settings: snapshot.Settings,
+		Settings: snapshot,
 		strings:  make(map[string]string),
-		rules:    snapshot.Settings.Library(),
-		layout:   snapshot.Settings.Layout(),
+		rules:    domain.Library(snapshot),
+		layout:   domain.Layout(snapshot),
 	}
 }
 
-func (settings *testSettings) Library() library.Rules   { return settings.rules }
-func (settings *testSettings) Layout() companion.Layout { return settings.layout }
+func (settings *testSettings) Library() json.RawMessage {
+	value, err := json.Marshal(settings.rules)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+func (settings *testSettings) Layout() json.RawMessage {
+	value, err := json.Marshal(settings.layout)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
 
 func (settings *testSettings) ApplicationID() string {
 	if value, ok := settings.strings["ApplicationID"]; ok {
@@ -154,4 +168,15 @@ func (settings *testSettings) PreviewRoutePrefix() string {
 		return value
 	}
 	return settings.Settings.PreviewRoutePrefix()
+}
+
+func TestUninitializedSettingsCannotProduceValidatedContracts(t *testing.T) {
+	settings := &yaml.Settings{}
+	if domain.Library(settings) != (library.Rules{}) ||
+		domain.Layout(settings) != (companion.Layout{}) {
+		t.Fatal("uninitialized configuration produced typed contracts")
+	}
+	if err := domain.Validate(settings); err == nil {
+		t.Fatal("accepted uninitialized configuration")
+	}
 }

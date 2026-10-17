@@ -19,6 +19,7 @@ import (
 	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
+	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
 	mediawails "raven/internal/shared/desktopmedia/adapters/wails"
 	"raven/internal/shared/lifetime"
 )
@@ -30,7 +31,7 @@ func TestNativeDesktopProvidersAndLifecycle(t *testing.T) {
 	runtime := lifetime.New()
 	t.Cleanup(runtime.Cancel)
 	app := newApplication(appParams{
-		Media:      mediawails.NewRegistry(&mediawails.Dependencies{}, &mediawails.Settings{}),
+		Media:      mediawails.NewRegistry(cffbatch.New(), nil, logger, &mediawails.Settings{}),
 		Visibility: requests.Visibility(),
 		Logger:     logger,
 		Assets: Assets{
@@ -169,7 +170,7 @@ func TestDesktopStopHonorsDeadline(t *testing.T) {
 func TestDesktopRequestWorkerUsesIndependentLifetime(t *testing.T) {
 	runtime := lifetime.New()
 	desktop := desktopwails.New(
-		&desktopwails.Dependencies{Configuration: desktopConfiguration(configurationFixture())},
+		&desktopwails.Dependencies{},
 	)
 	graph := fxtest.New(t, fx.Invoke(func(lc fx.Lifecycle) {
 		lc.Append(desktopLifecycle(desktop, runtime, autostart.NewRequests()))
@@ -185,9 +186,9 @@ func TestDesktopRequestWorkerUsesIndependentLifetime(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
 }

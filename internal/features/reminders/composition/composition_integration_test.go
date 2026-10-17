@@ -151,7 +151,7 @@ func TestLifecycleOrderingReadinessAndLockRelease(t *testing.T) {
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -214,7 +214,7 @@ func TestPartialStartupRollsBackEveryStartedResource(t *testing.T) {
 		path,
 		&boltstore.Dependencies{
 			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configurationFixture().Library())),
+			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
 			Logger:    nil,
 			Settings:  *storeSettingsFixture(),
 		},
@@ -241,17 +241,17 @@ func TestDatabaseFailurePreventsNativeStartup(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
 }
 
 func storeSettingsFixture() *boltstore.Settings {
 	settings := configurationFixture()
 	return &boltstore.Settings{
-		Rules:            settings.Library(),
+		Rules:            configuration.Library(settings),
 		MediaRoutePrefix: settings.MediaRoutePrefix(),
 		LogErrorKey:      settings.LogErrorKey(),
 	}

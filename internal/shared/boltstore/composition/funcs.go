@@ -45,7 +45,7 @@ func storeDependencies(
 	return &boltstore.Dependencies{
 		Batch: params.Batch, Scheduler: params.Scheduler, Logger: params.Logger,
 		Settings: boltstore.Settings{
-			Rules:            settings.Library(),
+			Rules:            configuration.Library(settings),
 			MediaRoutePrefix: settings.MediaRoutePrefix(),
 			LogErrorKey:      settings.LogErrorKey(),
 		},

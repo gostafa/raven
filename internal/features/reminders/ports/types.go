@@ -4,10 +4,6 @@
 // Package ports defines ports contracts for reminders.
 package ports
 
-import (
-	reviewapi "raven/api/reviews"
-)
-
 type (
 	// Control starts reconciliation on desktop readiness and wakes or stops its worker.
 	Control interface {
@@ -17,7 +13,7 @@ type (
 	}
 	// Store acknowledges notification delivery for unchanged item schedules.
 	Store interface {
-		MarkNotified(occurrences []reviewapi.DueOccurrence) error
+		MarkNotified(occurrences string) error
 	}
 	// Notifier provides notification authorization and reminder delivery.
 	Notifier interface {

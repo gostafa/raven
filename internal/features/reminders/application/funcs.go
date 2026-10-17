@@ -4,8 +4,8 @@
 package application
 
 import (
+	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	cardapi "raven/api/cards"
@@ -16,40 +16,64 @@ import (
 
 // Snapshot returns unacknowledged due items and the next reminder delay.
 func Snapshot(cards []cardapi.Card, now time.Time) ([]reviewapi.DueOccurrence, time.Duration) {
-	snapshot := reminderSnapshot{
-		pending: []reviewapi.DueOccurrence{},
-		delay:   pollInterval,
-		now:     now,
+	pending := []reviewapi.DueOccurrence{}
+	delay := pollInterval
+	for index := range cards {
+		occurrences, next := cardSnapshot(&cards[index], now)
+		pending = append(pending, occurrences...)
+		delay = min(delay, next)
 	}
-
-	for cardIndex := range cards {
-		card := &cards[cardIndex]
-		for itemIndex := range card.Items {
-			snapshot.add(card, &card.Items[itemIndex])
-		}
-	}
-
-	return snapshot.pending, snapshot.delay
+	return pending, delay
 }
 
-func (snapshot *reminderSnapshot) add(card *cardapi.Card, item *contentapi.Item) {
-	due := item.Schedule.Due
-	if due.After(snapshot.now) {
-		snapshot.delay = min(snapshot.delay, due.Sub(snapshot.now))
-
-		return
+func cardSnapshot(card *cardapi.Card, now time.Time) ([]reviewapi.DueOccurrence, time.Duration) {
+	pending := []reviewapi.DueOccurrence{}
+	delay := pollInterval
+	for _, item := range contentapi.Items(card.Items) {
+		occurrence, next := itemSnapshot(card, &item, now)
+		delay = min(delay, next)
+		if occurrence != nil {
+			pending = append(pending, *occurrence)
+		}
 	}
+	return pending, delay
+}
 
+func itemSnapshot(
+	card *cardapi.Card,
+	item *contentapi.Item,
+	now time.Time,
+) (*reviewapi.DueOccurrence, time.Duration) {
+	due := contentapi.Schedule(item.Schedule).Due
+	if due.After(now) {
+		return nil, due.Sub(now)
+	}
 	dueMillis := due.UnixMilli()
 	if item.LastNotifiedDue == dueMillis {
-		return
+		return nil, pollInterval
 	}
+	return &reviewapi.DueOccurrence{
+		FolderID: card.FolderID,
+		CardID:   card.ID,
+		ItemID:   item.ID,
+		Due:      dueMillis,
+	}, pollInterval
+}
 
-	occurrence := reviewapi.DueOccurrence{
-		FolderID: card.FolderID, CardID: card.ID, ItemID: item.ID, Due: dueMillis,
+// DecodeCards validates serialized persisted cards before schedule reconciliation.
+func DecodeCards(data string) ([]cardapi.Card, error) {
+	var cards []cardapi.Card
+	err := json.Unmarshal([]byte(data), &cards)
+	if err != nil {
+		return nil, fmt.Errorf("decode reminder cards: %w", err)
 	}
-
-	snapshot.pending = append(snapshot.pending, occurrence)
+	for index := range cards {
+		err = cardapi.Normalize(&cards[index])
+		if err != nil {
+			return nil, fmt.Errorf("validate reminder card: %w", err)
+		}
+	}
+	return cards, nil
 }
 
 // Deliver sends an authorized reminder before acknowledging unchanged schedules.
@@ -81,7 +105,7 @@ func deliverAuthorized(
 		return fmt.Errorf("send review reminder: %w", err)
 	}
 
-	err = store.MarkNotified(pending)
+	err = acknowledgeDelivery(store, pending)
 	if err != nil {
 		return fmt.Errorf("acknowledge review reminder: %w", err)
 	}
@@ -90,176 +114,235 @@ func deliverAuthorized(
 }
 
 // Wake requests an immediate reminder reconciliation.
-func (coordinator *Coordinator) Wake() {
+func (coordinator *Coordinator) Wake() { coordinator.wake() }
+
+// Stop cancels reconciliation and waits for its current iteration to finish.
+func (coordinator *Coordinator) Stop() { coordinator.stop() }
+
+// Start begins reconciliation with injected persistence and notification effects.
+func Start(source Source, notifier ports.Notifier, callbacks Callbacks) *Coordinator {
+	signals := &coordinatorSignals{
+		stopping: make(chan struct{}),
+		changed:  make(chan struct{}, wakeBuffer),
+		done:     make(chan struct{}),
+	}
+	runtime := newReconciliation(source, notifier, callbacks, signals)
+	go runReconciliation(runtime)
+	return &Coordinator{wake: runtime.wake, stop: func() { stopCoordinator(signals) }}
+}
+
+func newReconciliation(
+	source Source,
+	notifier ports.Notifier,
+	callbacks Callbacks,
+	signals *coordinatorSignals,
+) *reconciliation {
+	runtime := &reconciliation{
+		list: source.ListCards, claim: source.ClaimNotificationPrompt,
+		publish: callbacks.Publish, warn: callbacks.Warn,
+		wake:   func() { wakeCoordinator(signals.changed) },
+		wait:   func(delay time.Duration) bool { return waitCoordinator(signals, delay) },
+		finish: func() { close(signals.done) },
+	}
+	bindNotifications(runtime, source, notifier)
+	return runtime
+}
+
+func bindNotifications(runtime *reconciliation, source Source, notifier ports.Notifier) {
+	if notifier == nil {
+		return
+	}
+	runtime.authorize = notifier.RequestAuthorization
+	runtime.deliver = func(encoded []byte) error {
+		return deliverEncoded(source, notifier, encoded)
+	}
+}
+
+func deliverEncoded(source ports.Store, notifier ports.Notifier, encoded []byte) error {
+	var pending []reviewapi.DueOccurrence
+	err := json.Unmarshal(encoded, &pending)
+	if err != nil {
+		return fmt.Errorf("decode due occurrences: %w", err)
+	}
+	return Deliver(source, notifier, pending)
+}
+
+func wakeCoordinator(changed chan struct{}) {
 	select {
-	case coordinator.changed <- struct{}{}:
+	case changed <- struct{}{}:
 	default:
 	}
 }
 
-// Stop cancels reminder reconciliation and waits for it to finish.
-func (coordinator *Coordinator) Stop() {
-	coordinator.stopOnce.Do(func() { close(coordinator.stopping) })
-	<-coordinator.done
+func stopCoordinator(signals *coordinatorSignals) {
+	signals.stopOnce.Do(func() { close(signals.stopping) })
+	<-signals.done
 }
 
-// Start begins reminder reconciliation with the supplied effects.
-func Start(store Source, notifier ports.Notifier, callbacks Callbacks) *Coordinator {
-	stopping := make(chan struct{})
-	coordinator := &Coordinator{
-		source:    store,
-		notifier:  notifier,
-		callbacks: callbacks,
-		stopping:  stopping,
-		changed:   make(chan struct{}, wakeBuffer),
-		done:      make(chan struct{}),
-		stopOnce:  sync.Once{},
-	}
-
-	go coordinator.run()
-
-	return coordinator
-}
-
-func (coordinator *Coordinator) run() {
-	defer close(coordinator.done)
-
-	coordinator.requestAuthorization()
-
+func runReconciliation(runtime *reconciliation) {
+	defer runtime.finish()
+	requestAuthorization(runtime)
 	for {
-		delay := coordinator.reconcile()
-		if !coordinator.wait(delay) {
+		delay := reconcile(runtime)
+		if !runtime.wait(delay) {
 			return
 		}
 	}
 }
 
-func (coordinator *Coordinator) requestAuthorization() {
-	if coordinator.notifier == nil {
+func requestAuthorization(runtime *reconciliation) {
+	if runtime.authorize == nil {
 		return
 	}
-
-	prompt, err := coordinator.source.ClaimNotificationPrompt()
+	prompt, err := runtime.claim()
 	if err != nil || !prompt {
 		return
 	}
-
-	go coordinator.authorize()
+	go authorize(runtime)
 }
 
-func (coordinator *Coordinator) authorize() {
-	allowed, err := coordinator.notifier.RequestAuthorization()
+func authorize(runtime *reconciliation) {
+	allowed, err := runtime.authorize()
 	if err != nil {
-		coordinator.callbacks.Warn("Notification authorization unavailable", err)
+		runtime.warn("Notification authorization unavailable", err)
 	}
-
 	if allowed || err != nil {
-		coordinator.Wake()
+		runtime.wake()
 	}
 }
 
-func (coordinator *Coordinator) reconcile() time.Duration {
-	cards, err := coordinator.source.ListCards()
+func reconcile(runtime *reconciliation) time.Duration {
+	cards, err := reconciliationCards(runtime.list)
 	if err != nil {
-		coordinator.callbacks.Warn("Could not read review schedules", err)
-
+		runtime.warn("Could not read review schedules", err)
 		return pollInterval
 	}
-
 	pending, delay := Snapshot(cards, time.Now())
-
-	coordinator.callbacks.Publish()
-	coordinator.deliver(pending)
-
+	runtime.publish()
+	deliverPending(runtime, pending)
 	return delay
 }
 
-func (coordinator *Coordinator) deliver(pending []reviewapi.DueOccurrence) {
-	if len(pending) == zero || coordinator.notifier == nil {
+func reconciliationCards(list func() (string, error)) ([]cardapi.Card, error) {
+	encoded, err := list()
+	if err != nil {
+		return nil, fmt.Errorf("read reminder cards: %w", err)
+	}
+	return DecodeCards(encoded)
+}
+
+func deliverPending(runtime *reconciliation, pending []reviewapi.DueOccurrence) {
+	if len(pending) == zero || runtime.deliver == nil {
 		return
 	}
-
-	err := Deliver(coordinator.source, coordinator.notifier, pending)
+	err := encodeDelivery(runtime.deliver, pending)
 	if err != nil {
-		coordinator.callbacks.Warn("Could not deliver review reminder", err)
+		runtime.warn("Could not deliver review reminder", err)
 	}
 }
 
-func (coordinator *Coordinator) wait(delay time.Duration) bool {
+func encodeDelivery(deliver func([]byte) error, pending []reviewapi.DueOccurrence) error {
+	encoded, err := json.Marshal(pending)
+	if err != nil {
+		return fmt.Errorf("encode due occurrences: %w", err)
+	}
+	return deliver(encoded)
+}
+
+func waitCoordinator(signals *coordinatorSignals, delay time.Duration) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
-
 	select {
-	case <-coordinator.stopping:
+	case <-signals.stopping:
 		return false
-	case <-coordinator.changed:
+	case <-signals.changed:
 		return true
 	case <-timer.C:
 		return true
 	}
 }
 
-// NewWorker constructs reconciliation without starting background work.
-func NewWorker(
-	source Source,
-	notifications Notifications,
-	callbacks Callbacks,
-) *Worker {
-	var worker Worker
-
-	worker.source = source
-	worker.notifications = notifications
-	worker.callbacks = callbacks
-
-	return &worker
+// NewWorker constructs the readiness gate without starting background work.
+func NewWorker(source Source, notifications Notifications, callbacks Callbacks) *Worker {
+	state := &workerState{start: func() (func(), func()) {
+		coordinator := startAvailable(source, notifications, callbacks)
+		return coordinator.Wake, coordinator.Stop
+	}}
+	return &Worker{execute: func(operation string) { executeWorker(state, operation) }}
 }
 
-// Enable permits the readiness event to start reconciliation.
-func (worker *Worker) Enable() {
-	worker.mu.Lock()
-	defer worker.mu.Unlock()
-
-	worker.enabled = true
+func startAvailable(source Source, notifications Notifications, callbacks Callbacks) *Coordinator {
+	var notifier ports.Notifier
+	if notifications.Available() {
+		notifier = notifications
+	}
+	return Start(source, notifier, callbacks)
 }
 
-// Start begins exactly one coordinator when the native application is ready.
-func (worker *Worker) Start() {
-	worker.mu.Lock()
-	defer worker.mu.Unlock()
+// Enable permits readiness events to start reconciliation.
+func (worker *Worker) Enable() { worker.execute("enable") }
 
-	if !worker.enabled || worker.stopped || worker.coordinator != nil {
+// Start starts reconciliation once after lifecycle enablement.
+func (worker *Worker) Start() { worker.execute("start") }
+
+// Wake requests reconciliation when an active worker exists.
+func (worker *Worker) Wake() { worker.execute("wake") }
+
+// Stop prevents late readiness and waits for reconciliation to finish.
+func (worker *Worker) Stop() { worker.execute("stop") }
+
+func executeWorker(state *workerState, operation string) {
+	if operation == "stop" {
+		stopWorker(state)
 		return
 	}
-
-	var notifier ports.Notifier
-
-	if worker.notifications.Available() {
-		notifier = worker.notifications
-	}
-
-	worker.coordinator = Start(worker.source, notifier, worker.callbacks)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	updateWorker(state, operation)
 }
 
-// Wake coalesces reconciliation requests before and after readiness.
-func (worker *Worker) Wake() {
-	worker.mu.Lock()
-	defer worker.mu.Unlock()
-
-	if worker.coordinator != nil && !worker.stopped {
-		worker.coordinator.Wake()
+func updateWorker(state *workerState, operation string) {
+	switch operation {
+	case "enable":
+		state.enabled = true
+	case "start":
+		startWorker(state)
+	case "wake":
+		wakeWorker(state)
 	}
 }
 
-// Stop prevents late readiness events and waits for active reconciliation.
-func (worker *Worker) Stop() {
-	worker.mu.Lock()
-
-	worker.stopped = true
-
-	coordinator := worker.coordinator
-	worker.mu.Unlock()
-
-	if coordinator != nil {
-		coordinator.Stop()
+func startWorker(state *workerState) {
+	if !state.enabled || state.stopped || state.stop != nil {
+		return
 	}
+	state.wake, state.stop = state.start()
+}
+
+func wakeWorker(state *workerState) {
+	if state.wake != nil && !state.stopped {
+		state.wake()
+	}
+}
+
+func stopWorker(state *workerState) {
+	state.mu.Lock()
+	state.stopped = true
+	stop := state.stop
+	state.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
+func acknowledgeDelivery(store ports.Store, pending []reviewapi.DueOccurrence) error {
+	encoded, err := json.Marshal(pending)
+	if err != nil {
+		return fmt.Errorf("encode acknowledged occurrences: %w", err)
+	}
+	err = store.MarkNotified(string(encoded))
+	if err != nil {
+		return fmt.Errorf("acknowledge occurrences: %w", err)
+	}
+	return nil
 }

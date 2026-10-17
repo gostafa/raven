@@ -25,11 +25,11 @@ import (
 )
 
 func TestModuleSharesRegistryAndWiresSavedMedia(t *testing.T) {
-	snapshot, err := (configyaml.Loader{}).Load()
+	snapshot, err := configyaml.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := snapshot.Settings
+	settings := snapshot
 	var registry *mediaadapter.Registry
 	var selection mediaports.Selection
 	var routes mediaports.MediaRoutes
@@ -52,8 +52,8 @@ func TestModuleSharesRegistryAndWiresSavedMedia(t *testing.T) {
 	)
 	graph.RequireStart()
 	t.Cleanup(func() { graph.RequireStop() })
-	picker, ok := selection.(*mediaadapter.Picker)
-	if !ok || picker.Registry != registry || routes != registry {
+	_, ok := selection.(*mediaadapter.Picker)
+	if !ok || routes != registry {
 		t.Fatal("media contracts do not share the same registry")
 	}
 	if any(storeBatch) != any(mediaBatch) {

@@ -6,6 +6,7 @@ package ports
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	cardapi "raven/api/cards"
@@ -55,12 +56,12 @@ type (
 
 	// Scheduler initializes, advances, and validates spaced repetition schedules.
 	Scheduler interface {
-		Initialize(now time.Time) (reviewapi.Schedule, reviewapi.Log, error)
+		Initialize(now time.Time) (json.RawMessage, json.RawMessage, error)
 		Next(
-			schedule *reviewapi.Schedule,
+			schedule any,
 			now time.Time,
 			rating int,
-		) (reviewapi.Schedule, reviewapi.Log, error)
-		Validate(schedule *reviewapi.Schedule) error
+		) (json.RawMessage, json.RawMessage, error)
+		Validate(schedule any) error
 	}
 )

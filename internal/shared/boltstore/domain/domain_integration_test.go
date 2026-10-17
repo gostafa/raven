@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -22,22 +23,28 @@ import (
 
 type fakeScheduler struct{ failure error }
 
-func (s fakeScheduler) Initialize(now time.Time) (reviewapi.Schedule, reviewapi.Log, error) {
-	return reviewapi.Schedule{
+func (s fakeScheduler) Initialize(now time.Time) (json.RawMessage, json.RawMessage, error) {
+	schedule, _ := json.Marshal(reviewapi.Schedule{
 		Due:        now,
 		LastReview: now,
 		Reps:       1,
-	}, reviewapi.Log{
+	})
+	log, _ := json.Marshal(reviewapi.Log{
 		Review: now,
 		Rating: 1,
-	}, s.failure
+	})
+	return schedule, log, s.failure
 }
 
 func (s fakeScheduler) Next(
-	schedule *reviewapi.Schedule,
+	value any,
 	now time.Time,
 	rating int,
-) (reviewapi.Schedule, reviewapi.Log, error) {
+) (json.RawMessage, json.RawMessage, error) {
+	schedule := new(contentapi.Schedule(value))
+	if original, ok := value.(*reviewapi.Schedule); ok {
+		schedule = original
+	}
 	// A failed scheduler must not mutate the caller's persisted state.
 	if s.failure != nil {
 		schedule.Reps++
@@ -46,22 +53,24 @@ func (s fakeScheduler) Next(
 	before.Due = now.Add(time.Hour)
 	before.LastReview = now
 	before.Reps++
-	return before, reviewapi.Log{Review: now, Rating: int8(rating)}, s.failure
+	encoded, _ := json.Marshal(before)
+	log, _ := json.Marshal(reviewapi.Log{Review: now, Rating: int8(rating)})
+	return encoded, log, s.failure
 }
-func (s fakeScheduler) Validate(*reviewapi.Schedule) error { return s.failure }
+func (s fakeScheduler) Validate(any) error { return s.failure }
 
 func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	item := contentapi.Item{ID: "item", Kind: "text", Text: "Remember"}
-	if err := library.InitializeItem(&item, now, fakeScheduler{}); err != nil {
+	if err := library.InitializeItem(&item, now, (fakeScheduler{}).Initialize); err != nil {
 		t.Fatal(err)
 	}
 	before := item
 	failure := errors.New("schedule failed")
-	if err := new(configurationFixture().Library()).ApplyReview(
+	if err := library.ApplyReview(new(configuration.Library(configurationFixture())),
 		&item,
 		&reviewapi.Attempt{At: now, Rating: 3},
-		fakeScheduler{failure: failure},
+		(fakeScheduler{failure: failure}).Next,
 	); !errors.Is(
 		err,
 		failure,
@@ -71,21 +80,22 @@ func TestReviewFailureLeavesItemUnchanged(t *testing.T) {
 	if !reflect.DeepEqual(item, before) {
 		t.Fatal("failed review mutated item")
 	}
-	if err := new(configurationFixture().Library()).ApplyReview(
+	if err := library.ApplyReview(new(configuration.Library(configurationFixture())),
 		&item,
 		&reviewapi.Attempt{At: now, Rating: 5},
-		fakeScheduler{},
+		(fakeScheduler{}).Next,
 	); err == nil {
 		t.Fatal("accepted invalid rating")
 	}
-	if err := new(configurationFixture().Library()).ApplyReview(
+	if err := library.ApplyReview(new(configuration.Library(configurationFixture())),
 		&item,
 		&reviewapi.Attempt{At: now, Rating: 3},
-		fakeScheduler{},
+		(fakeScheduler{}).Next,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if item.Schedule.Reps != 2 || len(item.Reviews) != 2 || item.Reviews[1].Automatic {
+	if contentapi.Schedule(item.Schedule).Reps != 2 || len(contentapi.Reviews(item.Reviews)) != 2 ||
+		contentapi.Reviews(item.Reviews)[1].Automatic {
 		t.Fatal("review history changed")
 	}
 }
@@ -102,13 +112,13 @@ func TestPreparationReturnsRollbackFilesAndProtectsOwnership(t *testing.T) {
 		return item, "copied.png", nil
 	}
 	id := func() (string, error) { return "0123456789abcdef0123456789abcdef", nil }
-	_, rollback, err := new(configurationFixture().Library()).PrepareItems(
+	_, rollback, err := library.PrepareItems(new(configuration.Library(configurationFixture())),
 		t.Context(),
 		&library.PreparationInput{Drafts: []contentapi.Draft{
 			{Kind: "image", SourcePath: "image.png"},
 			{ID: "foreign", Kind: "text", Text: "Changed"},
 		}, Previous: nil},
-		&library.PreparationDependencies{Batch: cffbatch.New(), ImportMedia: importer, NewID: id},
+		&library.PreparationDependencies{Batch: cffbatch.New().Run, ImportMedia: rawImporter(importer), NewID: id},
 	)
 	if err == nil || imports != 0 || len(rollback) != 0 {
 		t.Fatalf("rollback=%v imports=%d error=%v", rollback, imports, err)
@@ -119,15 +129,15 @@ func TestPreparationReturnsRollbackFilesAndProtectsOwnership(t *testing.T) {
 		Text:     "Before",
 		Schedule: reviewapi.Schedule{Reps: 4},
 	}
-	items, _, err := new(configurationFixture().Library()).PrepareItems(
+	items, _, err := library.PrepareItems(new(configuration.Library(configurationFixture())),
 		t.Context(),
 		&library.PreparationInput{
 			Drafts:   []contentapi.Draft{{ID: "owned", Kind: "text", Text: " After "}},
 			Previous: []contentapi.Item{old},
 		},
-		&library.PreparationDependencies{Batch: cffbatch.New(), ImportMedia: importer, NewID: id},
+		&library.PreparationDependencies{Batch: cffbatch.New().Run, ImportMedia: rawImporter(importer), NewID: id},
 	)
-	if err != nil || items[0].Text != "After" || items[0].Schedule.Reps != 4 ||
+	if err != nil || items[0].Text != "After" || contentapi.Schedule(items[0].Schedule).Reps != 4 ||
 		old.Text != "Before" {
 		t.Fatalf("prepared=%+v error=%v", items, err)
 	}
@@ -143,7 +153,8 @@ func TestParallelPreparationDrainsImportsAndCollectsRollbackInOrder(t *testing.T
 		sequence := 0
 		go func() {
 			defer close(done)
-			_, rollback, preparationErr = new(configurationFixture().Library()).PrepareItems(
+			_, rollback, preparationErr = library.PrepareItems(
+				new(configuration.Library(configurationFixture())),
 				t.Context(),
 				&library.PreparationInput{Drafts: []contentapi.Draft{
 					{Kind: "image", SourcePath: "first"},
@@ -152,15 +163,15 @@ func TestParallelPreparationDrainsImportsAndCollectsRollbackInOrder(t *testing.T
 					{Kind: "image", SourcePath: "last"},
 				}, Previous: nil},
 				&library.PreparationDependencies{
-					Batch: cffbatch.New(),
+					Batch: cffbatch.New().Run,
 					NewID: func() (string, error) { sequence++; return fmt.Sprintf("%032x", sequence), nil },
-					ImportMedia: func(original *contentapi.Item, source string) (contentapi.Item, string, error) {
+					ImportMedia: rawImporter(func(original *contentapi.Item, source string) (contentapi.Item, string, error) {
 						if source == "missing" {
 							return *original, "", failure
 						}
 						<-release
 						return *original, source + ".png", nil
-					},
+					}),
 				},
 			)
 		}()
@@ -180,26 +191,26 @@ func TestParallelPreparationDrainsImportsAndCollectsRollbackInOrder(t *testing.T
 }
 
 func TestParallelPreparationPreservesMixedContentOrder(t *testing.T) {
-	rules := configurationFixture().Library()
+	rules := configuration.Library(configurationFixture())
 	sequence := 0
-	items, paths, err := rules.PrepareItems(t.Context(), &library.PreparationInput{
+	items, paths, err := library.PrepareItems(&rules, t.Context(), &library.PreparationInput{
 		Drafts: []contentapi.Draft{
 			{Kind: "image", SourcePath: "image.png"},
 			{Kind: "text", Text: " remember "},
 			{Kind: "audio", SourcePath: "audio.wav"},
 		},
 	}, &library.PreparationDependencies{
-		Batch: cffbatch.New(),
+		Batch: cffbatch.New().Run,
 		NewID: func() (string, error) { sequence++; return fmt.Sprintf("%032x", sequence), nil },
-		ImportMedia: func(original *contentapi.Item, source string) (contentapi.Item, string, error) {
+		ImportMedia: rawImporter(func(original *contentapi.Item, source string) (contentapi.Item, string, error) {
 			item := *original
 			extension := filepath.Ext(source)
 			item.RelativePath = "media/" + item.ID + extension
 			item.OriginalName = source
-			item.MIMEType = rules.MediaType(extension)
+			item.MIMEType = library.MediaType(&rules, extension)
 			item.ByteSize = 1
 			return item, item.RelativePath, nil
-		},
+		}),
 	})
 	if err != nil || len(items) != 3 || len(paths) != 2 {
 		t.Fatalf("items=%+v paths=%v error=%v", items, paths, err)
@@ -232,7 +243,8 @@ func TestHydrationOrdersItemsAndIgnoresAutomaticReviews(t *testing.T) {
 		},
 	}}
 	result, err := library.Hydrate(&card)
-	if err != nil || result.Items[0].ID != "first" || result.DueAt != now.UnixMilli() ||
+	if err != nil || contentapi.Items(result.Items)[0].ID != "first" ||
+		result.DueAt != now.UnixMilli() ||
 		result.LastReviewed != now.Add(-time.Hour).UnixMilli() {
 		t.Fatalf("card=%+v error=%v", result, err)
 	}
@@ -262,7 +274,10 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 		RelativePath: "media/" + id + ".png",
 		ByteSize:     1,
 	}
-	if err := new(configurationFixture().Library()).ValidateItem(&valid); err != nil {
+	if err := library.ValidateItem(
+		new(configuration.Library(configurationFixture())),
+		&valid,
+	); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*contentapi.Item){
@@ -277,12 +292,18 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	} {
 		invalid := valid
 		mutate(&invalid)
-		if err := new(configurationFixture().Library()).ValidateItem(&invalid); err == nil {
+		if err := library.ValidateItem(
+			new(configuration.Library(configurationFixture())),
+			&invalid,
+		); err == nil {
 			t.Fatalf("accepted invalid media: %+v", invalid)
 		}
 	}
 	text := contentapi.Item{ID: "text", Kind: "text", Text: "Remember"}
-	if err := new(configurationFixture().Library()).ValidateItem(&text); err != nil {
+	if err := library.ValidateItem(
+		new(configuration.Library(configurationFixture())),
+		&text,
+	); err != nil {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*contentapi.Item){
@@ -294,19 +315,34 @@ func TestFolderNormalizationAndContentValidation(t *testing.T) {
 	} {
 		invalid := text
 		mutate(&invalid)
-		if err := new(configurationFixture().Library()).ValidateItem(&invalid); err == nil {
+		if err := library.ValidateItem(
+			new(configuration.Library(configurationFixture())),
+			&invalid,
+		); err == nil {
 			t.Fatal("accepted invalid text")
 		}
 	}
 	for _, extension := range []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".flac", ".mp4", ".m4v", ".webm", ".ogv", ".mov"} {
-		if new(configurationFixture().Library()).MediaType(extension) == "" ||
-			!new(configurationFixture().Library()).ValidMediaPath("media/"+id+extension, id) {
+		if library.MediaType(new(configuration.Library(configurationFixture())), extension) == "" ||
+			!library.ValidMediaPath(
+				new(configuration.Library(configurationFixture())),
+				"media/"+id+extension,
+				id,
+			) {
 			t.Fatalf("lost supported media %s", extension)
 		}
 	}
-	if new(configurationFixture().Library()).MediaType(".svg") != "" ||
-		new(configurationFixture().Library()).ValidMediaPath("media/"+id+".svg", id) ||
-		new(configurationFixture().Library()).ValidMediaPath("media/bad.png", "bad") {
+	if library.MediaType(new(configuration.Library(configurationFixture())), ".svg") != "" ||
+		library.ValidMediaPath(
+			new(configuration.Library(configurationFixture())),
+			"media/"+id+".svg",
+			id,
+		) ||
+		library.ValidMediaPath(
+			new(configuration.Library(configurationFixture())),
+			"media/bad.png",
+			"bad",
+		) {
 		t.Fatal("accepted unsupported media path")
 	}
 }
@@ -319,26 +355,26 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		item := *original
 		return item, "", failure
 	}
-	if _, _, err := new(configurationFixture().Library()).PrepareItems(
+	if _, _, err := library.PrepareItems(new(configuration.Library(configurationFixture())),
 		t.Context(),
 		&library.PreparationInput{Drafts: nil, Previous: nil},
 		&library.PreparationDependencies{
-			Batch:       cffbatch.New(),
-			ImportMedia: importer,
+			Batch:       cffbatch.New().Run,
+			ImportMedia: rawImporter(importer),
 			NewID:       newID,
 		},
 	); err == nil {
 		t.Fatal("accepted empty content")
 	}
-	if _, _, err := new(configurationFixture().Library()).PrepareItems(
+	if _, _, err := library.PrepareItems(new(configuration.Library(configurationFixture())),
 		t.Context(),
 		&library.PreparationInput{
 			Drafts:   []contentapi.Draft{{Kind: "text", Text: "remember"}},
 			Previous: nil,
 		},
 		&library.PreparationDependencies{
-			Batch:       cffbatch.New(),
-			ImportMedia: importer,
+			Batch:       cffbatch.New().Run,
+			ImportMedia: rawImporter(importer),
 			NewID:       func() (string, error) { return "", failure },
 		},
 	); !errors.Is(
@@ -347,15 +383,15 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	) {
 		t.Fatal(err)
 	}
-	if _, _, err := new(configurationFixture().Library()).PrepareItems(
+	if _, _, err := library.PrepareItems(new(configuration.Library(configurationFixture())),
 		t.Context(),
 		&library.PreparationInput{
 			Drafts:   []contentapi.Draft{{Kind: "image", SourcePath: "image.png"}},
 			Previous: nil,
 		},
 		&library.PreparationDependencies{
-			Batch:       cffbatch.New(),
-			ImportMedia: importer,
+			Batch:       cffbatch.New().Run,
+			ImportMedia: rawImporter(importer),
 			NewID:       newID,
 		},
 	); !errors.Is(
@@ -365,12 +401,12 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, draft := range []contentapi.Draft{{Kind: "text", Text: "remember", SourcePath: "invalid"}, {Kind: "image", Text: "unexpected"}, {Kind: "text", Text: " "}} {
-		if _, _, err := new(configurationFixture().Library()).PrepareItems(
+		if _, _, err := library.PrepareItems(new(configuration.Library(configurationFixture())),
 			t.Context(),
 			&library.PreparationInput{Drafts: []contentapi.Draft{draft}, Previous: nil},
 			&library.PreparationDependencies{
-				Batch:       cffbatch.New(),
-				ImportMedia: importer,
+				Batch:       cffbatch.New().Run,
+				ImportMedia: rawImporter(importer),
 				NewID:       newID,
 			},
 		); err == nil {
@@ -382,15 +418,15 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		ID: id, Kind: "image", OriginalName: "image.png", MIMEType: "image/png",
 		RelativePath: "media/" + id + ".png", ByteSize: 1,
 	}}
-	if _, _, err := new(configurationFixture().Library()).PrepareItems(
+	if _, _, err := library.PrepareItems(new(configuration.Library(configurationFixture())),
 		t.Context(),
 		&library.PreparationInput{
 			Drafts:   []contentapi.Draft{{ID: id, Kind: "image", Text: "unexpected"}},
 			Previous: media,
 		},
 		&library.PreparationDependencies{
-			Batch:       cffbatch.New(),
-			ImportMedia: importer,
+			Batch:       cffbatch.New().Run,
+			ImportMedia: rawImporter(importer),
 			NewID:       newID,
 		},
 	); err == nil ||
@@ -402,12 +438,12 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 		{{ID: id, Kind: "text", Text: "after", SourcePath: "invalid"}},
 		{{ID: id, Kind: "text", Text: "after"}, {ID: id, Kind: "text", Text: "duplicate"}},
 	} {
-		if _, _, err := new(configurationFixture().Library()).PrepareItems(
+		if _, _, err := library.PrepareItems(new(configuration.Library(configurationFixture())),
 			t.Context(),
 			&library.PreparationInput{Drafts: drafts, Previous: previous},
 			&library.PreparationDependencies{
-				Batch:       cffbatch.New(),
-				ImportMedia: importer,
+				Batch:       cffbatch.New().Run,
+				ImportMedia: rawImporter(importer),
 				NewID:       newID,
 			},
 		); err == nil {
@@ -418,7 +454,7 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 	if err := library.InitializeItem(
 		&item,
 		time.Now(),
-		fakeScheduler{failure: failure},
+		(fakeScheduler{failure: failure}).Initialize,
 	); !errors.Is(
 		err,
 		failure,
@@ -436,9 +472,24 @@ func TestPreparationFailuresRetainRollbackAndExistingRecords(t *testing.T) {
 }
 
 func configurationFixture() configuration.Settings {
-	settings, err := (configyaml.Loader{}).Load()
+	settings, err := configyaml.Load()
 	if err != nil {
 		panic(err)
 	}
-	return settings.Settings
+	return settings
+}
+
+func rawImporter(importer func(*contentapi.Item, string) (contentapi.Item, string, error)) func(json.RawMessage, string) (json.RawMessage, string, error) {
+	return func(value json.RawMessage, source string) (json.RawMessage, string, error) {
+		item, err := contentapi.Decode[contentapi.Item](value)
+		if err != nil {
+			return nil, "", err
+		}
+		imported, path, err := importer(&item, source)
+		if err != nil {
+			return nil, path, err
+		}
+		encoded, err := json.Marshal(imported)
+		return encoded, path, err
+	}
 }

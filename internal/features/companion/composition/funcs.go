@@ -13,17 +13,14 @@ func newConfiguration(handles wails.WindowSet) wails.Widget {
 }
 
 func newWindows(params windowParams, settings configuration.Settings) *wails.Windows {
-	return wails.New(
-		&wails.Dependencies{
-			App:           params.App,
-			Handles:       params.Handles,
-			Configuration: params.Configuration,
-			Settings: wails.Settings{
-				Layout:              settings.Layout(),
-				LogErrorKey:         settings.LogErrorKey(),
-				OpenFloatingReview:  settings.OpenFloatingReview(),
-				CloseFloatingReview: settings.CloseFloatingReview(),
-			},
-		},
-	)
+	layout := configuration.Layout(settings)
+	return wails.New(&wails.Dependencies{
+		App: params.App, Main: params.Handles.Main, Widget: params.Handles.Widget,
+		Review: params.Handles.Review, Configure: params.Configuration.Configure,
+	}, &wails.Settings{
+		WidgetSize: layout.WidgetSize, ReviewWidth: layout.ReviewWidth,
+		ReviewHeight: layout.ReviewHeight, ReviewGap: layout.ReviewGap,
+		LogErrorKey: settings.LogErrorKey(), OpenFloatingReview: settings.OpenFloatingReview(),
+		CloseFloatingReview: settings.CloseFloatingReview(),
+	})
 }

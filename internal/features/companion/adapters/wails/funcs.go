@@ -9,113 +9,161 @@ import (
 	"log/slog"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	companion "raven/internal/features/companion/domain"
 )
 
-// New constructs the adapter with its required runtime dependencies.
-func New(deps *Dependencies) *Windows {
-	app, handles, configuration := deps.App, deps.Handles, deps.Configuration
-	settings := &deps.Settings
-	windows := &Windows{
-		settings:        *settings,
-		mainWindow:      handles.Main,
-		widget:          handles.Widget,
-		reviewWindow:    nil,
-		reviewPlacement: nil,
-		configuration:   configuration,
-		invoke:          application.InvokeSync,
-		primaryScreen:   app.Screen.GetPrimary,
-		quit:            app.Quit,
-		logger:          app.Logger,
-	}
-	windows.bindReview(handles.Review)
-
-	return windows
+// New constructs window capabilities without starting native resources.
+func New(deps *Dependencies, settings *Settings) *Windows {
+	state := newWindowState(deps, settings)
+	return newWindowOperations(state)
 }
 
-func (windows *Windows) bindReview(review *application.WebviewWindow) {
-	windows.reviewWindow, windows.reviewPlacement = nil, nil
-
-	if review != nil {
-		windows.reviewWindow, windows.reviewPlacement = review, review
+func newWindowState(deps *Dependencies, settings *Settings) *windowState {
+	state := &windowState{
+		showMain: deps.Main.Show, hideMain: deps.Main.Hide, restoreMain: deps.Main.Restore,
+		focusMain: deps.Main.Focus, showWidget: deps.Widget.Show,
+		widgetPosition: deps.Widget.Position, setWidgetPosition: deps.Widget.SetPosition,
+		getWidgetScreen: deps.Widget.GetScreen, configure: deps.Configure,
+		invoke: application.InvokeSync, primaryScreen: deps.App.Screen.GetPrimary,
+		quit: deps.App.Quit, logger: deps.App.Logger,
 	}
+	bindWindowSettings(state, settings)
+	bindReview(state, deps.Review)
+	return state
 }
+
+func bindWindowSettings(state *windowState, settings *Settings) {
+	state.logErrorKey, state.openFloatingReview = settings.LogErrorKey, settings.OpenFloatingReview
+	state.closeFloatingReview = settings.CloseFloatingReview
+	state.widgetSize, state.reviewWidth = settings.WidgetSize, settings.ReviewWidth
+	state.reviewHeight, state.reviewGap = settings.ReviewHeight, settings.ReviewGap
+}
+
+func newWindowOperations(state *windowState) *Windows {
+	return &Windows{operations: map[string]func(){
+		"configure": func() { ConfigureWidget(state) }, "show": func() { ShowMain(state) },
+		"hide": func() { HideMain(state) }, "reset": func() { ResetWidget(state) },
+		"position":   func() { PositionFloatingReview(state) },
+		"close":      func() { RequestFloatingReviewClose(state) },
+		"toggle":     func() { ToggleFloatingReview(state) },
+		"hideReview": func() { HideFloatingReview(state) }, "quit": func() { Quit(state) },
+	}}
+}
+
+func bindReview(state *windowState, review *application.WebviewWindow) {
+	if review == nil {
+		return
+	}
+	state.showReview, state.hideReview = review.Show, review.Hide
+	state.focusReview, state.reviewVisible = review.Focus, review.IsVisible
+	state.dispatchReview = review.DispatchWailsEvent
+	state.setReviewSize, state.setReviewPosition = review.SetSize, review.SetPosition
+}
+
+// ConfigureWidget applies platform-specific widget behavior.
+func (windows *Windows) ConfigureWidget() { windows.operations["configure"]() }
+
+// ShowMain shows, restores, and focuses the library.
+func (windows *Windows) ShowMain() { windows.operations["show"]() }
+
+// HideMain hides the library while retaining the launcher.
+func (windows *Windows) HideMain() { windows.operations["hide"]() }
+
+// ResetWidget places the launcher on the primary screen.
+func (windows *Windows) ResetWidget() { windows.operations["reset"]() }
+
+// PositionFloatingReview places a visible review beside the launcher.
+func (windows *Windows) PositionFloatingReview() { windows.operations["position"]() }
+
+// RequestFloatingReviewClose lets the frontend finish pending saves.
+func (windows *Windows) RequestFloatingReviewClose() { windows.operations["close"]() }
+
+// ToggleFloatingReview opens a review or requests its closure.
+func (windows *Windows) ToggleFloatingReview() { windows.operations["toggle"]() }
+
+// HideFloatingReview hides a review after media playback stops.
+func (windows *Windows) HideFloatingReview() { windows.operations["hideReview"]() }
+
+// Quit exits the native application.
+func (windows *Windows) Quit() { windows.operations["quit"]() }
 
 // ConfigureWidget configures platform-specific floating widget behavior.
-func (windows *Windows) ConfigureWidget() {
+func ConfigureWidget(windows *windowState) {
 	windows.invoke(func() {
-		err := windows.configuration.Configure()
+		err := windows.configure()
 		if err != nil {
 			windows.logger.ErrorContext(
 				context.Background(),
 				"could not configure raven widget",
 				//nolint:sloglint // Log field names come from validated embedded configuration.
-				slog.Any(windows.settings.LogErrorKey, err),
+				slog.Any(windows.logErrorKey, err),
 			)
 		}
 	})
 }
 
 // ShowMain shows, restores, and focuses the main library window.
-func (windows *Windows) ShowMain() {
-	windows.mainWindow.Show()
-	windows.mainWindow.Restore()
-	windows.mainWindow.Focus()
+func ShowMain(windows *windowState) {
+	windows.showMain()
+	windows.restoreMain()
+	windows.focusMain()
 }
 
 // HideMain hides the library and keeps the widget visible.
-func (windows *Windows) HideMain() {
-	windows.widget.Show()
-	windows.mainWindow.Hide()
+func HideMain(windows *windowState) {
+	windows.showWidget()
+	windows.hideMain()
 }
 
 // ResetWidget repositions the widget within the primary screen.
-func (windows *Windows) ResetWidget() {
+func ResetWidget(windows *windowState) {
 	if screen := windows.primaryScreen(); screen != nil {
 		area := screen.WorkArea
-		windows.widget.SetPosition(
-			area.X+max(zero, area.Width-windows.settings.Layout.WidgetSize-widgetMargin),
-			area.Y+max(zero, area.Height-windows.settings.Layout.WidgetSize-widgetMargin),
+		windows.setWidgetPosition(
+			area.X+max(zero, area.Width-windows.widgetSize-widgetMargin),
+			area.Y+max(zero, area.Height-windows.widgetSize-widgetMargin),
 		)
 	}
 
-	windows.widget.Show()
-	windows.PositionFloatingReview()
+	windows.showWidget()
+	PositionFloatingReview(windows)
 }
 
 // Quit is intentionally separate from closing the main window.
-func (windows *Windows) Quit() {
+func Quit(windows *windowState) {
 	windows.quit()
 }
 
 // PositionFloatingReview repositions the visible review window beside the widget.
-func (windows *Windows) PositionFloatingReview() {
-	if windows.reviewWindow == nil || !windows.reviewWindow.IsVisible() {
+func PositionFloatingReview(windows *windowState) {
+	if windows.reviewVisible == nil || !windows.reviewVisible() {
 		return
 	}
 
-	windows.placeFloatingReview()
+	placeFloatingReview(windows)
 }
 
-func (windows *Windows) placeFloatingReview() {
-	screen := windows.widgetScreen()
+func placeFloatingReview(windows *windowState) {
+	screen := widgetScreen(windows)
 
 	if screen == nil || screen.WorkArea.Width <= zero || screen.WorkArea.Height <= zero {
 		return
 	}
 
-	horizontal, vertical := windows.widget.Position()
+	horizontal, vertical := windows.widgetPosition()
 	area := screen.WorkArea
-	bounds := windows.settings.Layout.Bounds(
+	bounds := windowLayout(windows).Bounds(
 		horizontal,
 		vertical,
 		new(image.Rect(area.X, area.Y, area.X+area.Width, area.Y+area.Height)),
 	)
-	windows.reviewPlacement.SetSize(bounds.Dx(), bounds.Dy())
-	windows.reviewPlacement.SetPosition(bounds.Min.X, bounds.Min.Y)
+	windows.setReviewSize(bounds.Dx(), bounds.Dy())
+	windows.setReviewPosition(bounds.Min.X, bounds.Min.Y)
 }
 
-func (windows *Windows) widgetScreen() *application.Screen {
-	screen, err := windows.widget.GetScreen()
+func widgetScreen(windows *windowState) *application.Screen {
+	screen, err := windows.getWidgetScreen()
 	if err != nil || screen == nil {
 		return windows.primaryScreen()
 	}
@@ -124,37 +172,44 @@ func (windows *Windows) widgetScreen() *application.Screen {
 }
 
 // RequestFloatingReviewClose asks the frontend to close after pending saves finish.
-func (windows *Windows) RequestFloatingReviewClose() {
+func RequestFloatingReviewClose(windows *windowState) {
 	// The frontend owns the saving state and ignores close requests until a
 	// rating finishes. DispatchWailsEvent targets only this window.
-	windows.reviewWindow.DispatchWailsEvent(
-		&application.CustomEvent{Name: windows.settings.CloseFloatingReview, Data: nil, Sender: ""},
+	windows.dispatchReview(
+		&application.CustomEvent{Name: windows.closeFloatingReview, Data: nil, Sender: ""},
 	)
 }
 
 // ToggleFloatingReview opens the companion card without showing the library.
-func (windows *Windows) ToggleFloatingReview() {
+func ToggleFloatingReview(windows *windowState) {
 	windows.invoke(func() {
-		if windows.reviewWindow.IsVisible() {
-			windows.RequestFloatingReviewClose()
+		if windows.reviewVisible() {
+			RequestFloatingReviewClose(windows)
 
 			return
 		}
 
-		windows.placeFloatingReview()
-		windows.reviewWindow.Show()
-		windows.reviewWindow.DispatchWailsEvent(
+		placeFloatingReview(windows)
+		windows.showReview()
+		windows.dispatchReview(
 			&application.CustomEvent{
-				Name:   windows.settings.OpenFloatingReview,
+				Name:   windows.openFloatingReview,
 				Data:   nil,
 				Sender: "",
 			},
 		)
-		windows.reviewWindow.Focus()
+		windows.focusReview()
 	})
 }
 
 // HideFloatingReview is called after the review UI has stopped media playback.
-func (windows *Windows) HideFloatingReview() {
-	windows.reviewWindow.Hide()
+func HideFloatingReview(windows *windowState) {
+	windows.hideReview()
+}
+
+func windowLayout(state *windowState) *companion.Layout {
+	return &companion.Layout{
+		WidgetSize: state.widgetSize, ReviewWidth: state.reviewWidth,
+		ReviewHeight: state.reviewHeight, ReviewGap: state.reviewGap,
+	}
 }

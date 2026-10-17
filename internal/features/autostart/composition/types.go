@@ -23,6 +23,6 @@ type (
 		fx.In
 
 		Detector autostartports.LoginDetection
-		Requests *autostart.Requests
+		Requests *autostart.Visibility
 	}
 )

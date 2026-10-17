@@ -16,5 +16,5 @@ var (
 
 	_ desktopports.Startup          = (*Controller)(nil)
 	_ desktopports.LaunchVisibility = (*Visibility)(nil)
-	_ desktopports.OpenRequests     = (*Requests)(nil)
+	_ desktopports.OpenRequests     = (*Visibility)(nil)
 )

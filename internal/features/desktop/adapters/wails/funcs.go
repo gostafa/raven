@@ -25,7 +25,7 @@ func applicationOptions(deps *ApplicationDependencies) application.Options {
 
 	options.Logger = deps.Logger
 	options.Assets.Handler = application.AssetFileServerFS(deps.Assets)
-	options.Assets.Middleware = func(next http.Handler) http.Handler { return deps.Media.Middleware(next) }
+	options.Assets.Middleware = func(next http.Handler) http.Handler { return deps.Middleware(next) }
 	options.Windows.DisableQuitOnLastWindowClosed = true
 	options.Linux.DisableQuitOnLastWindowClosed = true
 	options.SingleInstance = singleInstanceOptions(deps)
@@ -42,39 +42,83 @@ func NewWindows(app *application.App, configuration *Configuration) companionwai
 	}
 }
 
-// New constructs desktop orchestration with complete, stable dependencies.
-func New(deps *Dependencies) *Desktop {
-	return &Desktop{
-		run:           deps.App.Run,
-		invoke:        application.InvokeSync,
-		showDialog:    (*application.MessageDialog).Show,
-		configuration: *deps.Configuration,
-		app:           deps.App,
-		mainWindow:    deps.Handles.Main,
-		widget:        deps.Handles.Widget,
-		reviewWindow:  deps.Handles.Review,
-		windows:       deps.Windows,
-		visibility:    deps.Visibility,
-		startup:       deps.Startup,
-		reminders:     deps.Reminders,
-		notifications: deps.Notifications,
-		icon:          deps.Icon,
-		subscriptions: nil,
+// New constructs native orchestration with stable operation capabilities.
+func New(deps *Dependencies) *Desktop { return newDesktopOperations(newDesktopState(deps)) }
+
+func newDesktopState(deps *Dependencies) *Dependencies {
+	state := *deps
+	state.run = deps.App.Run
+	state.invoke = application.InvokeSync
+	state.showDialog = (*application.MessageDialog).Show
+	return &state
+}
+
+func newDesktopOperations(state *Dependencies) *Desktop {
+	operations := desktopLifecycleOperations(state)
+	operations["configure"] = func(context.Context, *application.Service, <-chan struct{}) desktopResult {
+		Configure(state)
+		return desktopResult{}
+	}
+	operations["register"] = func(_ context.Context, service *application.Service, _ <-chan struct{}) desktopResult {
+		state.App.RegisterService(*service)
+		return desktopResult{}
+	}
+	return &Desktop{operations: operations}
+}
+
+func desktopLifecycleOperations(
+	state *Dependencies,
+) map[string]func(context.Context, *application.Service, <-chan struct{}) desktopResult {
+	return map[string]func(context.Context, *application.Service, <-chan struct{}) desktopResult{
+		"run": func(context.Context, *application.Service, <-chan struct{}) desktopResult {
+			return desktopResult{failure: Run(state)}
+		},
+		"dispose": func(context.Context, *application.Service, <-chan struct{}) desktopResult {
+			Dispose(state)
+			return desktopResult{}
+		},
+		"open": func(ctx context.Context, _ *application.Service, requests <-chan struct{}) desktopResult {
+			Open(state, ctx, requests)
+			return desktopResult{}
+		},
 	}
 }
 
-// Configure registers native interaction handlers before running Wails.
-func (desktop *Desktop) Configure() {
-	desktop.configureWidgetEvents()
-	desktop.configureClosingHooks()
-	desktop.configureLifecycleEvents()
-	desktop.configureMenus()
-	desktop.notifications.OnReview(desktop.showReviews)
+// Configure registers native handlers before the event loop starts.
+func (desktop *Desktop) Configure() { desktop.operations["configure"](context.Background(), nil, nil) }
+
+// Run keeps the native event loop on the calling main goroutine.
+func (desktop *Desktop) Run() error {
+	return desktop.operations["run"](context.Background(), nil, nil).failure
 }
 
-func (desktop *Desktop) showReviews() {
-	desktop.windows.ShowMain()
-	desktop.app.Event.Emit(desktop.configuration.ShowReviews)
+// Register binds a Wails service before the native event loop starts.
+//
+//nolint:gocritic // Wails service bindings are passed by value.
+func (desktop *Desktop) Register(service application.Service) {
+	desktop.operations["register"](context.Background(), &service, nil)
+}
+
+// Open handles queued launch requests until cancellation.
+func (desktop *Desktop) Open(ctx context.Context, requests <-chan struct{}) {
+	desktop.operations["open"](ctx, nil, requests)
+}
+
+// Dispose releases native event subscriptions.
+func (desktop *Desktop) Dispose() { desktop.operations["dispose"](context.Background(), nil, nil) }
+
+// Configure registers native interaction handlers before running Wails.
+func Configure(desktop *Dependencies) {
+	configureWidgetEvents(desktop)
+	configureClosingHooks(desktop)
+	configureLifecycleEvents(desktop)
+	configureMenus(desktop)
+	desktop.OnReview(func() { showReviews(desktop) })
+}
+
+func showReviews(desktop *Dependencies) {
+	desktop.ShowMain()
+	desktop.App.Event.Emit(desktop.ShowReviews)
 }
 
 // Emit publishes a frontend event through the desktop adapter.
@@ -84,7 +128,7 @@ func (desktop *EventPublisher) Emit(name string) { desktop.app.Event.Emit(name) 
 func NewEvents(app *application.App) *EventPublisher { return &EventPublisher{app: app} }
 
 // Run keeps the native event loop on the calling main goroutine.
-func (desktop *Desktop) Run() error {
+func Run(desktop *Dependencies) error {
 	err := desktop.run()
 	if err != nil {
 		return fmt.Errorf("run desktop application: %w", err)
@@ -93,23 +137,14 @@ func (desktop *Desktop) Run() error {
 	return nil
 }
 
-// Register binds services before the native event loop starts.
-//
-//nolint:gocritic // Wails service bindings are passed by value.
-func (desktop *Desktop) Register(
-	service application.Service,
-) {
-	desktop.app.RegisterService(service)
-}
-
 // Open handles queued launch requests until the runtime context is canceled.
-func (desktop *Desktop) Open(ctx context.Context, requests <-chan struct{}) {
+func Open(desktop *Dependencies, ctx context.Context, requests <-chan struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-requests:
-			desktop.windows.ShowMain()
+			desktop.ShowMain()
 		}
 	}
 }
@@ -130,7 +165,7 @@ func mainWindowBounds(configuration *Configuration) application.WebviewWindowOpt
 	options.Width = mainWindowWidth
 	options.Height = mainWindowHeight
 	options.MinWidth = mainWindowMinWidth
-	options.MinHeight = configuration.Layout.ReviewHeight
+	options.MinHeight = configuration.ReviewHeight
 
 	return options
 }
@@ -173,12 +208,12 @@ func floatingWindowOptions() application.WebviewWindowOptions {
 func widgetWindowBounds(configuration *Configuration) application.WebviewWindowOptions {
 	options := floatingWindowOptions()
 
-	options.Width = configuration.Layout.WidgetSize
-	options.Height = configuration.Layout.WidgetSize
-	options.MinWidth = configuration.Layout.WidgetSize
-	options.MinHeight = configuration.Layout.WidgetSize
-	options.MaxWidth = configuration.Layout.WidgetSize
-	options.MaxHeight = configuration.Layout.WidgetSize
+	options.Width = configuration.WidgetSize
+	options.Height = configuration.WidgetSize
+	options.MinWidth = configuration.WidgetSize
+	options.MinHeight = configuration.WidgetSize
+	options.MaxWidth = configuration.WidgetSize
+	options.MaxHeight = configuration.WidgetSize
 
 	return options
 }
@@ -245,8 +280,8 @@ func reviewWindowOptions(configuration *Configuration) application.WebviewWindow
 
 	options.Name = "raven-review"
 	options.Title = "Raven review"
-	options.Width = configuration.Layout.ReviewWidth
-	options.Height = configuration.Layout.ReviewHeight
+	options.Width = configuration.ReviewWidth
+	options.Height = configuration.ReviewHeight
 	options.Hidden = true
 	options.BackgroundColour = application.NewRGB(blackChannel, blackChannel, blackChannel)
 	options.URL = "/?view=review"
@@ -255,129 +290,133 @@ func reviewWindowOptions(configuration *Configuration) application.WebviewWindow
 	return options
 }
 
-func (desktop *Desktop) configureWidgetEvents() {
+func configureWidgetEvents(desktop *Dependencies) {
 	service := desktop
-	desktop.track(service.widget.OnWindowEvent(
+	track(desktop, service.Widget.OnWindowEvent(
 		events.Common.WindowShow,
-		service.widgetShown,
+		windowHandler(service, widgetShown),
 	))
-	desktop.track(service.widget.OnWindowEvent(
+	track(desktop, service.Widget.OnWindowEvent(
 		events.Common.WindowDidMove,
-		service.widgetMoved,
+		windowHandler(service, widgetMoved),
 	))
-	desktop.track(service.widget.OnWindowEvent(
+	track(desktop, service.Widget.OnWindowEvent(
 		events.Common.WindowDidResize,
-		service.widgetShown,
+		windowHandler(service, widgetShown),
 	))
 }
 
-func (desktop *Desktop) configureClosingHooks() {
+func configureClosingHooks(desktop *Dependencies) {
 	service := desktop
-	desktop.track(service.reviewWindow.RegisterHook(
+	track(desktop, service.Review.RegisterHook(
 		events.Common.WindowClosing,
-		service.reviewClosing,
+		windowHandler(service, reviewClosing),
 	))
-	desktop.track(service.mainWindow.RegisterHook(
+	track(desktop, service.Main.RegisterHook(
 		events.Common.WindowClosing,
-		service.mainClosing,
+		windowHandler(service, mainClosing),
 	))
-	desktop.track(service.widget.RegisterHook(
+	track(desktop, service.Widget.RegisterHook(
 		events.Common.WindowClosing,
 		cancelClosing,
 	))
 }
 
-func (desktop *Desktop) configureLifecycleEvents() {
-	app := desktop.app
-	desktop.track(
-		app.Event.OnApplicationEvent(events.Common.ApplicationStarted, desktop.applicationStarted),
+func configureLifecycleEvents(desktop *Dependencies) {
+	app := desktop.App
+	track(
+		desktop,
+		app.Event.OnApplicationEvent(
+			events.Common.ApplicationStarted,
+			applicationHandler(desktop, applicationStarted),
+		),
 	)
-	desktop.track(app.Event.OnApplicationEvent(
+	track(desktop, app.Event.OnApplicationEvent(
 		events.Common.SystemDidWake,
-		desktop.systemWoke,
+		applicationHandler(desktop, systemWoke),
 	))
-	desktop.track(app.Event.OnApplicationEvent(
+	track(desktop, app.Event.OnApplicationEvent(
 		events.Mac.ApplicationShouldHandleReopen,
-		desktop.reopened,
+		applicationHandler(desktop, reopened),
 	))
-	desktop.track(app.Event.OnApplicationEvent(
+	track(desktop, app.Event.OnApplicationEvent(
 		events.Mac.ApplicationDidBecomeActive,
-		desktop.becameActive,
+		applicationHandler(desktop, becameActive),
 	))
-	desktop.track(desktop.mainWindow.OnWindowEvent(
+	track(desktop, desktop.Main.OnWindowEvent(
 		events.Common.WindowFocus,
-		desktop.mainFocused,
+		windowHandler(desktop, mainFocused),
 	))
 }
 
-func (desktop *Desktop) applicationStarted(_ *application.ApplicationEvent) {
+func applicationStarted(desktop *Dependencies, _ *application.ApplicationEvent) {
 	service := desktop
-	service.windows.ConfigureWidget()
-	service.windows.ResetWidget()
-	service.reminders.Start()
-	desktop.visibility.ApplicationStarted()
-	desktop.reportStartupError(desktop.startup.Initialize())
+	service.ConfigureWidget()
+	service.ResetWidget()
+	service.StartReminders()
+	desktop.ApplicationStarted()
+	reportStartupError(desktop, desktop.InitializeStartup())
 }
 
-func (desktop *Desktop) reportStartupError(err error) {
+func reportStartupError(desktop *Dependencies, err error) {
 	if err == nil {
 		return
 	}
 
-	app := desktop.app
+	app := desktop.App
 	app.Logger.ErrorContext(
 		context.Background(),
 		"could not configure login startup",
 		//nolint:sloglint // Log field names come from validated embedded configuration.
-		slog.Any(desktop.configuration.LogErrorKey, err),
+		slog.Any(desktop.LogErrorKey, err),
 	)
 	desktop.showDialog(app.Dialog.Error().
 		SetTitle(startupMenuTitle).
 		SetMessage(startupErrorMessage + err.Error()))
 }
 
-func (desktop *Desktop) refreshStartup() {
-	err := desktop.startup.Refresh()
+func refreshStartup(desktop *Dependencies) {
+	err := desktop.RefreshStartup()
 	if err != nil {
-		desktop.app.Logger.WarnContext(
+		desktop.App.Logger.WarnContext(
 			context.Background(),
 			"could not refresh login startup status",
 			//nolint:sloglint // Log field names come from validated embedded configuration.
-			slog.Any(desktop.configuration.LogErrorKey, err),
+			slog.Any(desktop.LogErrorKey, err),
 		)
 	}
 }
 
-func (desktop *Desktop) toggleStartup(_ *application.Context) {
-	go func() { desktop.reportStartupError(desktop.startup.Toggle()) }()
+func toggleStartup(desktop *Dependencies, _ *application.Context) {
+	go func() { reportStartupError(desktop, desktop.ToggleStartup()) }()
 }
 
-func (desktop *Desktop) populateMenu(menu *application.Menu) *application.MenuItem {
+func populateMenu(desktop *Dependencies, menu *application.Menu) *application.MenuItem {
 	service := desktop
 
-	menu.Add(openMenuTitle).OnClick(service.openClicked)
-	menu.Add(resetMenuTitle).OnClick(service.resetClicked)
+	menu.Add(openMenuTitle).OnClick(menuHandler(service, openClicked))
+	menu.Add(resetMenuTitle).OnClick(menuHandler(service, resetClicked))
 	menu.AddSeparator()
 
 	startup := menu.AddCheckbox(startupMenuTitle, false).SetEnabled(false)
-	startup.OnClick(desktop.toggleStartup)
+	startup.OnClick(menuHandler(desktop, toggleStartup))
 	menu.AddSeparator()
-	menu.Add(quitMenuTitle).OnClick(service.quitClicked)
+	menu.Add(quitMenuTitle).OnClick(menuHandler(service, quitClicked))
 
 	return startup
 }
 
-func (desktop *Desktop) configureMenus() {
-	app := desktop.app
+func configureMenus(desktop *Dependencies) {
+	app := desktop.App
 	menu := app.ContextMenu.New()
-	widgetStartup := desktop.populateMenu(menu.Menu)
+	widgetStartup := populateMenu(desktop, menu.Menu)
 	app.ContextMenu.Add(appName, menu)
 
 	trayMenu := app.Menu.New()
-	trayStartup := desktop.populateMenu(trayMenu)
-	tray := app.SystemTray.New().SetIcon(desktop.icon).SetMenu(trayMenu)
+	trayStartup := populateMenu(desktop, trayMenu)
+	tray := app.SystemTray.New().SetIcon(desktop.Icon).SetMenu(trayMenu)
 	tray.SetTooltip(appTitle)
-	desktop.startup.SetPublisher(func(checked, available bool) {
+	desktop.SetStartupPublisher(func(checked, available bool) {
 		desktop.invoke(func() {
 			widgetStartup.SetChecked(checked).SetEnabled(available)
 			trayStartup.SetChecked(checked).SetEnabled(available)
@@ -387,53 +426,60 @@ func (desktop *Desktop) configureMenus() {
 	})
 }
 
-func (desktop *Desktop) widgetShown(
+func widgetShown(desktop *Dependencies,
 	_ *application.WindowEvent,
 ) {
-	desktop.windows.ConfigureWidget()
+	desktop.ConfigureWidget()
 }
 
-func (desktop *Desktop) widgetMoved(_ *application.WindowEvent) {
-	desktop.windows.PositionFloatingReview()
+func widgetMoved(desktop *Dependencies, _ *application.WindowEvent) {
+	desktop.PositionFloatingReview()
 }
 
-func (desktop *Desktop) reviewClosing(event *application.WindowEvent) {
+func reviewClosing(desktop *Dependencies, event *application.WindowEvent) {
 	event.Cancel()
-	desktop.windows.RequestFloatingReviewClose()
+	desktop.RequestFloatingReviewClose()
 }
 
-func (desktop *Desktop) mainClosing(event *application.WindowEvent) {
+func mainClosing(desktop *Dependencies, event *application.WindowEvent) {
 	event.Cancel()
-	desktop.windows.HideMain()
+	desktop.HideMain()
 }
 func cancelClosing(event *application.WindowEvent) { event.Cancel() }
-func (desktop *Desktop) systemWoke(_ *application.ApplicationEvent) {
-	desktop.reminders.Wake()
-	desktop.refreshStartup()
+func systemWoke(desktop *Dependencies, _ *application.ApplicationEvent) {
+	desktop.WakeReminders()
+	refreshStartup(desktop)
 }
 
-func (desktop *Desktop) reopened(
+func reopened(desktop *Dependencies,
 	_ *application.ApplicationEvent,
 ) {
-	desktop.visibility.RequestOpen()
+	desktop.RequestOpen()
 }
-func (desktop *Desktop) becameActive(_ *application.ApplicationEvent) { desktop.refreshStartup() }
-func (desktop *Desktop) mainFocused(_ *application.WindowEvent)       { desktop.refreshStartup() }
-func (desktop *Desktop) openClicked(_ *application.Context)           { desktop.windows.ShowMain() }
 
-func (desktop *Desktop) resetClicked(
+func becameActive(
+	desktop *Dependencies,
+	_ *application.ApplicationEvent,
+) {
+	refreshStartup(desktop)
+}
+
+func mainFocused(desktop *Dependencies, _ *application.WindowEvent) { refreshStartup(desktop) }
+func openClicked(desktop *Dependencies, _ *application.Context)     { desktop.ShowMain() }
+
+func resetClicked(desktop *Dependencies,
 	_ *application.Context,
 ) {
-	desktop.windows.ResetWidget()
+	desktop.ResetWidget()
 }
-func (desktop *Desktop) quitClicked(_ *application.Context) { desktop.windows.Quit() }
+func quitClicked(desktop *Dependencies, _ *application.Context) { desktop.Quit() }
 
-func (desktop *Desktop) track(cancel func()) {
+func track(desktop *Dependencies, cancel func()) {
 	desktop.subscriptions = append(desktop.subscriptions, cancel)
 }
 
 // Dispose releases event handlers owned by desktop orchestration.
-func (desktop *Desktop) Dispose() {
+func Dispose(desktop *Dependencies) {
 	for index := range desktop.subscriptions {
 		desktop.subscriptions[index]()
 	}
@@ -444,10 +490,31 @@ func (desktop *Desktop) Dispose() {
 func singleInstanceOptions(deps *ApplicationDependencies) *application.SingleInstanceOptions {
 	var options application.SingleInstanceOptions
 
-	options.UniqueID = deps.Configuration.ApplicationID
+	options.UniqueID = deps.ApplicationID
 	options.OnSecondInstanceLaunch = func(data application.SecondInstanceData) {
-		deps.Visibility.SecondInstance(data.Args)
+		deps.SecondInstance(data.Args)
 	}
 
 	return &options
+}
+
+func windowHandler(
+	state *Dependencies,
+	handle func(*Dependencies, *application.WindowEvent),
+) func(*application.WindowEvent) {
+	return func(event *application.WindowEvent) { handle(state, event) }
+}
+
+func applicationHandler(
+	state *Dependencies,
+	handle func(*Dependencies, *application.ApplicationEvent),
+) func(*application.ApplicationEvent) {
+	return func(event *application.ApplicationEvent) { handle(state, event) }
+}
+
+func menuHandler(
+	state *Dependencies,
+	handle func(*Dependencies, *application.Context),
+) func(*application.Context) {
+	return func(event *application.Context) { handle(state, event) }
 }
