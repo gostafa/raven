@@ -1,6 +1,7 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
+// Package composition defines composition contracts for desktop.
 package composition
 
 import (
@@ -24,6 +25,7 @@ import (
 type (
 	appParams struct {
 		fx.In
+
 		Media      libraryports.MediaRoutes
 		Visibility *autostart.Visibility
 		Logger     *slog.Logger
@@ -31,6 +33,7 @@ type (
 	}
 	desktopParams struct {
 		fx.In
+
 		Handles       companionwails.WindowSet
 		Reminders     reminderports.Control
 		Lifecycle     fx.Lifecycle
@@ -46,8 +49,8 @@ type (
 	}
 	// Lifecycle is the graph control boundary used by the Wails bridge.
 	Lifecycle interface {
-		Start(context.Context) error
-		Stop(context.Context) error
+		Start(ctx context.Context) error
+		Stop(ctx context.Context) error
 	}
 	// Bridge delegates Wails service lifecycle to Fx exactly once.
 	Bridge struct {

@@ -1,9 +1,12 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
+// Package ports defines ports contracts for reminders.
 package ports
 
-import reminders "raven/internal/features/reminders/application"
+import (
+	reminders "raven/internal/features/reminders/application"
+)
 
 type (
 	// Control starts reconciliation on desktop readiness and wakes or stops its worker.

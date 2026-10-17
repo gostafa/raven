@@ -99,6 +99,82 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 	}
 }
 
+func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "raven.db")
+	store := New(path, scheduling.New(), storageLogger(nil))
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("constructor opened database: %v", err)
+	}
+	checkUnavailable := func() {
+		t.Helper()
+		response := httptest.NewRecorder()
+		store.MediaHandler().
+			ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/media/folder/card/item", nil))
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("inactive media returned %d", response.Code)
+		}
+	}
+	checkUnavailable()
+	if err := store.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Start(); !errors.Is(err, errStoreAlreadyStarted) {
+		t.Fatalf("repeated startup: %v", err)
+	}
+	if _, err := store.ListFolders(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	checkUnavailable()
+	reopened, err := Open(path, scheduling.New())
+	if err != nil {
+		t.Fatalf("managed shutdown retained lock: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFailedPreparationReleasesManagedDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "raven.db")
+	db, err := bolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bolt.Tx) error {
+		metadata, err := tx.CreateBucketIfNotExists([]byte("meta"))
+		if err != nil {
+			return err
+		}
+		return metadata.Put([]byte("schemaVersion"), []byte("999"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store := New(path, scheduling.New(), storageLogger(nil))
+	if err := store.Start(); err == nil {
+		t.Fatal("accepted unsupported schema")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("failed preparation retained database lock: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCardsValidateAndStayInTheirFolder(t *testing.T) {
 	store := openTestStore(t)
 	first, _ := store.CreateFolder(&folderapi.CreateInput{Title: "First"})
@@ -1274,10 +1350,10 @@ func TestNotificationAcknowledgmentPersistsAndRejectsStaleSchedules(t *testing.T
 	)
 	first := card.Items[0]
 	occurrence := reviewapi.DueOccurrence{
-		folder.ID,
-		card.ID,
-		first.ID,
-		first.Schedule.Due.UnixMilli(),
+		FolderID: folder.ID,
+		CardID:   card.ID,
+		ItemID:   first.ID,
+		Due:      first.Schedule.Due.UnixMilli(),
 	}
 	if err := s.MarkNotified([]reviewapi.DueOccurrence{occurrence}); err != nil {
 		t.Fatal(err)

@@ -15,13 +15,18 @@ import (
 	reminders "raven/internal/features/reminders/application"
 )
 
-func newNative() reminderwails.NativeRuntime { return notifications.New() }
+func newNative() *notifications.NotificationService { return notifications.New() }
 
+//nolint:contextcheck // Native notifications must outlive the bounded startup context.
 func newNotifications(params notificationParams) *reminderwails.Runtime {
 	runtime := reminderwails.NewRuntime(params.Native, params.Logger)
 	params.Lifecycle.Append(fx.Hook{
-		OnStart: func(context.Context) error { return runtime.Start(params.Runtime.Context()) },
-		OnStop:  func(context.Context) error { return runtime.Stop() },
+		OnStart: func(context.Context) error {
+			runtime.Start(params.Runtime.Context())
+
+			return nil
+		},
+		OnStop: func(context.Context) error { return runtime.Stop() },
 	})
 
 	return runtime
@@ -32,11 +37,13 @@ func newWorker(params workerParams) *worker.Worker {
 	params.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
 			runtime.Enable()
+
 			return nil
 		},
 
 		OnStop: func(context.Context) error {
 			runtime.Stop()
+
 			return nil
 		},
 	})
@@ -49,7 +56,8 @@ func newCallbacks(params callbacksParams) reminders.Callbacks {
 		Publish: func() { params.Events.Emit("raven:schedules-changed") },
 		Warn: func(message string, err error) {
 			params.Logger.WarnContext(params.Runtime.Context(), "review reminder unavailable",
-				slog.String("operation", message), slog.Any("error", err))
+				slog.String(logOperationKey, message),
+				slog.Any(logErrorKey, err))
 		},
 	}
 }

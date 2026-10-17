@@ -27,6 +27,7 @@ Keep Raven's monochrome palette and dark sidebar during future design, content, 
 - Inject runtime dependencies through constructors and consumer-owned ports. Constructors allocate stable objects; use Fx lifecycle hooks to acquire resources and start workers. Keep construction out of facade methods and avoid mutable service dependency installation or service locators.
 - Composition packages may import Fx, concrete adapters, and their internal contracts. Keep ordinary constructors callable without Fx. Use typed providers or `fx.As` to bind adapters to ports, retaining compile-time conformance assertions.
 - Preserve role-based filenames in composition packages: module variables in `vars.go`, providers and hook registration in `funcs.go`, and parameter/result objects in `types.go`.
+- Fx parameter objects are passed by value and parameter/result fields are populated by reflection. Keep lint exceptions limited to these framework requirements; retain ordinary adapter and core checks.
 - Wails owns the native event loop on the main goroutine. Its private lifecycle bridge starts and stops Fx once. Establish single-instance ownership before opening persistence, and wait for application readiness before starting reminders.
 - Use a cancellable runtime context for background work and separate bounded contexts for startup and shutdown. Stop workers before closing their dependencies; release partial startup resources. Keep notification initialization optional and route Fx events through the injected structured logger.
 

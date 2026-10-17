@@ -13,10 +13,12 @@ import (
 )
 
 var (
-	_      application.ServiceStartup  = (*Bridge)(nil)
-	_      application.ServiceShutdown = (*Bridge)(nil)
-	_      Lifecycle                   = (*fx.App)(nil)
-	Module                             = fx.Module("desktop",
+	_ application.ServiceStartup  = (*Bridge)(nil)
+	_ application.ServiceShutdown = (*Bridge)(nil)
+	_ Lifecycle                   = (*fx.App)(nil)
+	// Module wires native desktop dependencies.
+	//nolint:gochecknoglobals // Fx modules are immutable dependency registration declarations.
+	Module = fx.Module("desktop",
 		fx.Provide(
 			lifetime.New,
 			newApplication,

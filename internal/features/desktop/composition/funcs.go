@@ -5,16 +5,18 @@ package composition
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
 
 	desktopwails "raven/internal/features/desktop/adapters/wails"
+	"raven/internal/features/desktop/ports"
 	"raven/internal/shared/lifetime"
 )
 
 func newApplication(params appParams) *application.App {
-	return desktopwails.NewApplication(desktopwails.ApplicationDependencies{
+	return desktopwails.NewApplication(&desktopwails.ApplicationDependencies{
 		Assets:     params.Assets,
 		Media:      params.Media,
 		Visibility: params.Visibility,
@@ -23,7 +25,7 @@ func newApplication(params appParams) *application.App {
 }
 
 func newDesktop(params desktopParams) *desktopwails.Desktop {
-	desktop := desktopwails.New(desktopwails.Dependencies{
+	desktop := desktopwails.New(&desktopwails.Dependencies{
 		App:           params.App,
 		Handles:       params.Handles,
 		Windows:       params.Windows,
@@ -34,31 +36,70 @@ func newDesktop(params desktopParams) *desktopwails.Desktop {
 		Notifications: params.Notifications,
 		Assets:        params.Assets,
 	})
-	done := make(chan struct{})
-
-	params.Lifecycle.Append(fx.Hook{
-		OnStart: func(context.Context) error {
-			go func() { defer close(done); desktop.Open(params.Runtime.Context(), params.Requests.Pending()) }()
-
-			return nil
-		},
-
-		OnStop: func(context.Context) error {
-			desktop.Dispose()
-			params.Runtime.Cancel()
-			<-done
-			return nil
-		},
-	})
+	params.Lifecycle.Append(desktopLifecycle(desktop, params.Runtime, params.Requests))
 
 	return desktop
+}
+
+//nolint:contextcheck // The request loop must outlive the bounded startup context.
+func desktopLifecycle(
+	desktop *desktopwails.Desktop,
+	runtime *lifetime.Runtime,
+	requests ports.OpenRequests,
+) fx.Hook {
+	var done <-chan struct{}
+
+	return fx.Hook{
+		OnStart: func(context.Context) error {
+			done = openDesktopRequests(desktop, runtime, requests)
+
+			return nil
+		},
+
+		OnStop: func(ctx context.Context) error {
+			desktop.Dispose()
+			runtime.Cancel()
+
+			return waitForDesktop(ctx, done)
+		},
+	}
+}
+
+func openDesktopRequests(
+	desktop *desktopwails.Desktop,
+	runtime *lifetime.Runtime,
+	requests ports.OpenRequests,
+) <-chan struct{} {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		desktop.Open(runtime.Context(), requests.Pending())
+	}()
+
+	return done
+}
+
+func waitForDesktop(ctx context.Context, done <-chan struct{}) error {
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("stop desktop requests: %w", ctx.Err())
+	}
 }
 
 func configureDesktop(desktop *desktopwails.Desktop) { desktop.Configure() }
 
 // NewBridge supplies graph control after construction, before running the native event loop.
 func NewBridge(graph Lifecycle, runtime *lifetime.Runtime) *Bridge {
-	return &Bridge{graph: graph, runtime: runtime}
+	var bridge Bridge
+
+	bridge.graph = graph
+	bridge.runtime = runtime
+
+	return &bridge
 }
 
 // ServiceStartup starts the graph with a bounded context and an independent worker lifetime.

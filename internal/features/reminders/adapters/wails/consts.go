@@ -3,4 +3,6 @@
 
 package wails
 
-const logErrorKey = "error"
+const (
+	logErrorKey = "error"
+)

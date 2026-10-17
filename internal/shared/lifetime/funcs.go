@@ -3,13 +3,20 @@
 
 package lifetime
 
-import "context"
+import (
+	"context"
+)
 
 // New allocates a context without starting background work.
 func New() *Runtime {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &Runtime{ctx: ctx, cancel: cancel}
+	var runtime Runtime
+
+	runtime.ctx = ctx
+	runtime.cancel = cancel
+
+	return &runtime
 }
 
 // Context returns the context used by managed workers.

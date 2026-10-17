@@ -3,13 +3,15 @@ package composition
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
+	"raven/internal/features/autostart/adapters/launch"
+	desktopwails "raven/internal/features/desktop/adapters/wails"
 	"raven/internal/shared/lifetime"
 )
 
@@ -65,7 +67,7 @@ func TestBridgeIsolatesStartupAndShutdownFailures(t *testing.T) {
 	startFailure, stopFailure := errors.New("startup failure"), errors.New("shutdown failure")
 	for _, failStart := range []bool{false, true} {
 		t.Run(
-			strings.Join([]string{"start", string(rune('0' + btoi(failStart)))}, "-"),
+			fmt.Sprintf("startup_failure_%t", failStart),
 			func(t *testing.T) {
 				runtime := lifetime.New()
 				graph := fxtest.New(t, fx.Invoke(func(lc fx.Lifecycle) {
@@ -98,9 +100,31 @@ func TestBridgeIsolatesStartupAndShutdownFailures(t *testing.T) {
 	}
 }
 
-func btoi(value bool) int {
-	if value {
-		return 1
+func TestDesktopStopHonorsDeadline(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := waitForDesktop(ctx, make(chan struct{})); !errors.Is(err, context.Canceled) {
+		t.Fatalf("stop did not honor cancellation: %v", err)
 	}
-	return 0
+	done := make(chan struct{})
+	close(done)
+	if err := waitForDesktop(t.Context(), done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDesktopRequestWorkerUsesIndependentLifetime(t *testing.T) {
+	runtime := lifetime.New()
+	desktop := desktopwails.New(&desktopwails.Dependencies{})
+	graph := fxtest.New(t, fx.Invoke(func(lc fx.Lifecycle) {
+		lc.Append(desktopLifecycle(desktop, runtime, launch.New()))
+	}))
+	graph.RequireStart()
+	if runtime.Context().Err() != nil {
+		t.Fatal("startup ended the request worker lifetime")
+	}
+	graph.RequireStop()
+	if runtime.Context().Err() == nil {
+		t.Fatal("shutdown retained request worker lifetime")
+	}
 }

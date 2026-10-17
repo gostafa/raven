@@ -1,9 +1,12 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
+// Package ports defines ports contracts for desktop.
 package ports
 
-import "io/fs"
+import (
+	"io/fs"
+)
 
 type (
 	// Assets supplies embedded desktop files and the application icon.

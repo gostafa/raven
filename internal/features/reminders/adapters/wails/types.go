@@ -29,9 +29,9 @@ type (
 	// NativeRuntime supplies the notification service lifecycle and responses.
 	NativeRuntime interface {
 		NativeNotifications
-		ServiceStartup(context.Context, application.ServiceOptions) error
+		ServiceStartup(ctx context.Context, options application.ServiceOptions) error
 		ServiceShutdown() error
-		OnNotificationResponse(func(notifications.NotificationResult))
+		OnNotificationResponse(callback func(notifications.NotificationResult))
 	}
 
 	// Runtime tracks optional native notification availability for managed workers.

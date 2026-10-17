@@ -1,6 +1,7 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
+// Package composition defines composition contracts for library.
 package composition
 
 import (

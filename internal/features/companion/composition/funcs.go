@@ -6,14 +6,12 @@ package composition
 import (
 	"raven/internal/features/companion/adapters/native"
 	"raven/internal/features/companion/adapters/wails"
-	companion "raven/internal/features/companion/domain"
-	"raven/internal/features/companion/ports"
 )
 
-func newConfiguration(handles wails.WindowSet) ports.WidgetConfiguration {
+func newConfiguration(handles wails.WindowSet) native.Widget {
 	return native.New(handles.Widget)
 }
 
-func newWindows(params windowParams) companion.Windows {
+func newWindows(params windowParams) *wails.Windows {
 	return wails.New(params.App, params.Handles, params.Configuration)
 }

@@ -3,6 +3,8 @@
 
 package wails
 
-import "raven/internal/features/desktop/ports"
+import (
+	"raven/internal/features/desktop/ports"
+)
 
 var _ ports.Events = (*EventPublisher)(nil)

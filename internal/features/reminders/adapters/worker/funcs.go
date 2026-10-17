@@ -14,7 +14,13 @@ func New(
 	notifications ports.Notifications,
 	callbacks reminders.Callbacks,
 ) *Worker {
-	return &Worker{source: source, notifications: notifications, callbacks: callbacks}
+	var worker Worker
+
+	worker.source = source
+	worker.notifications = notifications
+	worker.callbacks = callbacks
+
+	return &worker
 }
 
 // Enable permits the readiness event to start reconciliation.

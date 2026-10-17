@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"go.uber.org/fx"
 
 	startupwails "raven/internal/features/autostart/adapters/wails"
 	autostart "raven/internal/features/autostart/application"
@@ -19,7 +20,7 @@ func newLaunch(params launchParams) launchResult {
 		go visibility.Classify(automatic || autostart.IsAutostartLaunch(os.Args[1:]))
 	})
 
-	return launchResult{Visibility: visibility, Requests: params.Requests}
+	return launchResult{Out: fx.Out{}, Visibility: visibility, Requests: params.Requests}
 }
 
 func newController(app *application.App) *autostart.Controller {

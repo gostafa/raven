@@ -14,12 +14,20 @@ import (
 
 // NewRuntime constructs an optional notification runtime without starting it.
 func NewRuntime(native NativeRuntime, logger *slog.Logger) *Runtime {
-	return &Runtime{Notifier: New(native), native: native, logger: logger}
+	var runtime Runtime
+
+	runtime.Notifier = New(native)
+	runtime.native = native
+	runtime.logger = logger
+
+	return &runtime
 }
 
 // Start initializes notifications without making native availability fatal.
-func (runtime *Runtime) Start(ctx context.Context) error {
-	err := runtime.native.ServiceStartup(ctx, application.ServiceOptions{})
+func (runtime *Runtime) Start(ctx context.Context) {
+	var options application.ServiceOptions
+
+	err := runtime.native.ServiceStartup(ctx, options)
 	if err != nil {
 		runtime.logger.WarnContext(
 			ctx,
@@ -27,12 +35,10 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 			slog.Any(logErrorKey, err),
 		)
 
-		return nil
+		return
 	}
 
 	runtime.available.Store(true)
-
-	return nil
 }
 
 // Available reports whether native initialization succeeded.
@@ -55,9 +61,11 @@ func (runtime *Runtime) Stop() error {
 // OnReview opens reviews only for a successful default notification action.
 func (runtime *Runtime) OnReview(show func()) {
 	runtime.native.OnNotificationResponse(func(result notifications.NotificationResult) {
-		if result.Error == nil &&
-			result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
+		if result.Error != nil || !runtime.Available() {
+			return
+		}
 
+		if result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
 			show()
 		}
 	})

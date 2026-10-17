@@ -1,6 +1,7 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
+// Package composition defines composition contracts for companion.
 package composition
 
 import (
@@ -11,10 +12,12 @@ import (
 	"raven/internal/features/companion/ports"
 )
 
-type windowParams struct {
-	fx.In
+type (
+	windowParams struct {
+		fx.In
 
-	App           *application.App
-	Handles       wails.WindowSet
-	Configuration ports.WidgetConfiguration
-}
+		App           *application.App
+		Handles       wails.WindowSet
+		Configuration ports.WidgetConfiguration
+	}
+)

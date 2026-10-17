@@ -1,9 +1,12 @@
 // Gostafa 2026.
 // SPDX-License-Identifier: Apache-2.0.
 
+// Package launch defines launch contracts for adapters.
 package launch
 
-import autostart "raven/internal/features/autostart/application"
+import (
+	autostart "raven/internal/features/autostart/application"
+)
 
 type (
 	// Requests decouples launch classification from native window construction.

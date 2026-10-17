@@ -3,6 +3,10 @@
 
 package composition
 
-import "time"
+import (
+	"time"
+)
 
-const lifecycleTimeout = 15 * time.Second
+const (
+	lifecycleTimeout = 15 * time.Second
+)

@@ -17,20 +17,15 @@ import (
 )
 
 // NewApplication creates the single-instance shell before any persistence is opened.
-func NewApplication(deps ApplicationDependencies) *application.App {
+func NewApplication(deps *ApplicationDependencies) *application.App {
 	options := desktopIdentityOptions(deps.Assets.Icon)
 
 	options.Logger = deps.Logger
-	options.Assets = application.AssetOptions{
-		Handler:    application.AssetFileServerFS(deps.Assets.Files),
-		Middleware: func(next http.Handler) http.Handler { return deps.Media.Middleware(next) },
-	}
+	options.Assets.Handler = application.AssetFileServerFS(deps.Assets.Files)
+	options.Assets.Middleware = func(next http.Handler) http.Handler { return deps.Media.Middleware(next) }
 	options.Windows.DisableQuitOnLastWindowClosed = true
 	options.Linux.DisableQuitOnLastWindowClosed = true
-	options.SingleInstance = &application.SingleInstanceOptions{
-		UniqueID:               autostart.ApplicationID,
-		OnSecondInstanceLaunch: func(data application.SecondInstanceData) { deps.Visibility.SecondInstance(data.Args) },
-	}
+	options.SingleInstance = singleInstanceOptions(deps)
 
 	return application.New(options)
 }
@@ -45,12 +40,12 @@ func NewWindows(app *application.App) companionwails.WindowSet {
 }
 
 // New constructs desktop orchestration with complete, stable dependencies.
-func New(deps Dependencies) *Desktop {
+func New(deps *Dependencies) *Desktop {
 	return &Desktop{
 		app: deps.App, mainWindow: deps.Handles.Main, widget: deps.Handles.Widget,
 		reviewWindow: deps.Handles.Review, windows: deps.Windows, store: deps.Settings,
 		visibility: deps.Visibility, startup: deps.Startup, reminders: deps.Reminders,
-		notifications: deps.Notifications, icon: deps.Assets.Icon,
+		notifications: deps.Notifications, icon: deps.Assets.Icon, subscriptions: nil,
 	}
 }
 
@@ -85,6 +80,8 @@ func (desktop *Desktop) Run() error {
 }
 
 // Register binds services before the native event loop starts.
+//
+//nolint:gocritic // Wails service bindings are passed by value.
 func (desktop *Desktop) Register(
 	service application.Service,
 ) {
@@ -381,9 +378,20 @@ func (desktop *Desktop) track(cancel func()) {
 
 // Dispose releases event handlers owned by desktop orchestration.
 func (desktop *Desktop) Dispose() {
-	for _, cancel := range desktop.subscriptions {
-		cancel()
+	for index := range desktop.subscriptions {
+		desktop.subscriptions[index]()
 	}
 
 	desktop.subscriptions = nil
+}
+
+func singleInstanceOptions(deps *ApplicationDependencies) *application.SingleInstanceOptions {
+	var options application.SingleInstanceOptions
+
+	options.UniqueID = autostart.ApplicationID
+	options.OnSecondInstanceLaunch = func(data application.SecondInstanceData) {
+		deps.Visibility.SecondInstance(data.Args)
+	}
+
+	return &options
 }

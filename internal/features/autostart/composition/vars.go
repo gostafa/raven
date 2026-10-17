@@ -11,6 +11,9 @@ import (
 	"raven/internal/features/autostart/ports"
 )
 
+// Module wires native launch detection and login startup policy.
+//
+//nolint:gochecknoglobals // Fx modules are immutable dependency registration declarations.
 var Module = fx.Module("autostart", fx.Provide(
 	launch.New,
 	fx.Annotate(native.New, fx.As(new(ports.LoginDetection))),

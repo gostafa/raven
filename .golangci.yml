@@ -317,6 +317,7 @@ linters:
       allow:
         - error
         - generic
+        - context.Context
     lll:
       line-length: 120
       tab-width: 2
@@ -677,6 +678,22 @@ linters:
         - assign-expr
       disable: []
   exclusions:
+    rules:
+      # Fx resolves value parameter objects by reflection; pointers are not parameter objects.
+      - path: '(^|/)composition/|^funcs\.go$'
+        text: '^hugeParam:'
+        linters:
+          - gocritic
+      # Fx parameter/result fields are consumed by reflection rather than direct field access.
+      - path: '(^|/)composition/types\.go$|^types\.go$'
+        text: '\.[A-Za-z]+(Params|Result) \(type\): reusability'
+        linters:
+          - reusability
+      # Ports deliberately collect the named interfaces owned by their feature.
+      - path: '^internal/features/[^/]+/ports/types\.go$'
+        text: '^max-public-structs:'
+        linters:
+          - revive
     paths:
       - .*_test.go
       - ^node_modules/
@@ -730,6 +747,8 @@ formatters:
       - ^frontend/node_modules/
       - ^taskotter/
   settings:
+    gofumpt:
+      module-path: raven
     gci:
       sections:
         - standard

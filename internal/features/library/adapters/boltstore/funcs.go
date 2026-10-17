@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -1139,15 +1140,19 @@ func removableMedia(entry os.DirEntry, referenced map[string]bool) bool {
 
 // MediaHandler serves only media records owned by the requested card.
 // ServeContent implements HEAD and byte ranges without buffering the file.
-func (storage *Store) MediaHandler() http.HandlerFunc { return storage.serveMedia }
+func (storage *Store) MediaHandler() http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		if !storage.ready.Load() {
+			http.Error(writer, "media storage is unavailable", http.StatusServiceUnavailable)
+
+			return
+		}
+
+		storage.serveMedia(writer, request)
+	}
+}
 
 func (storage *Store) serveMedia(writer http.ResponseWriter, request *http.Request) {
-	if !storage.ready.Load() {
-		http.Error(writer, "media storage is unavailable", http.StatusServiceUnavailable)
-
-		return
-	}
-
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 
@@ -1276,7 +1281,7 @@ func Open(path string, scheduler library.Scheduler, loggers ...*slog.Logger) (*S
 
 	err := storage.Start()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("start library persistence: %w", err)
 	}
 
 	return storage, nil
@@ -1286,7 +1291,6 @@ func Open(path string, scheduler library.Scheduler, loggers ...*slog.Logger) (*S
 func New(path string, scheduler library.Scheduler, logger *slog.Logger) *Store {
 	storage := newStore(nil, scheduler, path)
 
-	storage.path = path
 	storage.logger = logger
 
 	return storage
@@ -1297,6 +1301,15 @@ func (storage *Store) Start() error {
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
 
+	err := storage.openPersistence()
+	if err != nil {
+		return fmt.Errorf("start persistence: %w", err)
+	}
+
+	return nil
+}
+
+func (storage *Store) openPersistence() error {
 	if storage.db != nil {
 		return errStoreAlreadyStarted
 	}
@@ -1308,9 +1321,18 @@ func (storage *Store) Start() error {
 
 	storage.db = db
 
-	err = storage.prepare(storage.path)
+	err = storage.prepareOpenedDatabase()
 	if err != nil {
-		failure := errors.Join(err, db.Close())
+		return fmt.Errorf("prepare opened database: %w", err)
+	}
+
+	return nil
+}
+
+func (storage *Store) prepareOpenedDatabase() error {
+	err := storage.prepare(storage.path)
+	if err != nil {
+		failure := errors.Join(err, storage.db.Close())
 
 		storage.db = nil
 
@@ -1342,6 +1364,8 @@ func openDatabase(path string) (*bolt.DB, error) {
 
 func newStore(db *bolt.DB, scheduler library.Scheduler, path string) *Store {
 	return &Store{
+		path:      path,
+		ready:     atomic.Bool{},
 		db:        db,
 		scheduler: scheduler,
 		mediaDir:  filepath.Join(filepath.Dir(path), "media"),

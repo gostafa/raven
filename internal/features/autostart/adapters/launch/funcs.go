@@ -3,11 +3,15 @@
 
 package launch
 
-import autostart "raven/internal/features/autostart/application"
+import (
+	autostart "raven/internal/features/autostart/application"
+)
 
 // New creates a coalescing queue that is safe before native windows exist.
 func New() *Requests {
-	requests := &Requests{pending: make(chan struct{}, 1)}
+	requests := new(Requests)
+
+	requests.pending = make(chan struct{}, requestBuffer)
 
 	requests.visibility = autostart.NewVisibility(requests.request)
 

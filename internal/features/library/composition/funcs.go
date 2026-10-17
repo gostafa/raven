@@ -13,17 +13,22 @@ import (
 
 	"raven/internal/features/library/adapters/boltstore"
 	"raven/internal/features/library/adapters/desktopmedia"
-	libraryports "raven/internal/features/library/ports"
 )
 
-func newStore(params storeParams) (storeResult, error) {
+func newStore(params storeParams) storeResult {
 	store := boltstore.New(string(params.Path), params.Scheduler, params.Logger)
 	params.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error { return store.Start() },
 		OnStop:  func(context.Context) error { return store.Close() },
 	})
 
-	return storeResult{Store: store, Repository: store, Reminders: store, Settings: store}, nil
+	return storeResult{
+		Out:        fx.Out{},
+		Store:      store,
+		Repository: store,
+		Reminders:  store,
+		Settings:   store,
+	}
 }
 
 func defaultPath() (DatabasePath, error) {
@@ -39,6 +44,6 @@ func newRegistry(store *boltstore.Store, logger *slog.Logger) *desktopmedia.Regi
 	return desktopmedia.NewRegistry(func() http.Handler { return store.MediaHandler() }, logger)
 }
 
-func newSelection(params mediaParams) libraryports.Selection {
+func newSelection(params mediaParams) *desktopmedia.Picker {
 	return desktopmedia.NewPicker(params.App, params.Handles.Main, params.Registry)
 }

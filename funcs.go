@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -34,7 +35,15 @@ func newService(deps serviceParams) *RavenService {
 
 func newLogger() *slog.Logger { return slog.New(slog.NewTextHandler(os.Stderr, nil)) }
 
-func newFxLogger(logger *slog.Logger) fxevent.Logger { return &fxevent.SlogLogger{Logger: logger} }
+//nolint:ireturn // Fx.WithLogger requires a constructor returning its event logger interface.
+func newFxLogger(logger *slog.Logger) fxevent.Logger {
+	var events fxevent.SlogLogger
+
+	events.Logger = logger
+	events.UseLogLevel(slog.LevelDebug)
+
+	return &events
+}
 
 func main() {
 	err := run()
@@ -55,7 +64,7 @@ func run() error {
 
 	err := graph.Err()
 	if err != nil {
-		return err
+		return fmt.Errorf("construct application graph: %w", err)
 	}
 
 	bridge := desktopcomposition.NewBridge(graph, runtime)

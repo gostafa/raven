@@ -20,15 +20,19 @@ var (
 	//go:embed all:frontend/dist
 	assets embed.FS
 	//go:embed build/appicon.png
-	appIcon           []byte
-	applicationModule = fx.Module("raven",
-		fx.Supply(desktopports.Assets{Files: assets, Icon: appIcon}),
-		fx.Provide(newLogger, newService),
+	appIcon []byte
+	//nolint:gochecknoglobals // Fx modules are immutable dependency registration declarations.
+	applicationModule = fx.Options(
+		fx.Provide(newLogger),
 		fx.WithLogger(newFxLogger),
-		librarycomposition.Module,
-		autostartcomposition.Module,
-		companioncomposition.Module,
-		remindercomposition.Module,
-		desktopcomposition.Module,
+		fx.Module("raven",
+			fx.Supply(desktopports.Assets{Files: assets, Icon: appIcon}),
+			fx.Provide(newService),
+			librarycomposition.Module,
+			autostartcomposition.Module,
+			companioncomposition.Module,
+			remindercomposition.Module,
+			desktopcomposition.Module,
+		),
 	)
 )

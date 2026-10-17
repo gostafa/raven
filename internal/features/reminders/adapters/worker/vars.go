@@ -3,6 +3,8 @@
 
 package worker
 
-import "raven/internal/features/reminders/ports"
+import (
+	"raven/internal/features/reminders/ports"
+)
 
 var _ ports.Control = (*Worker)(nil)

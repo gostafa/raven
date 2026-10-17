@@ -3,6 +3,8 @@
 
 package launch
 
-import desktopports "raven/internal/features/desktop/ports"
+import (
+	desktopports "raven/internal/features/desktop/ports"
+)
 
 var _ desktopports.OpenRequests = (*Requests)(nil)
