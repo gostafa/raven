@@ -14,7 +14,7 @@ vars:
 env:
   MACOSX_DEPLOYMENT_TARGET: '{{if eq OS "darwin"}}13.0{{end}}'
   CGO_CFLAGS: '{{if eq OS "darwin"}}-mmacosx-version-min=13.0{{end}}'
-  CGO_LDFLAGS: '{{if eq OS "darwin"}}-mmacosx-version-min=13.0{{end}}'
+  CGO_LDFLAGS: '{{if eq OS "darwin"}}-mmacosx-version-min=13.0 -Wl,-no_warn_duplicate_libraries{{end}}'
   GOFLAGS: '{{if eq OS "darwin"}}-ldflags=-extldflags=-mmacosx-version-min=13.0{{end}}'
 
 includes:
