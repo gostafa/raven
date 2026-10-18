@@ -1,11 +1,24 @@
 ---
 version: '3.5'
 
+includes:
+  bun:
+    taskfile: ../../taskotter/bun/Taskfile.yml
+    internal: true
+
 tasks:
   check:
     desc: Check Raven source conventions and feature behavior
     cmds:
-      - go test ./internal/tooling/conventions
-      - bun run --cwd frontend check
-      - bun run --cwd frontend test
-      - bun run --cwd frontend build
+      - task: :taskotter:go:test
+        vars:
+          CLI_ARGS: ./internal/tooling/conventions
+      - task: bun:_run:unix
+        vars:
+          ARGS: run --cwd frontend check
+      - task: bun:_run:unix
+        vars:
+          ARGS: run --cwd frontend test
+      - task: bun:_run:unix
+        vars:
+          ARGS: run --cwd frontend build
