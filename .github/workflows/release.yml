@@ -92,7 +92,7 @@ jobs:
           $path = 'build/windows/info.json'
           $info = Get-Content $path -Raw | ConvertFrom-Json
           $info.fixed.file_version = $env:RELEASE_VERSION
-          $info.info.'0000'.ProductVersion = $env:RELEASE_VERSION
+          $info.info.'0409'.ProductVersion = $env:RELEASE_VERSION
           $info | ConvertTo-Json -Depth 10 | Set-Content $path -Encoding utf8NoBOM
       - name: Build Windows installer
         shell: pwsh
