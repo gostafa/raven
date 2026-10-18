@@ -13,8 +13,10 @@ import (
 func newRegistry(params registryParams, settings configuration.Settings) *desktopmedia.Registry {
 	return desktopmedia.NewRegistry(
 		params.Batch,
-		func() http.Handler { return params.Store.MediaHandler() },
-		params.Logger,
+		&desktopmedia.Dependencies{
+			Saved:  func() http.Handler { return params.Store.MediaHandler() },
+			Logger: params.Logger,
+		},
 		&desktopmedia.Settings{
 			MediaRoutePrefix:   settings.MediaRoutePrefix(),
 			PreviewRoutePrefix: settings.PreviewRoutePrefix(),

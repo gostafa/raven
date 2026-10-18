@@ -7,8 +7,6 @@ package ports
 import (
 	"context"
 	"net/http"
-
-	mediaapi "raven/api/media"
 )
 
 type (
@@ -20,15 +18,9 @@ type (
 		Run(ctx context.Context, jobs []func(context.Context) error) error
 	}
 
-	// Media selects local files and serves temporary or saved media.
-	Media interface {
-		Selection
-		MediaRoutes
-	}
-
-	// Selection selects local files for a draft.
+	// Selection returns a JSON array of selected local files and preview capabilities.
 	Selection interface {
-		Select(kind string) ([]mediaapi.Selection, error)
+		Select(kind string) (string, error)
 	}
 
 	// MediaRoutes serves previews and persisted content independently of native windows.

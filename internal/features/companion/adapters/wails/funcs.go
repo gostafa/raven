@@ -16,21 +16,36 @@ import (
 // New constructs window capabilities without starting native resources.
 func New(deps *Dependencies, settings *Settings) *Windows {
 	state := newWindowState(deps, settings)
+
 	return newWindowOperations(state)
 }
 
 func newWindowState(deps *Dependencies, settings *Settings) *windowState {
-	state := &windowState{
-		showMain: deps.Main.Show, hideMain: deps.Main.Hide, restoreMain: deps.Main.Restore,
-		focusMain: deps.Main.Focus, showWidget: deps.Widget.Show,
-		widgetPosition: deps.Widget.Position, setWidgetPosition: deps.Widget.SetPosition,
-		getWidgetScreen: deps.Widget.GetScreen, configure: deps.Configure,
-		invoke: application.InvokeSync, primaryScreen: deps.App.Screen.GetPrimary,
-		quit: deps.App.Quit, logger: deps.App.Logger,
-	}
-	bindWindowSettings(state, settings)
-	bindReview(state, deps.Review)
-	return state
+	var state windowState
+
+	bindMainWindow(&state, deps)
+	bindWidgetWindow(&state, deps)
+	bindWindowRuntime(&state, deps)
+	bindWindowSettings(&state, settings)
+	bindReview(&state, deps.Review)
+
+	return &state
+}
+
+func bindMainWindow(state *windowState, deps *Dependencies) {
+	state.showMain, state.hideMain = deps.Main.Show, deps.Main.Hide
+	state.restoreMain, state.focusMain = deps.Main.Restore, deps.Main.Focus
+}
+
+func bindWidgetWindow(state *windowState, deps *Dependencies) {
+	state.showWidget, state.widgetPosition = deps.Widget.Show, deps.Widget.Position
+	state.setWidgetPosition, state.getWidgetScreen = deps.Widget.SetPosition, deps.Widget.GetScreen
+}
+
+func bindWindowRuntime(state *windowState, deps *Dependencies) {
+	state.configure, state.invoke = deps.Configure, application.InvokeSync
+	state.primaryScreen, state.quit = deps.App.Screen.GetPrimary, deps.App.Quit
+	state.logger = deps.App.Logger
 }
 
 func bindWindowSettings(state *windowState, settings *Settings) {
@@ -55,6 +70,7 @@ func bindReview(state *windowState, review *application.WebviewWindow) {
 	if review == nil {
 		return
 	}
+
 	state.showReview, state.hideReview = review.Show, review.Hide
 	state.focusReview, state.reviewVisible = review.Focus, review.IsVisible
 	state.dispatchReview = review.DispatchWailsEvent

@@ -37,6 +37,182 @@ import (
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
 
+func TestJSONRepositoryRoundTripAndLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "raven.db")
+	dependencies := NewDependencies(
+		cffbatch.New(),
+		scheduling.New(new(configuration.Library(configurationFixture()))),
+		storeSettingsFixture(),
+	)
+	repository := New(path, dependencies)
+	if err := repository.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	folderJSON, err := repository.CreateFolder(`{"title":"JSON library","tags":["plain"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var folder folderapi.Folder
+	if err := json.Unmarshal([]byte(folderJSON), &folder); err != nil {
+		t.Fatal(err)
+	}
+	if folders, err := repository.ListFolders(); err != nil ||
+		!strings.Contains(folders, `"JSON library"`) {
+		t.Fatalf("folder response: %s %v", folders, err)
+	}
+	request := encodeFixture(
+		t,
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Prompt", "Answer")},
+	)
+	cardJSON, err := repository.CreateCard(string(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := decodeCardResponse(t, cardJSON)
+	if cards, err := repository.ListCards(); err != nil || !strings.Contains(cards, `"schedule"`) {
+		t.Fatalf("card response: %s %v", cards, err)
+	}
+	items := contentapi.Items(card.Items)
+	updatedJSON, err := repository.UpdateCard(string(encodeFixture(t, &cardapi.UpdateInput{
+		FolderID: folder.ID,
+		CardID:   card.ID,
+		Items: []contentapi.Draft{
+			{ID: items[0].ID, Kind: "text", Text: "Updated"},
+			{ID: items[1].ID, Kind: "text", Text: "Answer"},
+		},
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := decodeCardResponse(t, updatedJSON)
+	if !reflect.DeepEqual(
+		contentapi.Schedule(items[0].Schedule),
+		contentapi.Schedule(contentapi.Items(updated.Items)[0].Schedule),
+	) {
+		t.Fatal("JSON update replaced the retained schedule")
+	}
+	occurrence := notificationOccurrence(&updated, 0)
+	if err := repository.MarkNotified(
+		string(encodeFixture(t, []reviewapi.DueOccurrence{occurrence})),
+	); err != nil {
+		t.Fatal(err)
+	}
+	reviewJSON, err := repository.ReviewItem(string(encodeFixture(t, &cardapi.ReviewInput{
+		FolderID: folder.ID, CardID: card.ID, ItemID: items[0].ID, Rating: 3,
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewed := decodeCardResponse(t, reviewJSON)
+	if len(contentapi.Reviews(contentapi.Items(reviewed.Items)[0].Reviews)) != 2 {
+		t.Fatal("review history did not cross JSON boundary")
+	}
+	for _, claim := range []func() (bool, error){repository.ClaimNotificationPrompt, repository.ClaimAutostartInitialization} {
+		if claimed, err := claim(); err != nil || !claimed {
+			t.Fatalf("first claim: %v %v", claimed, err)
+		}
+	}
+	response := httptest.NewRecorder()
+	repository.MediaHandler().
+		ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/media/missing", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("media route status: %d", response.Code)
+	}
+	if err := repository.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, dependencies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if err := reopened.DeleteCard(folder.ID, card.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.DeleteFolder(folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if folders, err := reopened.ListFolders(); err != nil || folders != "[]" {
+		t.Fatalf("empty array compatibility: %s %v", folders, err)
+	}
+}
+
+func encodeFixture(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return data
+}
+
+func decodeCardResponse(t *testing.T, input string) cardapi.Card {
+	t.Helper()
+	var card cardapi.Card
+	if err := json.Unmarshal([]byte(input), &card); err != nil {
+		t.Fatal(err)
+	}
+	if err := cardapi.Normalize(&card); err != nil {
+		t.Fatal(err)
+	}
+	return card
+}
+
+func TestJSONRepositoryRejectsMalformedRecordsWithoutWrites(t *testing.T) {
+	state := openTestStore(t)
+	repository := &Store{state: state}
+	for _, change := range []func(string) (string, error){repository.CreateFolder, repository.CreateCard, repository.UpdateCard, repository.ReviewItem} {
+		if _, err := change("{"); err == nil {
+			t.Fatal("accepted malformed request")
+		}
+	}
+	if err := repository.MarkNotified(`[{"Due":"invalid"}]`); err == nil {
+		t.Fatal("accepted malformed acknowledgment")
+	}
+	if _, err := repository.CreateFolder(`{"title":""}`); err == nil {
+		t.Fatal("accepted invalid folder")
+	}
+	if folders, err := repository.ListFolders(); err != nil || folders != "[]" {
+		t.Fatalf("failed request wrote data: %s %v", folders, err)
+	}
+	path := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dependencies := NewDependencies(
+		cffbatch.New(),
+		scheduling.New(new(configuration.Library(configurationFixture()))),
+		storeSettingsFixture(),
+	)
+	if _, err := Open(filepath.Join(path, "raven.db"), dependencies); err == nil {
+		t.Fatal("opened a database beneath a regular file")
+	}
+}
+
+func TestRepositoryCodecRejectsInvalidRuntimeValues(t *testing.T) {
+	if _, err := encodeResponse(math.NaN(), nil); err == nil {
+		t.Fatal("accepted non-JSON response")
+	}
+	if _, err := encodeResponse("", io.ErrUnexpectedEOF); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal(err)
+	}
+	if _, _, err := importMediaRecord(nil, json.RawMessage("{"), ""); err == nil {
+		t.Fatal("accepted malformed media record")
+	}
+	if _, err := encodeRecord(&contentapi.Item{Schedule: make(chan int)}); err == nil {
+		t.Fatal("accepted invalid stored schedule")
+	}
+	if settingsValue(nil).MediaRoutePrefix != "" || rulesValue(make(chan int)).TextKind != "" {
+		t.Fatal("invalid config acquired defaults")
+	}
+	if cardRecords(nil) != nil || folderRecords(nil) != nil || indexedRecords(nil) != nil ||
+		itemRecord(nil) != nil {
+		t.Fatal("uninitialized records gained values")
+	}
+}
+
 type failedEntropy struct{}
 
 func (failedEntropy) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
@@ -78,7 +254,12 @@ func TestStorageBoundariesPreserveEncodingEntropyAndDurabilityFailures(t *testin
 		!file.closed {
 		t.Fatalf("sync and close: %v", err)
 	}
-	if err := storeClose((&Store{db: failedDatabase{}})); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := storeClose(
+		func() *persistence { var state persistence; bindDatabase(&state, failedDatabase{}); return &state }(),
+	); !errors.Is(
+		err,
+		io.ErrUnexpectedEOF,
+	) {
 		t.Fatal(err)
 	}
 	if err := writeRecord(nil, nil, make(chan int)); err == nil {
@@ -108,6 +289,81 @@ func TestStorageBoundariesPreserveEncodingEntropyAndDurabilityFailures(t *testin
 	}
 }
 
+func encodeLegacyItem(value any, side string) ([]byte, error) {
+	fields, err := contentapi.Decode[map[string]any](value)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]any, len(fields)+1)
+	for name := range fields {
+		result[name] = fields[name]
+	}
+	result["side"] = side
+	return json.Marshal(result)
+}
+
+func TestLegacyJSONCodecPreservesFlattenedRecords(t *testing.T) {
+	content := contentapi.Item{
+		ID:       "item",
+		FolderID: "folder",
+		CardID:   "card",
+		Kind:     "text",
+		Text:     "remember",
+	}
+	original := legacyItem{Item: content, Side: legacyPromptSide}
+	data, err := encodeLegacyItem(original.Item, original.Side)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["id"] != content.ID || fields["text"] != content.Text ||
+		fields["side"] != legacyPromptSide ||
+		fields["Item"] != nil {
+		t.Fatal("legacy content JSON was nested or renamed", string(data))
+	}
+	restored, err := decodeLegacyRecord(data)
+	if err != nil || legacyContent(restored.Item).ID != content.ID ||
+		restored.Side != original.Side {
+		t.Fatal("flattened legacy JSON did not round trip", restored, err)
+	}
+	if data, err := encodeLegacyItem(
+		nil,
+		legacyAnswerSide,
+	); err != nil ||
+		string(data) != `{"side":"answer"}` {
+		t.Fatal("empty legacy record did not preserve its side", string(data), err)
+	}
+	for _, value := range []any{make(chan struct{}), map[string]any{"invalid": make(chan struct{})}} {
+		if _, err := encodeLegacyItem(value, legacyPromptSide); err == nil {
+			t.Fatal("unsupported legacy fields produced JSON")
+		}
+	}
+	for _, data := range []string{"{", `{"side":12}`, `{"schedule":"invalid"}`} {
+		if _, err := decodeLegacyRecord([]byte(data)); err == nil {
+			t.Fatal("invalid flattened legacy record was accepted", data)
+		}
+	}
+	if legacyContent("invalid").ID != "" {
+		t.Fatal("invalid legacy content produced a record")
+	}
+	fields = map[string]any{"id": "item"}
+	if _, err := encodeLegacyItem(fields, legacyPromptSide); err != nil || fields["side"] != nil {
+		t.Fatal("serializing legacy content mutated its source", fields, err)
+	}
+}
+
+func TestMigrationRejectsInvalidLoadedJSONContent(t *testing.T) {
+	migration := &schemaMigration{loadItems: func(*bolt.Tx, string, string) ([]any, error) {
+		return []any{"invalid"}, nil
+	}}
+	if err := schemaMigrationLoadScheduledContent(migration, nil, &cardapi.Card{}); err == nil {
+		t.Fatal("invalid JSON-valued migrated content was accepted")
+	}
+}
+
 func TestLegacyCorruptionAndFailedScheduleInitialization(t *testing.T) {
 	if compareLegacyItems(
 		&legacyItem{Side: legacyPromptSide},
@@ -128,16 +384,17 @@ func TestLegacyCorruptionAndFailedScheduleInitialization(t *testing.T) {
 		t.Fatal("legacy items on the same side must retain their order")
 	}
 	store := openTestStore(t)
-	migration := &schemaMigration{
-		storage: store,
-		state:   schemaState{version: schemaV1, existing: true},
-	}
+	migration := newSchemaMigration(
+		store,
+		&schemaState{version: schemaV1, existing: true},
+		time.Time{},
+	)
 	for _, data := range []string{"{", `{"prompt":"","answer":"Answer"}`} {
-		if _, err := legacyTextItems(store.settings, []byte(data)); err == nil {
+		if _, err := legacyTextItems(settingsValue(store.settings), []byte(data)); err == nil {
 			t.Fatal("accepted invalid legacy text")
 		}
 	}
-	migration.state.version = "unsupported"
+	migration.version = "unsupported"
 	if _, err := schemaMigrationUnscheduledItems(migration,
 		nil,
 		&cardapi.Card{},
@@ -148,7 +405,7 @@ func TestLegacyCorruptionAndFailedScheduleInitialization(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := mergeLegacyItems(
-		store.settings,
+		settingsValue(store.settings),
 		nil,
 		&cardapi.Card{},
 	); !errors.Is(
@@ -159,7 +416,11 @@ func TestLegacyCorruptionAndFailedScheduleInitialization(t *testing.T) {
 	}
 	card := &cardapi.Card{ID: "card", FolderID: "folder"}
 	for _, data := range []string{"{", `{"id":"wrong"}`, `{"id":"item","folder_id":"folder","card_id":"card","side":"prompt","kind":"text","text":""}`} {
-		if _, err := settingsReadLegacyItem(store.settings, []byte("item"), []byte(data), card); err == nil {
+		if _, err := settingsReadLegacyItem(
+			settingsValue(store.settings),
+			&legacyEntry{id: []byte("item"), value: []byte(data)},
+			card,
+		); err == nil {
 			t.Fatalf("accepted corrupt item %s", data)
 		}
 	}
@@ -171,21 +432,35 @@ func TestLegacyCorruptionAndFailedScheduleInitialization(t *testing.T) {
 	) {
 		t.Fatal(err)
 	}
-	store.scheduler = failedScheduler{}
-	migration.state.version = schemaV1
+	store.initializeSchedule = (failedScheduler{}).Initialize
+	migration.version = schemaV1
+	migration.initialize = store.initializeSchedule
 	card.Items = []contentapi.Item{{ID: "item", Kind: "text", Text: "Prompt"}}
-	if err := schemaMigrationInitializeSchedules(migration, card); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err := schemaMigrationInitializeSchedules(
+		migration,
+		card,
+	); !errors.Is(
+		err,
+		io.ErrUnexpectedEOF,
+	) {
 		t.Fatal(err)
 	}
-	write := &cardWrite{storage: store, items: contentapi.Items(card.Items)}
-	if err := cardWritePersistPreparedCard(write, nil, nil); !errors.Is(err, io.ErrUnexpectedEOF) {
+	write := &cardWrite{items: contentapi.Items(card.Items)}
+	if err := cardWritePersistPreparedCard(
+		store,
+		write,
+		nil,
+	); !errors.Is(
+		err,
+		io.ErrUnexpectedEOF,
+	) {
 		t.Fatal(err)
 	}
 }
 
 func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.db.Update(func(transaction *bolt.Tx) error {
+	if err := store.update(func(transaction *bolt.Tx) error {
 		root := transaction.Bucket([]byte(foldersBucket))
 		folder, err := root.CreateBucket([]byte("legacy"))
 		if err != nil {
@@ -195,14 +470,14 @@ func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		migration := &schemaMigration{
-			storage: store,
-			state:   schemaState{version: schemaV2, existing: true},
-		}
+		migration := newSchemaMigration(
+			store,
+			&schemaState{version: schemaV2, existing: true},
+			time.Time{},
+		)
 		if err := schemaMigrationMigrateFolder(migration,
 			nil,
-			nil,
-			[]byte("invalid"),
+			&legacyEntry{value: []byte("invalid")},
 		); !errors.Is(
 			err,
 			errInvalidLegacyFolder,
@@ -218,7 +493,7 @@ func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 		) {
 			t.Errorf("missing legacy content: %v", err)
 		}
-		migration.state.version = schemaV1
+		migration.version = schemaV1
 		if err := folder.Put([]byte(itemsBucket), []byte("scalar")); err != nil {
 			return err
 		}
@@ -238,7 +513,7 @@ func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 			t.Error("accepted corrupt legacy metadata")
 		}
 		if _, err := legacyTextContent(
-			store.settings,
+			settingsValue(store.settings),
 			folder,
 			&cardapi.Card{ID: "broken"},
 		); err == nil {
@@ -259,7 +534,7 @@ func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 			return err
 		}
 		if _, err := mergeLegacyItems(
-			store.settings,
+			settingsValue(store.settings),
 			content,
 			&cardapi.Card{ID: "broken"},
 		); err == nil {
@@ -275,7 +550,13 @@ func TestCorruptMigrationBucketsAndSchemaCommit(t *testing.T) {
 		if err := root.DeleteBucket([]byte("legacy")); err != nil {
 			return err
 		}
-		if err := schemaMigrationApply(migration, transaction); !errors.Is(err, bolt.ErrIncompatibleValue) {
+		if err := schemaMigrationApply(
+			migration,
+			transaction,
+		); !errors.Is(
+			err,
+			bolt.ErrIncompatibleValue,
+		) {
 			t.Errorf("schema collision: %v", err)
 		}
 		return nil
@@ -294,8 +575,17 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 	t.Cleanup(func() { _ = file.Close() })
 	item := &contentapi.Item{ID: strings.Repeat("a", 32), Kind: "image"}
 	store.mediaDir = filepath.Join(t.TempDir(), "missing")
-	if _, _, err := storeImportOpenedMedia(store, file, item, path); !errors.Is(err, os.ErrNotExist) {
+	if _, _, err := storeImportOpenedMedia(
+		store,
+		&mediaImport{file: file, item: item, source: path},
+	); !errors.Is(
+		err,
+		os.ErrNotExist,
+	) {
 		t.Fatal(err)
+	}
+	if item.RelativePath != "" || item.MIMEType != "" || item.ByteSize != 0 {
+		t.Fatal("failed media import mutated caller metadata", item)
 	}
 	if _, err := openDatabase(filepath.Join(path, "child", "raven.db")); err == nil {
 		t.Fatal("accepted file as database parent")
@@ -327,7 +617,11 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(store.mediaDir, "item.png"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := storeStageAndCommitMedia(store, temp, file, item); err == nil {
+	if _, err := storeStageAndCommitMedia(
+		store,
+		temp,
+		&mediaImport{file: file, item: item},
+	); err == nil {
 		t.Fatal("renamed media over directory")
 	}
 	source, err := os.CreateTemp(t.TempDir(), "commit-*")
@@ -340,7 +634,14 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "target.png")
 	store.mediaDir = filepath.Join(t.TempDir(), "missing")
 	if runtime.GOOS != "windows" {
-		if _, err := storeCommitMedia(store, source.Name(), target); !errors.Is(err, os.ErrNotExist) {
+		if _, err := storeCommitMedia(
+			store,
+			source.Name(),
+			target,
+		); !errors.Is(
+			err,
+			os.ErrNotExist,
+		) {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
@@ -394,16 +695,17 @@ func TestMalformedCardContentAndWriteFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Update(func(transaction *bolt.Tx) error {
+	if err := store.update(func(transaction *bolt.Tx) error {
 		parent := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID))
 		metadata, items := parent.Bucket([]byte(cardsBucket)), parent.Bucket([]byte(itemsBucket))
 		if err := initializeFolder(parent, &folder); !errors.Is(err, bolt.ErrBucketExists) {
 			t.Errorf("duplicate content bucket: %v", err)
 		}
-		migration := &schemaMigration{
-			storage: store,
-			state:   schemaState{version: schemaV4, existing: true},
-		}
+		migration := newSchemaMigration(
+			store,
+			&schemaState{version: schemaV4, existing: true},
+			time.Time{},
+		)
 		expected := card
 		expected.Items = append(
 			append([]contentapi.Item{}, contentapi.Items(card.Items)...),
@@ -436,11 +738,12 @@ func TestMalformedCardContentAndWriteFailures(t *testing.T) {
 		); err == nil {
 			t.Error("accepted invalid migrated order")
 		}
-		if err := cardListingRead((&cardListing{storage: store}), transaction); err == nil {
+		if err := cardListingRead(store, (&cardListing{}), transaction); err == nil {
 			t.Error("listed invalid content order")
 		}
-		write := &cardWrite{storage: store, folderID: folder.ID, card: bad}
-		if err := cardWriteWriteRecords(write, transaction, metadata); err == nil {
+		write := &cardWrite{folderID: folder.ID, card: bad}
+		if err := cardWriteWriteRecords(store, write,
+			&cardTransaction{transaction: transaction, bucket: metadata}); err == nil {
 			t.Error("accepted invalid saved content order")
 		}
 		if err := writeCardRecords(transaction, metadata, &card); err != nil {
@@ -488,9 +791,16 @@ func TestMalformedCardContentAndWriteFailures(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.View(func(transaction *bolt.Tx) error {
-		write := &cardWrite{storage: store, folderID: "missing"}
-		if err := cardWritePersist(write, transaction); !errors.Is(err, errFolderNotFoundOrInvalid) {
+	if err := store.view(func(transaction *bolt.Tx) error {
+		write := &cardWrite{folderID: "missing"}
+		if err := cardWritePersist(
+			store,
+			write,
+			transaction,
+		); !errors.Is(
+			err,
+			errFolderNotFoundOrInvalid,
+		) {
 			t.Errorf("missing destination: %v", err)
 		}
 		return nil
@@ -511,16 +821,16 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.View(func(transaction *bolt.Tx) error {
+	if err := store.view(func(transaction *bolt.Tx) error {
 		parent := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID))
 		metadata, items := parent.Bucket([]byte(cardsBucket)), parent.Bucket([]byte(itemsBucket))
-		migration := &schemaMigration{
-			storage: store,
-			state:   schemaState{version: schemaV4, existing: true},
-		}
+		migration := newSchemaMigration(
+			store,
+			&schemaState{version: schemaV4, existing: true},
+			time.Time{},
+		)
 		if err := schemaMigrationMigrateCard(migration,
-			&migrationFolder{parent: parent, items: items},
-			[]byte(folder.ID),
+			&migrationFolder{parent: parent, items: items, id: []byte(folder.ID)},
 			[]byte(card.ID),
 		); !errors.Is(
 			err,
@@ -529,26 +839,43 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 			t.Errorf("read-only migration: %v", err)
 		}
 		write := &cardWrite{
-			storage:  store,
 			folderID: folder.ID,
 			cardID:   card.ID,
 			items:    contentapi.Items(card.Items),
 		}
-		if err := cardWritePersist(write, transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
+		if err := cardWritePersist(
+			store,
+			write,
+			transaction,
+		); !errors.Is(
+			err,
+			bolt.ErrTxNotWritable,
+		) {
 			t.Errorf("read-only prepared card: %v", err)
 		}
 		review := &cardRating{
-			storage:  store,
 			folderID: folder.ID,
 			cardID:   card.ID,
 			itemID:   contentapi.Items(card.Items)[0].ID,
 			rating:   3,
 			now:      contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).Due,
 		}
-		if err := cardRatingApply(review, transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
+		if err := cardRatingApply(
+			store,
+			review,
+			transaction,
+		); !errors.Is(
+			err,
+			bolt.ErrTxNotWritable,
+		) {
 			t.Errorf("read-only review: %v", err)
 		}
-		if err := cardRatingPersistItem(review, transaction, &contentapi.Item{}); err == nil {
+		review.item = &contentapi.Item{}
+		if err := cardRatingPersistItem(
+			store,
+			review,
+			transaction,
+		); err == nil {
 			t.Error("accepted missing reviewed schedule")
 		}
 		if _, err := storeLookupMedia(store,
@@ -565,17 +892,19 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cardRatingHydrate((&cardRating{})); err == nil {
+	if err := cardRatingHydrate(&cardRating{}); err == nil {
 		t.Fatal("hydrated an empty reviewed card")
 	}
-	if err := store.db.Update(func(transaction *bolt.Tx) error {
+	if err := store.update(func(transaction *bolt.Tx) error {
 		root := transaction.Bucket([]byte(foldersBucket))
 		if err := root.Put([]byte("scalar"), []byte("invalid")); err != nil {
 			return err
 		}
-		if err := cardListingAppendFolder((&cardListing{storage: store, root: root}),
-			[]byte("scalar"),
-			[]byte("invalid"),
+		if err := cardListingAppendFolder(store, (&cardListing{root: root}),
+			&[two][]byte{
+				[]byte("scalar"),
+				[]byte("invalid"),
+			},
 		); !errors.Is(
 			err,
 			errInvalidFolderBucket,
@@ -596,8 +925,8 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 		); err != nil {
 			return err
 		}
-		store.scheduler = failedScheduler{}
-		migration := &schemaMigration{storage: store, state: schemaState{version: schemaV1}}
+		store.initializeSchedule = (failedScheduler{}).Initialize
+		migration := newSchemaMigration(store, &schemaState{version: schemaV1}, time.Time{})
 		if err := schemaMigrationPrepareCardContent(migration,
 			parent,
 			&card,
@@ -611,20 +940,19 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	transaction, err := store.db.(*bolt.DB).Begin(false)
-	if err != nil {
+	var cards *bolt.Bucket
+	if err := store.view(func(transaction *bolt.Tx) error {
+		cards = transaction.Bucket([]byte(foldersBucket)).
+			Bucket([]byte(folder.ID)).
+			Bucket([]byte(cardsBucket))
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
-	cards := transaction.Bucket([]byte(foldersBucket)).
-		Bucket([]byte(folder.ID)).
-		Bucket([]byte(cardsBucket))
-	if err := transaction.Rollback(); err != nil {
-		t.Fatal(err)
-	}
+
 	if err := schemaMigrationMigrateFolderCards((&schemaMigration{}),
 		nil,
 		cards,
-		nil,
 	); !errors.Is(
 		err,
 		bolt.ErrTxClosed,
@@ -635,7 +963,7 @@ func TestReadOnlyReviewAndPreparedCardStages(t *testing.T) {
 
 func TestPersistentMarkersRejectReadOnlyAndCorruptBuckets(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.db.View(func(transaction *bolt.Tx) error {
+	if err := store.view(func(transaction *bolt.Tx) error {
 		for _, claim := range []func(*bolt.Tx) (bool, error){claimLoginSetting, claimNotificationSetting} {
 			if _, err := claim(transaction); !errors.Is(err, bolt.ErrTxNotWritable) {
 				t.Errorf("read-only marker: %v", err)
@@ -645,7 +973,7 @@ func TestPersistentMarkersRejectReadOnlyAndCorruptBuckets(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Update(func(transaction *bolt.Tx) error {
+	if err := store.update(func(transaction *bolt.Tx) error {
 		if err := transaction.DeleteBucket([]byte(metaBucket)); err != nil {
 			return err
 		}
@@ -661,7 +989,12 @@ func TestPersistentMarkersRejectReadOnlyAndCorruptBuckets(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := storeClaimAutostartInitialization(store); !errors.Is(err, bolt.ErrIncompatibleValue) {
+	if _, err := storeClaimAutostartInitialization(
+		store,
+	); !errors.Is(
+		err,
+		bolt.ErrIncompatibleValue,
+	) {
 		t.Fatalf("corrupt login marker: %v", err)
 	}
 	if _, err := storeClaimNotificationPrompt(store); !errors.Is(err, errMissingMetadata) {
@@ -677,10 +1010,11 @@ func TestPersistentMarkersRejectReadOnlyAndCorruptBuckets(t *testing.T) {
 
 func TestMigrationBackupFailuresPreserveCauses(t *testing.T) {
 	store := openTestStore(t)
-	migration := &schemaMigration{
-		storage: store,
-		state:   schemaState{version: schemaV1, existing: true},
-	}
+	migration := newSchemaMigration(
+		store,
+		&schemaState{version: schemaV1, existing: true},
+		time.Time{},
+	)
 	missing := filepath.Join(t.TempDir(), "missing", "raven.db")
 	if err := schemaMigrationBackup(migration, missing); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("backup path: %v", err)
@@ -697,7 +1031,7 @@ func TestMigrationBackupFailuresPreserveCauses(t *testing.T) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("backup directory sync: %v", err)
 	}
-	if err := store.db.Update(func(transaction *bolt.Tx) error {
+	if err := store.update(func(transaction *bolt.Tx) error {
 		return transaction.Bucket([]byte(metaBucket)).Put([]byte(schemaKey), []byte(schemaV4))
 	}); err != nil {
 		t.Fatal(err)
@@ -712,7 +1046,14 @@ func TestMigrationBackupFailuresPreserveCauses(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := schemaMigrationFinishBackup(migration, file, t.TempDir()); !errors.Is(err, os.ErrClosed) {
+	if err := schemaMigrationFinishBackup(
+		migration,
+		file,
+		t.TempDir(),
+	); !errors.Is(
+		err,
+		os.ErrClosed,
+	) {
 		t.Fatalf("closed backup: %v", err)
 	}
 	if err := storeClose(store); err != nil {
@@ -744,14 +1085,15 @@ func TestReadOnlyFolderAndCardWritesPreserveTransactionFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.View(func(transaction *bolt.Tx) error {
+	if err := store.view(func(transaction *bolt.Tx) error {
 		root := transaction.Bucket([]byte(foldersBucket))
 		bucket := root.Bucket([]byte(folder.ID))
 		metadata, items := bucket.Bucket([]byte(cardsBucket)), bucket.Bucket([]byte(itemsBucket))
-		migration := &schemaMigration{
-			storage: store,
-			state:   schemaState{version: schemaV4, existing: true},
-		}
+		migration := newSchemaMigration(
+			store,
+			&schemaState{version: schemaV4, existing: true},
+			time.Time{},
+		)
 		for name, operation := range map[string]func() error{
 			"migration metadata":    func() error { return schemaMigrationApply(migration, transaction) },
 			"migration root":        func() error { return schemaMigrationMigrateRoot(migration, transaction) },
@@ -760,7 +1102,7 @@ func TestReadOnlyFolderAndCardWritesPreserveTransactionFailures(t *testing.T) {
 			"folder metadata":       func() error { return writeFolderMetadata(bucket, &folder) },
 			"folder initialization": func() error { return initializeFolder(bucket, &folder) },
 			"card deletion":         func() error { return deleteOwnedCard(bucket, card.ID) },
-			"card record deletion":  func() error { return storeDeleteCardRecords(store, transaction, folder.ID, card.ID) },
+			"card record deletion":  func() error { return storeDeleteCardRecords(store, transaction, &[two]string{folder.ID, card.ID}) },
 			"item replacement":      func() error { _, err := replaceItemBucket(items, card.ID); return err },
 			"item allocation":       func() error { _, err := replaceItemBucket(items, "new"); return err },
 			"card metadata":         func() error { return putCard(metadata, &card) },
@@ -787,7 +1129,7 @@ func TestReadOnlyFolderAndCardWritesPreserveTransactionFailures(t *testing.T) {
 
 func TestCorruptLibraryRootsAndExhaustedSequences(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.db.Update(func(transaction *bolt.Tx) error {
+	if err := store.update(func(transaction *bolt.Tx) error {
 		root := transaction.Bucket([]byte(foldersBucket))
 		if err := root.SetSequence(math.MaxUint64); err != nil {
 			return err
@@ -815,7 +1157,7 @@ func TestCorruptLibraryRootsAndExhaustedSequences(t *testing.T) {
 		}
 		for _, operation := range []func() error{
 			func() error { return folderListingRead((&folderListing{}), transaction) },
-			func() error { return cardListingRead((&cardListing{}), transaction) },
+			func() error { return cardListingRead(store, (&cardListing{}), transaction) },
 			func() error { return persistNewFolder(transaction, &folderapi.Folder{}) },
 			func() error { return validateDestinationFolder(transaction, "folder") },
 		} {
@@ -846,10 +1188,22 @@ func TestCorruptLibraryRootsAndExhaustedSequences(t *testing.T) {
 	) {
 		t.Fatal(err)
 	}
-	if err := cardContentReaderLoad((&cardContentReader{}), nil); !errors.Is(err, errMissingCardContent) {
+	if err := cardContentReaderLoad(
+		(&cardContentReader{}),
+		nil,
+	); !errors.Is(
+		err,
+		errMissingCardContent,
+	) {
 		t.Fatal(err)
 	}
-	if _, err := storeUpdateCard(store, &cardapi.UpdateInput{}); !errors.Is(err, errCardIDIsRequired) {
+	if _, err := storeUpdateCard(
+		store,
+		&cardapi.UpdateInput{},
+	); !errors.Is(
+		err,
+		errCardIDIsRequired,
+	) {
 		t.Fatal(err)
 	}
 }
@@ -872,7 +1226,7 @@ func TestMediaSignaturesAndFailedFileOperations(t *testing.T) {
 			t.Errorf("%s signature: %v", test.declared, got)
 		}
 	}
-	if mediaAlias(settings, settings.Rules.MIMEOggAudio) != "application/ogg" {
+	if mediaAlias(settings, rulesValue(settings.Rules).MIMEOggAudio) != "application/ogg" {
 		t.Fatal("lost Ogg alias")
 	}
 	store := openTestStore(t)
@@ -890,9 +1244,7 @@ func TestMediaSignaturesAndFailedFileOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := settingsInspectMedia(settings,
-		file,
-		"image",
-		"selected.png",
+		&mediaImport{file: file, source: "selected.png", item: &contentapi.Item{Kind: "image"}},
 	); !errors.Is(
 		err,
 		os.ErrClosed,
@@ -901,7 +1253,7 @@ func TestMediaSignaturesAndFailedFileOperations(t *testing.T) {
 	}
 	var logs bytes.Buffer
 	store.logger = slog.New(slog.NewTextHandler(&logs, nil))
-	storeCloseMediaFile(store, t.Context(), file)
+	storeCloseMediaFile(t.Context(), store, file)
 	storeReportCleanupFailure(store, io.ErrUnexpectedEOF)
 	if logs.Len() == 0 {
 		t.Fatal("file cleanup errors were not logged")
@@ -1004,9 +1356,9 @@ func TestCardsPersistWithReviewSchedule(t *testing.T) {
 
 // Noncanonical JSON and a sequence marker reveal accidental bucket replacement
 // and rewriting of records that do not belong to an update.
-func markItemBucket(t *testing.T, store *Store, card *cardapi.Card) map[string][]byte {
+func markItemBucket(t *testing.T, store *persistence, card *cardapi.Card) map[string][]byte {
 	t.Helper()
-	err := store.db.Update(func(tx *bolt.Tx) error {
+	err := store.update(func(tx *bolt.Tx) error {
 		bucket := testItemBucket(tx, card)
 		if err := bucket.SetSequence(42); err != nil {
 			return err
@@ -1031,10 +1383,10 @@ func testItemBucket(tx *bolt.Tx, card *cardapi.Card) *bolt.Bucket {
 		Bucket([]byte(itemsBucket)).Bucket([]byte(card.ID))
 }
 
-func snapshotItemRecords(t *testing.T, store *Store, card *cardapi.Card) map[string][]byte {
+func snapshotItemRecords(t *testing.T, store *persistence, card *cardapi.Card) map[string][]byte {
 	t.Helper()
 	records := make(map[string][]byte)
-	err := store.db.View(func(tx *bolt.Tx) error {
+	err := store.view(func(tx *bolt.Tx) error {
 		bucket := testItemBucket(tx, card)
 		if bucket.Sequence() != 42 {
 			t.Error("item bucket sequence changed")
@@ -1082,9 +1434,9 @@ func TestReviewWritesOnlyOwnedItemAndReturnsHydratedCard(t *testing.T) {
 	assertReopenedCards(t, store, listed)
 }
 
-func assertReopenedCards(t *testing.T, store *Store, expected []cardapi.Card) {
+func assertReopenedCards(t *testing.T, store *persistence, expected []cardapi.Card) {
 	t.Helper()
-	path := store.db.Path()
+	path := store.databasePath()
 	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
@@ -1135,7 +1487,7 @@ func TestNotificationBatchWritesOnlyChangedItems(t *testing.T) {
 			}
 		}
 	}
-	err := store.db.Update(func(tx *bolt.Tx) error {
+	err := store.update(func(tx *bolt.Tx) error {
 		if err := storeMarkOccurrences(store, tx, batch); err != nil {
 			return err
 		}
@@ -1191,7 +1543,7 @@ func TestTargetedUpdatesStillValidateSiblingContent(t *testing.T) {
 			store, cards := persistenceFixture(t, 2)
 			card := &cards[0]
 			markItemBucket(t, store, card)
-			if err := store.db.Update(func(tx *bolt.Tx) error {
+			if err := store.update(func(tx *bolt.Tx) error {
 				return testItemBucket(
 					tx,
 					card,
@@ -1209,7 +1561,10 @@ func TestTargetedUpdatesStillValidateSiblingContent(t *testing.T) {
 					Rating:   3,
 				})
 			} else {
-				err = storeMarkNotified(store, []reviewapi.DueOccurrence{notificationOccurrence(card, 0)})
+				err = storeMarkNotified(
+					store,
+					[]reviewapi.DueOccurrence{notificationOccurrence(card, 0)},
+				)
 			}
 			if err == nil {
 				t.Fatal("corrupt sibling content was ignored")
@@ -1223,14 +1578,17 @@ func TestTargetedUpdatesStillValidateSiblingContent(t *testing.T) {
 
 func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
-	store := New(
+	store := newPersistence(
 		path,
-		&Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    storageLogger(nil),
-			Settings:  *storeSettingsFixture(),
-		},
+		func() *Dependencies {
+			deps := NewDependencies(
+				cffbatch.New(),
+				scheduling.New(new(configuration.Library(configurationFixture()))),
+				storeSettingsFixture(),
+			)
+			deps.Logger = storageLogger(nil)
+			return deps
+		}(),
 	)
 	if err := storeClose(store); err != nil {
 		t.Fatal(err)
@@ -1262,14 +1620,13 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkUnavailable()
-	reopened, err := Open(
+	reopened, err := openPersistenceStore(
 		path,
-		&Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    nil,
-			Settings:  *storeSettingsFixture(),
-		},
+		NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
 	)
 	if err != nil {
 		t.Fatalf("managed shutdown retained lock: %v", err)
@@ -1297,14 +1654,17 @@ func TestFailedPreparationReleasesManagedDatabase(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store := New(
+	store := newPersistence(
 		path,
-		&Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    storageLogger(nil),
-			Settings:  *storeSettingsFixture(),
-		},
+		func() *Dependencies {
+			deps := NewDependencies(
+				cffbatch.New(),
+				scheduling.New(new(configuration.Library(configurationFixture()))),
+				storeSettingsFixture(),
+			)
+			deps.Logger = storageLogger(nil)
+			return deps
+		}(),
 	)
 	if err := storeStart(store); err == nil {
 		t.Fatal("accepted unsupported schema")
@@ -1474,7 +1834,7 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 			}
 		}
 	}
-	if err := s.db.View(func(tx *bolt.Tx) error {
+	if err := s.view(func(tx *bolt.Tx) error {
 		bucket, _ := cardBucket(tx, folder.ID)
 		data := bucket.Get([]byte(card.ID))
 		if bytes.Contains(data, []byte(`"items"`)) || bytes.Contains(data, []byte(`"prompt"`)) {
@@ -1525,7 +1885,7 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	if _, err := os.Stat(storeMediaPath(s, removed.RelativePath)); !os.IsNotExist(err) {
 		t.Fatal("removed media not cleaned")
 	}
-	path := s.db.Path()
+	path := s.databasePath()
 	if err := storeClose(s); err != nil {
 		t.Fatal(err)
 	}
@@ -1592,7 +1952,7 @@ func TestContentValidationAndRollback(t *testing.T) {
 		t.Fatal("failed import left media files")
 	}
 	// Force a failure inside the write transaction after a successful copy.
-	if err := s.db.Update(
+	if err := s.update(
 		func(tx *bolt.Tx) error { bucket, _ := cardBucket(tx, folder.ID); return bucket.SetSequence(0) },
 	); err != nil {
 		t.Fatal(err)
@@ -1680,7 +2040,9 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 			t.Fatal("HEAD included body")
 		}
 	}
-	if err := os.Remove(storeMediaPath(s, contentapi.Items(card.Items)[0].RelativePath)); err != nil {
+	if err := os.Remove(
+		storeMediaPath(s, contentapi.Items(card.Items)[0].RelativePath),
+	); err != nil {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
@@ -1698,7 +2060,7 @@ func TestMediaOnlyCardsStreamingAndCleanup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	path := s.db.Path()
+	path := s.databasePath()
 	if err := storeClose(s); err != nil {
 		t.Fatal(err)
 	}
@@ -1992,7 +2354,7 @@ func TestSidedContentMigration(t *testing.T) {
 				t.Fatal(err)
 			}
 			originals := map[string][]byte{}
-			err = s.db.Update(func(tx *bolt.Tx) error {
+			err = s.update(func(tx *bolt.Tx) error {
 				if err := tx.Bucket([]byte(metaBucket)).
 					Put([]byte(schemaKey), []byte("2")); err != nil {
 					return err
@@ -2099,7 +2461,7 @@ func TestSidedContentMigration(t *testing.T) {
 			); err != nil {
 				t.Fatal("migration lost media file")
 			}
-			err = s.db.View(func(tx *bolt.Tx) error {
+			err = s.view(func(tx *bolt.Tx) error {
 				if string(tx.Bucket([]byte(metaBucket)).Get([]byte(schemaKey))) != "5" {
 					t.Fatal("schema not upgraded")
 				}
@@ -2165,7 +2527,7 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 	if err := storeDeleteCard(s, first.ID, removed.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.db.View(func(tx *bolt.Tx) error {
+	if err := s.view(func(tx *bolt.Tx) error {
 		if tx.Bucket([]byte(foldersBucket)).
 			Bucket([]byte(first.ID)).
 			Bucket([]byte(itemsBucket)).
@@ -2201,7 +2563,7 @@ func TestDeletionPreservesOtherFolders(t *testing.T) {
 	}
 }
 
-func openTestStore(t *testing.T) *Store {
+func openTestStore(t *testing.T) *persistence {
 	t.Helper()
 	store, err := openStore(filepath.Join(t.TempDir(), "raven.db"))
 	if err != nil {
@@ -2272,7 +2634,7 @@ func TestFoldersPersistInCreationOrderWithCardsBuckets(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("reopened folders: got=%+v, want=%+v, error=%v", got, want, err)
 	}
-	err = store.db.View(func(tx *bolt.Tx) error {
+	err = store.view(func(tx *bolt.Tx) error {
 		root := tx.Bucket([]byte(foldersBucket))
 		for _, folder := range want {
 			bucket := root.Bucket([]byte(folder.ID))
@@ -2343,7 +2705,7 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 		t.Fatal(err)
 	}
 	// Force a collision after NextSequence so the failed transaction must roll it back.
-	if err := store.db.Update(func(tx *bolt.Tx) error {
+	if err := store.update(func(tx *bolt.Tx) error {
 		return tx.Bucket([]byte(foldersBucket)).SetSequence(0)
 	}); err != nil {
 		t.Fatal(err)
@@ -2356,7 +2718,7 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 	) {
 		t.Fatalf("expected bucket collision, got %v", err)
 	}
-	if err := store.db.View(func(tx *bolt.Tx) error {
+	if err := store.view(func(tx *bolt.Tx) error {
 		if sequence := tx.Bucket([]byte(foldersBucket)).Sequence(); sequence != 0 {
 			return fmt.Errorf("failed transaction advanced sequence to %d", sequence)
 		}
@@ -2373,11 +2735,11 @@ func TestFailedCreationRollsBackSequenceAndPreservesExistingFolder(t *testing.T)
 func TestDatabaseLockTimesOut(t *testing.T) {
 	store := openTestStore(t)
 	start := time.Now()
-	other, err := openStore(store.db.Path())
+	other, err := openStore(store.databasePath())
 	if other != nil {
 		_ = storeClose(other)
 	}
-	if !errors.Is(err, bolt.ErrTimeout) || !strings.Contains(err.Error(), store.db.Path()) {
+	if !errors.Is(err, bolt.ErrTimeout) || !strings.Contains(err.Error(), store.databasePath()) {
 		t.Fatalf("expected lock timeout with path, got %v", err)
 	}
 	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 5*time.Second {
@@ -2411,7 +2773,7 @@ func TestReadFailureDoesNotReturnPartialFolders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.db.Update(func(tx *bolt.Tx) error {
+	if err := store.update(func(tx *bolt.Tx) error {
 		return tx.Bucket([]byte(foldersBucket)).
 			Bucket([]byte("00000000000000000002")).
 			Put([]byte(metadataKey), []byte("{broken"))
@@ -2559,7 +2921,7 @@ func TestNotificationAcknowledgmentPersistsAndRejectsStaleSchedules(t *testing.T
 	if err != nil || !claimed {
 		t.Fatal("first authorization not claimed")
 	}
-	path := s.db.Path()
+	path := s.databasePath()
 	_ = storeClose(s)
 	reopened, err := openStore(path)
 	if err != nil {
@@ -2593,7 +2955,7 @@ func TestV3MigrationInitializesAllItemsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = s.db.Update(func(tx *bolt.Tx) error {
+	err = s.update(func(tx *bolt.Tx) error {
 		if err := tx.Bucket([]byte(metaBucket)).Put([]byte(schemaKey), []byte("3")); err != nil {
 			return err
 		}
@@ -2691,7 +3053,7 @@ func TestAutostartMarkerPersistsWithoutChangingContentOrSchema(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("cards changed: %+v, %v", cards, err)
 	}
-	if err := s.db.View(func(tx *bolt.Tx) error {
+	if err := s.view(func(tx *bolt.Tx) error {
 		if string(tx.Bucket([]byte(metaBucket)).Get([]byte(schemaKey))) != "5" {
 			t.Fatal("settings changed schema version")
 		}
@@ -2730,15 +3092,14 @@ func TestAutostartMarkerFailsOnClosedDatabase(t *testing.T) {
 	}
 }
 
-func openStore(path string) (*Store, error) {
-	return Open(
+func openStore(path string) (*persistence, error) {
+	return openPersistenceStore(
 		path,
-		&Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    nil,
-			Settings:  *storeSettingsFixture(),
-		},
+		NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
 	)
 }
 
@@ -2814,7 +3175,7 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 	if err != nil || !claimed {
 		t.Fatalf("claim prompt: %v %v", claimed, err)
 	}
-	err = storage.db.Update(func(tx *bolt.Tx) error {
+	err = storage.update(func(tx *bolt.Tx) error {
 		folderBucket := tx.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID))
 		cardsBucket := folderBucket.Bucket([]byte(cardsBucket))
 		if err := cardsBucket.Put(
@@ -2855,11 +3216,13 @@ func TestV4MigrationPreservesSchedulesHistoryMediaAndMarkers(t *testing.T) {
 		if claimed, err := storeClaimNotificationPrompt(reopened); err != nil || claimed {
 			t.Fatalf("lost prompt marker: %v %v", claimed, err)
 		}
-		data, err := os.ReadFile(storeMediaPath(reopened, contentapi.Items(want.Items)[1].RelativePath))
+		data, err := os.ReadFile(
+			storeMediaPath(reopened, contentapi.Items(want.Items)[1].RelativePath),
+		)
 		if err != nil || !bytes.Equal(data, contents) {
 			t.Fatalf("lost media: %v", err)
 		}
-		err = reopened.db.View(func(tx *bolt.Tx) error {
+		err = reopened.view(func(tx *bolt.Tx) error {
 			if string(tx.Bucket([]byte(metaBucket)).Get([]byte(schemaKey))) != "5" {
 				t.Fatal("schema not upgraded")
 			}
@@ -2925,7 +3288,7 @@ func TestV4MigrationFailureRollsBackOriginalRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	var original []byte
-	err = storage.db.Update(func(tx *bolt.Tx) error {
+	err = storage.update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte(foldersBucket)).
 			Bucket([]byte(folder.ID)).
 			Bucket([]byte(cardsBucket))
@@ -3033,7 +3396,10 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 		}
 	})
 	item := contentapi.Item{ID: strings.Repeat("a", 32), Kind: "image"}
-	if err = settingsInspectImportedMedia(storeSettingsFixture(), source, path, &item); err != nil {
+	if err = settingsInspectImportedMedia(
+		storeSettingsFixture(),
+		&mediaImport{file: source, source: path, item: &item},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if item.ByteSize != int64(len(content)) || item.MIMEType != "image/png" {
@@ -3041,8 +3407,7 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 	}
 	item.ByteSize++
 	if _, err = storePersistMedia(store,
-		source,
-		&item,
+		&mediaImport{file: source, source: path, item: &item},
 	); !errors.Is(
 		err,
 		errSelectedFileChangedDuringImportTryAgain,
@@ -3072,9 +3437,7 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 		t.Fatalf("copy failure left destination open: %v", err)
 	}
 	if err = settingsInspectImportedMedia(storeSettingsFixture(),
-		closed,
-		path,
-		&item,
+		&mediaImport{file: closed, source: path, item: &item},
 	); !errors.Is(
 		err,
 		os.ErrClosed,
@@ -3127,7 +3490,10 @@ func TestStoredContentIsValidatedWhenRead(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			store := openTestStore(t)
-			folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Stored validation"})
+			folder, err := storeCreateFolder(
+				store,
+				&folderapi.CreateInput{Title: "Stored validation"},
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3143,7 +3509,7 @@ func TestStoredContentIsValidatedWhenRead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = store.db.Update(func(tx *bolt.Tx) error {
+			err = store.update(func(tx *bolt.Tx) error {
 				return tx.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID)).
 					Bucket([]byte(itemsBucket)).
 					Bucket([]byte(card.ID)).Put([]byte(contentapi.Items(card.Items)[0].ID), data)
@@ -3175,7 +3541,7 @@ func TestCardReadFailureDoesNotReturnPartialResults(t *testing.T) {
 	if err != nil || len(cards) != 2 {
 		t.Fatalf("cards=%v error=%v", cards, err)
 	}
-	err = store.db.Update(func(tx *bolt.Tx) error {
+	err = store.update(func(tx *bolt.Tx) error {
 		return tx.Bucket([]byte(foldersBucket)).
 			Bucket([]byte(folder.ID)).
 			Bucket([]byte(cardsBucket)).
@@ -3215,15 +3581,13 @@ func storeSettingsFixture() *Settings {
 
 func TestConfiguredContentAndMediaRouteSurvivePersistence(t *testing.T) {
 	settings := storeSettingsFixture()
-	settings.Rules.TextKind = "plain"
+	rules := *rulesValue(settings.Rules)
+	rules.TextKind = "plain"
+	settings.Rules = rules
 	settings.MediaRoutePrefix = "/saved/"
 	path := filepath.Join(t.TempDir(), "raven.db")
-	deps := &Dependencies{
-		Batch:     cffbatch.New(),
-		Scheduler: scheduling.New(&settings.Rules),
-		Settings:  *settings,
-	}
-	store, err := Open(path, deps)
+	deps := NewDependencies(cffbatch.New(), scheduling.New(rulesValue(settings.Rules)), settings)
+	store, err := openPersistenceStore(path, deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3244,7 +3608,7 @@ func TestConfiguredContentAndMediaRouteSurvivePersistence(t *testing.T) {
 	if err := storeClose(store); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(path, deps)
+	reopened, err := openPersistenceStore(path, deps)
 	if err != nil {
 		t.Fatal(err)
 	}

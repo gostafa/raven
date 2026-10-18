@@ -31,7 +31,7 @@ func BenchmarkPersistence(b *testing.B) {
 	}
 }
 
-func persistenceFixture(tb testing.TB, count int) (*Store, []cardapi.Card) {
+func persistenceFixture(tb testing.TB, count int) (*persistence, []cardapi.Card) {
 	tb.Helper()
 	store, err := openStore(filepath.Join(tb.TempDir(), "raven.db"))
 	if err != nil {
@@ -85,7 +85,7 @@ func benchmarkPersistence(b *testing.B, operation string, count int) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		before := store.db.Stats()
+		before := store.databaseStats()
 		switch operation {
 		case "list":
 			if _, err := storeListCards(store); err != nil {
@@ -110,7 +110,7 @@ func benchmarkPersistence(b *testing.B, operation string, count int) {
 				b.Fatal(err)
 			}
 		}
-		after := store.db.Stats()
+		after := store.databaseStats()
 		delta := after.Sub(&before)
 		pages += delta.TxStats.GetPageCount()
 		writes += delta.TxStats.GetWrite()
@@ -125,9 +125,9 @@ func benchmarkPersistence(b *testing.B, operation string, count int) {
 	b.ReportMetric(float64(writes)/float64(b.N), "writes/op")
 }
 
-func resetPersistenceBenchmark(b *testing.B, store *Store, cards []cardapi.Card) {
+func resetPersistenceBenchmark(b *testing.B, store *persistence, cards []cardapi.Card) {
 	b.Helper()
-	err := store.db.Update(func(tx *bolt.Tx) error {
+	err := store.update(func(tx *bolt.Tx) error {
 		for index := range cards {
 			card := &cards[index]
 			bucket := tx.Bucket([]byte(foldersBucket)).Bucket([]byte(card.FolderID)).
@@ -188,7 +188,7 @@ func benchmarkImports(b *testing.B, size, count int, parallel bool) {
 	if parallel {
 		batch = cffbatch.New()
 	}
-	store.batch = batch
+	store.batch = batch.Run
 	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Benchmark"})
 	if err != nil {
 		b.Fatal(err)
@@ -207,7 +207,10 @@ func benchmarkImports(b *testing.B, size, count int, parallel bool) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		card, err := storeCreateCard(store, &cardapi.CreateInput{FolderID: folder.ID, Items: drafts})
+		card, err := storeCreateCard(
+			store,
+			&cardapi.CreateInput{FolderID: folder.ID, Items: drafts},
+		)
 		if err != nil {
 			b.Fatal(err)
 		}

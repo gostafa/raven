@@ -4,11 +4,13 @@ import { createMediaURL } from '../../cards';
 import type { AppPorts, RuntimeConfiguration } from '../domain/types';
 import {
   configurationFromTransport,
+  parseTransport,
   folderFromTransport,
   cardFromTransport,
   draftToTransport,
   mediaFromTransport,
 } from './transport/funcs';
+import type { TransportFolder, TransportCard, TransportMedia, TransportConfiguration } from './transport/types';
 async function call<T>(action: () => Promise<T>): Promise<T> {
   try {
     return await action();
@@ -21,31 +23,47 @@ export function createRuntime(configuration: RuntimeConfiguration): AppPorts {
   return {
     configuration,
     mediaURL: createMediaURL(configuration.mediaRoutePrefix),
-    ListFolders: () => call(async () => ((await RavenService.ListFolders()) ?? []).map(folderFromTransport)),
-    CreateFolder: (input) => call(async () => folderFromTransport(await RavenService.CreateFolder(input))),
+    ListFolders: () =>
+      call(async () =>
+        ((parseTransport(await RavenService.ListFolders()) as TransportFolder[] | null) ?? []).map(folderFromTransport),
+      ),
+    CreateFolder: (input) =>
+      call(async () =>
+        folderFromTransport(parseTransport(await RavenService.CreateFolder(JSON.stringify(input))) as TransportFolder),
+      ),
     DeleteFolder: (id) => call(() => RavenService.DeleteFolder(id)),
     ListCards: () =>
       call(async () =>
-        ((await RavenService.ListCards()) ?? []).map((card) => cardFromTransport(card, configuration.textKind)),
+        ((parseTransport(await RavenService.ListCards()) as TransportCard[] | null) ?? []).map((card) =>
+          cardFromTransport(card, configuration.textKind),
+        ),
       ),
     CreateCard: (input) =>
       call(async () =>
         cardFromTransport(
-          await RavenService.CreateCard({
-            folder_id: input.folderId,
-            items: input.items.map((draft) => draftToTransport(draft, configuration.textKind)),
-          }),
+          parseTransport(
+            await RavenService.CreateCard(
+              JSON.stringify({
+                folder_id: input.folderId,
+                items: input.items.map((draft) => draftToTransport(draft, configuration.textKind)),
+              }),
+            ),
+          ) as TransportCard,
           configuration.textKind,
         ),
       ),
     UpdateCard: (input) =>
       call(async () =>
         cardFromTransport(
-          await RavenService.UpdateCard({
-            folder_id: input.folderId,
-            card_id: input.cardId,
-            items: input.items.map((draft) => draftToTransport(draft, configuration.textKind)),
-          }),
+          parseTransport(
+            await RavenService.UpdateCard(
+              JSON.stringify({
+                folder_id: input.folderId,
+                card_id: input.cardId,
+                items: input.items.map((draft) => draftToTransport(draft, configuration.textKind)),
+              }),
+            ),
+          ) as TransportCard,
           configuration.textKind,
         ),
       ),
@@ -53,17 +71,25 @@ export function createRuntime(configuration: RuntimeConfiguration): AppPorts {
     ReviewItem: (folder, card, item, rating) =>
       call(async () =>
         cardFromTransport(
-          await RavenService.ReviewItem({
-            folder_id: folder,
-            card_id: card,
-            item_id: item,
-            rating,
-          }),
+          parseTransport(
+            await RavenService.ReviewItem(
+              JSON.stringify({
+                folder_id: folder,
+                card_id: card,
+                item_id: item,
+                rating,
+              }),
+            ),
+          ) as TransportCard,
           configuration.textKind,
         ),
       ),
     SelectMediaFiles: (kind) =>
-      call(async () => ((await RavenService.SelectMediaFiles(kind)) ?? []).map(mediaFromTransport)),
+      call(async () =>
+        ((parseTransport(await RavenService.SelectMediaFiles(kind)) as TransportMedia[] | null) ?? []).map(
+          mediaFromTransport,
+        ),
+      ),
     ShowMain: () => call(() => RavenService.ShowMain()),
     HideMain: () => call(() => RavenService.HideMain()),
     ResetWidget: () => call(() => RavenService.ResetWidget()),
@@ -90,5 +116,7 @@ export function createRuntime(configuration: RuntimeConfiguration): AppPorts {
 }
 
 export async function loadConfiguration(): Promise<RuntimeConfiguration> {
-  return call(async () => configurationFromTransport(await RavenService.GetConfiguration()));
+  return call(async () =>
+    configurationFromTransport(parseTransport(await RavenService.GetConfiguration()) as TransportConfiguration),
+  );
 }

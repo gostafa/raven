@@ -4,6 +4,11 @@
 package application
 
 const (
+	initializeCommand = "initialize"
+	toggleCommand     = "toggle"
+	startedCommand    = "started"
+	classifyCommand   = "classify"
+	openCommand       = "open"
 	autostartArgument = "--autostart"
 	requestBuffer     = 1
 )

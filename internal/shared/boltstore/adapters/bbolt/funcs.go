@@ -19,8 +19,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -31,12 +29,165 @@ import (
 	folderapi "raven/api/folders"
 	reviewapi "raven/api/reviews"
 	library "raven/internal/shared/boltstore/domain"
+	"raven/internal/shared/boltstore/ports"
 	localfiles "raven/internal/shared/filesystem"
 )
 
+// New constructs persistence without acquiring resources.
+func New(path string, dependencies *Dependencies) *Store {
+	return &Store{state: newPersistence(path, dependencies)}
+}
+
+// Open opens and migrates persistence before returning the repository.
+func Open(path string, dependencies *Dependencies) (*Store, error) {
+	state, err := openPersistenceStore(path, dependencies)
+	if err != nil {
+		return nil, fmt.Errorf("open repository: %w", err)
+	}
+
+	return &Store{state: state}, nil
+}
+
+// Start acquires the database and reconciles existing content.
+func (storage *Store) Start() error { return errors.Join(storeStart(storage.state)) }
+
+// Close releases the database after active media operations finish.
+func (storage *Store) Close() error { return errors.Join(storeClose(storage.state)) }
+
+// ListFolders returns folder metadata as a JSON array in creation order.
+func (storage *Store) ListFolders() (string, error) {
+	value, err := encodeResponse(storeListFolders(storage.state))
+
+	return value, errors.Join(err)
+}
+
+// ListCards returns fully hydrated cards as a JSON array.
+func (storage *Store) ListCards() (string, error) {
+	value, err := encodeResponse(storeListCards(storage.state))
+
+	return value, errors.Join(err)
+}
+
+// CreateFolder persists a folder described by JSON metadata.
+func (storage *Store) CreateFolder(input string) (string, error) {
+	value, err := changeRecord(storage.state, input, storeCreateFolder)
+
+	return value, errors.Join(err)
+}
+
+// CreateCard initializes and persists JSON draft content.
+func (storage *Store) CreateCard(input string) (string, error) {
+	value, err := changeRecord(storage.state, input, storeCreateCard)
+
+	return value, errors.Join(err)
+}
+
+// UpdateCard preserves retained schedules while replacing JSON draft content.
+func (storage *Store) UpdateCard(input string) (string, error) {
+	value, err := changeRecord(storage.state, input, storeUpdateCard)
+
+	return value, errors.Join(err)
+}
+
+// ReviewItem records a JSON review attempt and advances its schedule.
+func (storage *Store) ReviewItem(input string) (string, error) {
+	value, err := changeRecord(storage.state, input, storeReviewItem)
+
+	return value, errors.Join(err)
+}
+
+// DeleteFolder deletes a folder and its owned content.
+func (storage *Store) DeleteFolder(folderID string) error {
+	return errors.Join(storeDeleteFolder(storage.state, folderID))
+}
+
+// DeleteCard deletes a card from its owning folder.
+func (storage *Store) DeleteCard(folderID, cardID string) error {
+	return errors.Join(storeDeleteCard(storage.state, folderID, cardID))
+}
+
+// MarkNotified acknowledges a JSON batch only while its schedules remain current.
+func (storage *Store) MarkNotified(input string) error {
+	return errors.Join(acknowledgeRecords(storage.state, input))
+}
+
+// ClaimNotificationPrompt persists the one-time authorization decision.
+func (storage *Store) ClaimNotificationPrompt() (bool, error) {
+	claimed, err := storeClaimNotificationPrompt(storage.state)
+
+	return claimed, errors.Join(err)
+}
+
+// ClaimAutostartInitialization claims the one-time login startup initialization.
+func (storage *Store) ClaimAutostartInitialization() (bool, error) {
+	claimed, err := storeClaimAutostartInitialization(storage.state)
+
+	return claimed, errors.Join(err)
+}
+
+// MediaHandler serves only media owned by persisted content.
+func (storage *Store) MediaHandler() http.HandlerFunc { return storeMediaHandler(storage.state) }
+
+func encodeResponse[Value any](value Value, failure error) (string, error) {
+	if failure != nil {
+		return "", fmt.Errorf("execute repository operation: %w", failure)
+	}
+
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("encode repository response: %w", err)
+	}
+
+	return string(data), nil
+}
+
+func changeRecord[Input, Output any](
+	storage *persistence,
+	input string,
+	change func(*persistence, *Input) (Output, error),
+) (string, error) {
+	value, err := decodeJSON[Input]([]byte(input))
+	if err != nil {
+		return "", fmt.Errorf("decode repository request: %w", err)
+	}
+
+	result, err := encodeResponse(change(storage, &value))
+
+	return result, errors.Join(err)
+}
+
+func acknowledgeRecords(storage *persistence, input string) error {
+	occurrences, err := decodeJSON[[]reviewapi.DueOccurrence]([]byte(input))
+	if err != nil {
+		return fmt.Errorf("decode notification acknowledgment: %w", err)
+	}
+
+	return errors.Join(storeMarkNotified(storage, occurrences))
+}
+
+func importMediaRecord(
+	storage *persistence,
+	data json.RawMessage,
+	source string,
+) (encoded json.RawMessage, path string, err error) {
+	item, err := decodeJSON[contentapi.Item](data)
+	if err != nil {
+		return nil, "", fmt.Errorf("decode media import: %w", err)
+	}
+
+	imported, path, err := storeImportMedia(storage, &item, source)
+	if err != nil {
+		return nil, path, fmt.Errorf("import media record: %w", err)
+	}
+
+	encoded, err = json.Marshal(imported)
+
+	return encoded, path, errors.Join(err)
+}
+
 // ClaimAutostartInitialization records the attempt before touching OS settings.
 // A missing bucket is normal for existing databases; no schema migration is needed.
-func storeClaimAutostartInitialization(storage *Store) (bool, error) {
+func storeClaimAutostartInitialization(storage *persistence) (bool, error) {
 	claimed, err := storeClaimMarker(storage, claimLoginSetting)
 	if err != nil {
 		return false, fmt.Errorf("record login startup initialization: %w", err)
@@ -60,8 +211,8 @@ func claimLoginSetting(transaction *bolt.Tx) (bool, error) {
 }
 
 // MarkNotified only acknowledges schedules that have not changed since delivery.
-func storeMarkNotified(storage *Store, occurrences []reviewapi.DueOccurrence) error {
-	err := storage.db.Update(func(transaction *bolt.Tx) error {
+func storeMarkNotified(storage *persistence, occurrences []reviewapi.DueOccurrence) error {
+	err := storage.update(func(transaction *bolt.Tx) error {
 		err := storeMarkOccurrences(storage, transaction, occurrences)
 		if err != nil {
 			return fmt.Errorf(markNotifiedErrorFormat, err)
@@ -76,16 +227,16 @@ func storeMarkNotified(storage *Store, occurrences []reviewapi.DueOccurrence) er
 	return nil
 }
 
-func storeMarkOccurrences(storage *Store,
+func storeMarkOccurrences(storage *persistence,
 	transaction *bolt.Tx,
 	occurrences []reviewapi.DueOccurrence,
 ) error {
-	cards := make(map[[two]string]*notificationCard)
+	load := notificationLoader(storage, transaction)
 
 	for index := range occurrences {
 		occurrence := &occurrences[index]
 
-		card, err := storeNotificationCard(storage, transaction, occurrence, cards)
+		card, err := load(occurrence)
 		if err != nil {
 			return fmt.Errorf("load notification occurrence: %w", err)
 		}
@@ -99,26 +250,43 @@ func storeMarkOccurrences(storage *Store,
 	return nil
 }
 
-func storeNotificationCard(storage *Store,
+func storeNotificationCard(storage *persistence,
 	transaction *bolt.Tx,
 	occurrence *reviewapi.DueOccurrence,
-	cards map[[two]string]*notificationCard,
 ) (*notificationCard, error) {
-	key := [two]string{occurrence.FolderID, occurrence.CardID}
-	if card := cards[key]; card != nil {
+	card, err := storeLoadCard(
+		storage,
+		transaction,
+		&[two]string{occurrence.FolderID, occurrence.CardID},
+	)
+	if err != nil {
+		return nil, fmt.Errorf(loadNotificationCardErrorFormat, err)
+	}
+
+	return newNotificationCard(transaction, &card), nil
+}
+
+func notificationLoader(
+	storage *persistence,
+	transaction *bolt.Tx,
+) func(*reviewapi.DueOccurrence) (*notificationCard, error) {
+	cards := make(map[[two]string]*notificationCard)
+
+	return func(occurrence *reviewapi.DueOccurrence) (*notificationCard, error) {
+		key := [two]string{occurrence.FolderID, occurrence.CardID}
+		if card := cards[key]; card != nil {
+			return card, nil
+		}
+
+		card, err := storeNotificationCard(storage, transaction, occurrence)
+		if err != nil {
+			return nil, fmt.Errorf(loadNotificationCardErrorFormat, err)
+		}
+
+		cards[key] = card
+
 		return card, nil
 	}
-
-	card, err := storeLoadCard(storage, transaction, occurrence.FolderID, occurrence.CardID)
-	if err != nil {
-		return nil, fmt.Errorf("load notification card: %w", err)
-	}
-
-	cached := newNotificationCard(transaction, &card)
-
-	cards[key] = cached
-
-	return cached, nil
 }
 
 func newNotificationCard(transaction *bolt.Tx, card *cardapi.Card) *notificationCard {
@@ -129,15 +297,16 @@ func newNotificationCard(transaction *bolt.Tx, card *cardapi.Card) *notification
 	}
 }
 
-func notificationCardAcknowledge(card *notificationCard, occurrence *reviewapi.DueOccurrence) error {
-	item := card.items[occurrence.ItemID]
+func notificationCardAcknowledge(
+	card *notificationCard,
+	occurrence *reviewapi.DueOccurrence,
+) error {
+	item := indexedRecords(card.items)[occurrence.ItemID]
 	if item == nil {
 		return nil
 	}
 
-	if contentapi.Schedule(item.Schedule).Due.UnixMilli() != occurrence.Due ||
-		item.LastNotifiedDue == occurrence.Due {
-
+	if notificationAlreadyAcknowledged(item, occurrence) {
 		return nil
 	}
 
@@ -151,8 +320,16 @@ func notificationCardAcknowledge(card *notificationCard, occurrence *reviewapi.D
 	return nil
 }
 
+func notificationAlreadyAcknowledged(
+	item *contentapi.Item,
+	occurrence *reviewapi.DueOccurrence,
+) bool {
+	return contentapi.Schedule(item.Schedule).Due.UnixMilli() != occurrence.Due ||
+		item.LastNotifiedDue == occurrence.Due
+}
+
 // ClaimNotificationPrompt persists the one-time authorization prompt decision.
-func storeClaimNotificationPrompt(storage *Store) (bool, error) {
+func storeClaimNotificationPrompt(storage *persistence) (bool, error) {
 	claimed, err := storeClaimMarker(storage, claimNotificationSetting)
 	if err != nil {
 		return claimed, fmt.Errorf("claim notification prompt: %w", err)
@@ -175,10 +352,10 @@ func claimNotificationSetting(transaction *bolt.Tx) (bool, error) {
 	return claimed, nil
 }
 
-func storeClaimMarker(storage *Store, claim func(*bolt.Tx) (bool, error)) (bool, error) {
+func storeClaimMarker(storage *persistence, claim func(*bolt.Tx) (bool, error)) (bool, error) {
 	claimed := false
 
-	err := storage.db.Update(func(transaction *bolt.Tx) error {
+	err := storage.update(func(transaction *bolt.Tx) error {
 		var failure error
 
 		claimed, failure = claim(transaction)
@@ -208,19 +385,21 @@ func markOnce(bucket *bolt.Bucket, key, value []byte) (bool, error) {
 	return true, nil
 }
 
-func storeInitialize(storage *Store, path string) error {
+func storeInitialize(storage *persistence, path string) error {
 	migration, err := storePlanMigration(storage, path)
 	if err != nil {
 		return fmt.Errorf("prepare database migration: %w", err)
 	}
 
-	if migration.state.version == schemaV5 {
+	if migration.version == schemaV5 {
 		return nil
 	}
 
 	migration.now = time.Now()
 
-	err = storage.db.Update(func(transaction *bolt.Tx) error { return schemaMigrationApply(migration, transaction) })
+	err = storage.update(
+		func(transaction *bolt.Tx) error { return schemaMigrationApply(migration, transaction) },
+	)
 	if err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
@@ -228,13 +407,13 @@ func storeInitialize(storage *Store, path string) error {
 	return nil
 }
 
-func storePlanMigration(storage *Store, path string) (*schemaMigration, error) {
+func storePlanMigration(storage *persistence, path string) (*schemaMigration, error) {
 	state, err := storeReadSchema(storage)
 	if err != nil {
 		return nil, fmt.Errorf("inspect database schema: %w", err)
 	}
 
-	migration := &schemaMigration{storage: storage, state: state, now: time.Now()}
+	migration := newSchemaMigration(storage, &state, time.Now())
 	if state.version == schemaV5 {
 		return migration, nil
 	}
@@ -247,10 +426,45 @@ func storePlanMigration(storage *Store, path string) (*schemaMigration, error) {
 	return migration, nil
 }
 
-func storeReadSchema(storage *Store) (schemaState, error) {
+func newSchemaMigration(storage *persistence, state *schemaState, now time.Time) *schemaMigration {
+	return &schemaMigration{
+		now: now, version: state.version, existing: state.existing,
+		settings: storage.settings, initialize: storage.initializeSchedule,
+		writeBackup: migrationBackupWriter(storage), loadItems: migrationItemLoader(storage),
+	}
+}
+
+func migrationBackupWriter(storage *persistence) func(*os.File) error {
+	return func(file *os.File) error {
+		err := storeWriteBackup(storage, file)
+		if err != nil {
+			return fmt.Errorf("write migration snapshot: %w", err)
+		}
+
+		return nil
+	}
+}
+
+func migrationItemLoader(storage *persistence) func(*bolt.Tx, string, string) ([]any, error) {
+	return func(transaction *bolt.Tx, folderID, cardID string) ([]any, error) {
+		card, err := storeLoadCard(storage, transaction, &[two]string{folderID, cardID})
+		if err != nil {
+			return nil, fmt.Errorf("read migration content: %w", err)
+		}
+
+		items := make([]any, zero, len(contentapi.Items(card.Items)))
+		for index := range contentapi.Items(card.Items) {
+			items = append(items, contentapi.Items(card.Items)[index])
+		}
+
+		return items, nil
+	}
+}
+
+func storeReadSchema(storage *persistence) (schemaState, error) {
 	state := schemaState{version: schemaV1, existing: false}
 
-	err := storage.db.View(func(transaction *bolt.Tx) error {
+	err := storage.view(func(transaction *bolt.Tx) error {
 		state.version = readSchemaVersion(transaction)
 		state.existing = transaction.Bucket([]byte(foldersBucket)) != nil
 
@@ -290,13 +504,13 @@ func schemaStateValidate(state *schemaState) error {
 }
 
 func schemaMigrationBackup(migration *schemaMigration, path string) error {
-	if !migration.state.existing {
+	if !migration.existing {
 		return nil
 	}
 
 	file, err := os.CreateTemp(
 		filepath.Dir(path),
-		filepath.Base(path)+".v"+migration.state.version+"-*.bak",
+		filepath.Base(path)+".v"+migration.version+"-*.bak",
 	)
 	if err != nil {
 		return fmt.Errorf("create migration backup: %w", err)
@@ -310,8 +524,12 @@ func schemaMigrationBackup(migration *schemaMigration, path string) error {
 	return nil
 }
 
-func schemaMigrationFinishBackup(migration *schemaMigration, file *os.File, directory string) error {
-	err := storeWriteBackup(migration.storage, file)
+func schemaMigrationFinishBackup(
+	migration *schemaMigration,
+	file *os.File,
+	directory string,
+) error {
+	err := migration.writeBackup(file)
 	if err != nil {
 		return fmt.Errorf(
 			"write migration backup: %w",
@@ -327,8 +545,8 @@ func schemaMigrationFinishBackup(migration *schemaMigration, file *os.File, dire
 	return nil
 }
 
-func storeWriteBackup(storage *Store, file *os.File) error {
-	err := storage.db.View(func(transaction *bolt.Tx) error {
+func storeWriteBackup(storage *persistence, file *os.File) error {
+	err := storage.view(func(transaction *bolt.Tx) error {
 		return writeBackupSnapshot(transaction, file)
 	})
 	if err == nil {
@@ -400,7 +618,11 @@ func schemaMigrationMigrateRoot(migration *schemaMigration, transaction *bolt.Tx
 
 func schemaMigrationMigrateFolders(migration *schemaMigration, root *bolt.Bucket) error {
 	err := root.ForEach(func(folderID, value []byte) error {
-		err := schemaMigrationMigrateFolder(migration, root.Bucket(folderID), folderID, value)
+		err := schemaMigrationMigrateFolder(
+			migration,
+			root.Bucket(folderID),
+			&legacyEntry{id: folderID, value: value},
+		)
 		if err != nil {
 			return fmt.Errorf("migrate folder: %w", err)
 		}
@@ -414,28 +636,33 @@ func schemaMigrationMigrateFolders(migration *schemaMigration, root *bolt.Bucket
 	return nil
 }
 
-func schemaMigrationMigrateFolder(migration *schemaMigration, folder *bolt.Bucket, folderID, value []byte) error {
-	prepared, err := schemaMigrationPrepareFolder(migration, folder, value)
+func schemaMigrationMigrateFolder(
+	migration *schemaMigration,
+	folder *bolt.Bucket,
+	entry *legacyEntry,
+) error {
+	prepared, err := schemaMigrationPrepareFolder(migration, folder, entry.value)
 	if err != nil {
 		return fmt.Errorf("prepare legacy folder: %w", err)
 	}
 
+	prepared.id = bytes.Clone(entry.id)
+
 	return errors.Join(
-		schemaMigrationMigrateFolderCards(migration, prepared, folder.Bucket([]byte(cardsBucket)), folderID),
+		schemaMigrationMigrateFolderCards(migration, prepared, folder.Bucket([]byte(cardsBucket))),
 	)
 }
 
 func schemaMigrationMigrateFolderCards(migration *schemaMigration,
 	prepared *migrationFolder,
 	cards *bolt.Bucket,
-	folderID []byte,
 ) error {
 	ids, err := legacyCardIDs(cards)
 	if err != nil {
 		return fmt.Errorf("read legacy card identifiers: %w", err)
 	}
 
-	err = schemaMigrationMigrateCards(migration, prepared, folderID, ids)
+	err = schemaMigrationMigrateCards(migration, prepared, ids)
 	if err != nil {
 		return fmt.Errorf("migrate legacy cards: %w", err)
 	}
@@ -457,15 +684,19 @@ func schemaMigrationPrepareFolder(migration *schemaMigration,
 		return nil, fmt.Errorf("create legacy content root: %w", err)
 	}
 
-	return &migrationFolder{parent: folder, items: items}, nil
+	return &migrationFolder{parent: folder, items: items, id: nil}, nil
 }
 
-func schemaMigrationCheckFolderLayout(migration *schemaMigration, folder *bolt.Bucket, value []byte) error {
+func schemaMigrationCheckFolderLayout(
+	migration *schemaMigration,
+	folder *bolt.Bucket,
+	value []byte,
+) error {
 	if !validFolderEntry(folder, value) {
 		return errInvalidLegacyFolder
 	}
 
-	if migration.state.version == schemaV2 && folder.Bucket([]byte(itemsBucket)) == nil {
+	if migration.version == schemaV2 && folder.Bucket([]byte(itemsBucket)) == nil {
 		return errMissingLegacyContentBucket
 	}
 
@@ -495,11 +726,10 @@ func legacyCardIDs(bucket *bolt.Bucket) ([][]byte, error) {
 
 func schemaMigrationMigrateCards(migration *schemaMigration,
 	folder *migrationFolder,
-	folderID []byte,
 	ids [][]byte,
 ) error {
 	for index := range ids {
-		err := schemaMigrationMigrateCard(migration, folder, folderID, ids[index])
+		err := schemaMigrationMigrateCard(migration, folder, ids[index])
 		if err != nil {
 			return fmt.Errorf("migrate legacy card: %w", err)
 		}
@@ -510,9 +740,9 @@ func schemaMigrationMigrateCards(migration *schemaMigration,
 
 func schemaMigrationMigrateCard(migration *schemaMigration,
 	folder *migrationFolder,
-	folderID, cardID []byte,
+	cardID []byte,
 ) error {
-	card, err := readLegacyCard(folder.parent.Bucket([]byte(cardsBucket)), folderID, cardID)
+	card, err := readLegacyCard(folder.parent.Bucket([]byte(cardsBucket)), folder.id, cardID)
 	if err != nil {
 		return fmt.Errorf("read legacy metadata: %w", err)
 	}
@@ -564,23 +794,18 @@ func readLegacyCard(bucket *bolt.Bucket, folderID, cardID []byte) (cardapi.Card,
 	return card, nil
 }
 
-func schemaMigrationLoadLegacyContent(migration *schemaMigration, folder *bolt.Bucket, card *cardapi.Card) error {
-	load := func(
-		folder *bolt.Bucket,
-		card *cardapi.Card,
-	) error {
-		return schemaMigrationLoadUnscheduledContent(migration, folder, card)
-	}
-	if migration.state.version == schemaV3 || migration.state.version == schemaV4 {
-		load = func(
-			folder *bolt.Bucket,
-			card *cardapi.Card,
-		) error {
-			return schemaMigrationLoadScheduledFolderContent(migration, folder, card)
-		}
+func schemaMigrationLoadLegacyContent(
+	migration *schemaMigration,
+	folder *bolt.Bucket,
+	card *cardapi.Card,
+) error {
+	load := schemaMigrationLoadUnscheduledContent
+
+	if migration.version == schemaV3 || migration.version == schemaV4 {
+		load = schemaMigrationLoadScheduledFolderContent
 	}
 
-	err := load(folder, card)
+	err := load(migration, folder, card)
 	if err != nil {
 		return fmt.Errorf("load legacy content records: %w", err)
 	}
@@ -611,7 +836,7 @@ func schemaMigrationUnscheduledItems(migration *schemaMigration,
 		return nil, fmt.Errorf("select legacy content reader: %w", err)
 	}
 
-	items, err := load(migration.storage.settings, folder, card)
+	items, err := load(settingsValue(migration.settings), folder, card)
 	if err != nil {
 		return nil, fmt.Errorf("read unscheduled content: %w", err)
 	}
@@ -620,7 +845,7 @@ func schemaMigrationUnscheduledItems(migration *schemaMigration,
 }
 
 func schemaMigrationLegacyLoader(migration *schemaMigration) (legacyContentLoader, error) {
-	switch migration.state.version {
+	switch migration.version {
 	case schemaV1:
 		return legacyTextContent, nil
 	case schemaV2:
@@ -676,12 +901,15 @@ func schemaMigrationLoadScheduledContent(migration *schemaMigration,
 	transaction *bolt.Tx,
 	card *cardapi.Card,
 ) error {
-	previous, err := storeLoadCard(migration.storage, transaction, card.FolderID, card.ID)
+	items, err := migration.loadItems(transaction, card.FolderID, card.ID)
 	if err != nil {
 		return fmt.Errorf("read scheduled legacy content: %w", err)
 	}
 
-	card.Items = contentapi.Items(previous.Items)
+	card.Items, err = contentapi.Decode[[]contentapi.Item](items)
+	if err != nil {
+		return fmt.Errorf("decode scheduled legacy content: %w", err)
+	}
 
 	return nil
 }
@@ -729,7 +957,7 @@ func legacyTextItem(settings *Settings, text string, position int) (contentapi.I
 	}
 
 	item.ID = id
-	item.Kind = settings.Rules.TextKind
+	item.Kind = rulesValue(settings.Rules).TextKind
 	item.Position = position
 	item.Text = text
 
@@ -737,7 +965,7 @@ func legacyTextItem(settings *Settings, text string, position int) (contentapi.I
 }
 
 func schemaMigrationInitializeSchedules(migration *schemaMigration, card *cardapi.Card) error {
-	if migration.state.version == schemaV4 {
+	if migration.version == schemaV4 {
 		return nil
 	}
 
@@ -745,7 +973,7 @@ func schemaMigrationInitializeSchedules(migration *schemaMigration, card *cardap
 		err := library.InitializeItem(
 			&contentapi.Items(card.Items)[index],
 			migration.now,
-			migration.storage.scheduler,
+			migration.initialize,
 		)
 		if err != nil {
 			return fmt.Errorf("initialize migrated item: %w", err)
@@ -755,7 +983,11 @@ func schemaMigrationInitializeSchedules(migration *schemaMigration, card *cardap
 	return nil
 }
 
-func schemaMigrationPersistCard(migration *schemaMigration, folder *migrationFolder, card *cardapi.Card) error {
+func schemaMigrationPersistCard(
+	migration *schemaMigration,
+	folder *migrationFolder,
+	card *cardapi.Card,
+) error {
 	assignContentOwnership(card)
 
 	err := writeCardBuckets(folder.parent.Bucket([]byte(cardsBucket)), folder.items, card)
@@ -771,13 +1003,17 @@ func schemaMigrationPersistCard(migration *schemaMigration, folder *migrationFol
 	return nil
 }
 
-func schemaMigrationVerifyCard(migration *schemaMigration, transaction *bolt.Tx, card *cardapi.Card) error {
-	loaded, err := storeLoadCard(migration.storage, transaction, card.FolderID, card.ID)
+func schemaMigrationVerifyCard(
+	migration *schemaMigration,
+	transaction *bolt.Tx,
+	card *cardapi.Card,
+) error {
+	items, err := migration.loadItems(transaction, card.FolderID, card.ID)
 	if err != nil {
 		return fmt.Errorf("read migrated card: %w", err)
 	}
 
-	if len(contentapi.Items(loaded.Items)) != len(contentapi.Items(card.Items)) {
+	if len(items) != len(contentapi.Items(card.Items)) {
 		return errMissingCardContent
 	}
 
@@ -822,19 +1058,21 @@ func collectLegacyItems(
 	return old, nil
 }
 
-func settingsReadLegacyItem(settings *Settings, id, data []byte, card *cardapi.Card) (*legacyItem, error) {
-	item := &legacyItem{Item: new(contentapi.Item), Side: ""}
-
-	err := decodeRecord(data, item)
+func settingsReadLegacyItem(
+	settings *Settings,
+	entry *legacyEntry,
+	card *cardapi.Card,
+) (*legacyItem, error) {
+	item, err := decodeLegacyRecord(entry.value)
 	if err != nil {
 		return nil, fmt.Errorf("decode legacy item: %w", err)
 	}
 
-	if !contentBelongsTo(card, item.Item, string(id)) || !validLegacySide(item.Side) {
+	if !legacyContentBelongsTo(card, item, entry.id) {
 		return nil, errInvalidLegacyContentOwnershipOrSide
 	}
 
-	err = library.ValidateItem(&settings.Rules, item.Item)
+	err = library.ValidateItem(rulesValue(settings.Rules), new(legacyContent(item.Item)))
 	if err != nil {
 		return nil, fmt.Errorf("validate legacy content: %w", err)
 	}
@@ -842,8 +1080,54 @@ func settingsReadLegacyItem(settings *Settings, id, data []byte, card *cardapi.C
 	return item, nil
 }
 
+func decodeLegacyRecord(data []byte) (*legacyItem, error) {
+	var content contentapi.Item
+
+	err := decodeRecord(data, &content)
+	if err != nil {
+		return nil, fmt.Errorf("decode legacy content fields: %w", err)
+	}
+
+	side, err := decodeLegacySide(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode legacy content side: %w", err)
+	}
+
+	return &legacyItem{Item: content, Side: side}, nil
+}
+
+func decodeLegacySide(data []byte) (string, error) {
+	var record struct {
+		Side string `json:"side"`
+	}
+
+	err := json.Unmarshal(data, &record)
+	if err != nil {
+		return "", fmt.Errorf("decode legacy grouping: %w", err)
+	}
+
+	return record.Side, nil
+}
+
+func legacyContent(value any) contentapi.Item {
+	item, err := contentapi.Decode[contentapi.Item](value)
+	if err != nil {
+		var empty contentapi.Item
+
+		return empty
+	}
+
+	return item
+}
+
 func contentBelongsTo(card *cardapi.Card, item *contentapi.Item, id string) bool {
 	return item.ID == id && item.CardID == card.ID && item.FolderID == card.FolderID
+}
+
+func legacyContentBelongsTo(card *cardapi.Card, item *legacyItem, id []byte) bool {
+	content := legacyContent(item.Item)
+
+	return contentBelongsTo(card, &content, string(id)) && validLegacySide(item.Side)
 }
 
 func validLegacySide(
@@ -854,7 +1138,7 @@ func validLegacySide(
 
 func compareLegacyItems(first, second *legacyItem) int {
 	if first.Side == second.Side {
-		return cmp.Compare(first.Position, second.Position)
+		return cmp.Compare(legacyContent(first.Item).Position, legacyContent(second.Item).Position)
 	}
 
 	if first.Side == legacyPromptSide {
@@ -874,7 +1158,7 @@ func mergeOrderedItems(old []*legacyItem) ([]contentapi.Item, error) {
 
 	items := make([]contentapi.Item, zero, len(old))
 	for position := range old {
-		item := *old[position].Item
+		item := legacyContent(old[position].Item)
 
 		item.Position = position
 		items = append(items, item)
@@ -887,7 +1171,7 @@ func validateLegacyOrder(old []*legacyItem) error {
 	counts := map[string]int{legacyPromptSide: zero, legacyAnswerSide: zero}
 
 	for position := range old {
-		item := old[position].Item
+		item := legacyContent(old[position].Item)
 		side := old[position].Side
 
 		if item.Position != counts[side] {
@@ -904,17 +1188,22 @@ func validateLegacyOrder(old []*legacyItem) error {
 	return nil
 }
 
-func storeMediaPath(storage *Store, relative string) string {
+func storeMediaPath(storage *persistence, relative string) string {
 	return filepath.Join(storage.mediaDir, filepath.Base(relative))
 }
 
-func settingsInspectMedia(settings *Settings, file *os.File, kind, source string) (string, error) {
-	declared := library.MediaType(&settings.Rules, strings.ToLower(filepath.Ext(source)))
+func settingsInspectMedia(settings *Settings, media *mediaImport) (string, error) {
+	declared := library.MediaType(
+		rulesValue(settings.Rules),
+		strings.ToLower(filepath.Ext(media.source)),
+	)
+	kind := itemRecord(media.item).Kind
+
 	if !supportedMediaKind(kind) || !strings.HasPrefix(declared, kind+"/") {
 		return "", errChooseASupportedFileForThisMedia
 	}
 
-	header, err := readMediaHeader(file)
+	header, err := readMediaHeader(media.file)
 	if err != nil {
 		return "", fmt.Errorf("read selected media header: %w", err)
 	}
@@ -957,10 +1246,10 @@ func mediaAlias(settings *Settings, declared string) string {
 	switch declared {
 	case "audio/wav":
 		return "audio/wave"
-	case settings.Rules.MIMEOggAudio, "video/ogg":
+	case rulesValue(settings.Rules).MIMEOggAudio, "video/ogg":
 		return "application/ogg"
 	case "audio/mp4":
-		return settings.Rules.MIMEMP4Video
+		return rulesValue(settings.Rules).MIMEMP4Video
 	default:
 		return ""
 	}
@@ -994,7 +1283,7 @@ func avifHeader(header []byte) bool {
 	return brand == "avif" || brand == "avis"
 }
 
-func storeImportMedia(storage *Store,
+func storeImportMedia(storage *persistence,
 	item *contentapi.Item,
 	source string,
 ) (contentapi.Item, string, error) {
@@ -1002,9 +1291,12 @@ func storeImportMedia(storage *Store,
 	if err != nil {
 		return *item, "", fmt.Errorf("open selected file: %w", err)
 	}
-	defer storeCloseMediaFile(storage, context.Background(), file)
+	defer storeCloseMediaFile(context.Background(), storage, file)
 
-	imported, path, err := storeImportOpenedMedia(storage, file, item, source)
+	imported, path, err := storeImportOpenedMedia(
+		storage,
+		&mediaImport{file: file, item: item, source: source},
+	)
 	if err != nil {
 		return imported, path, fmt.Errorf("import selected media: %w", err)
 	}
@@ -1012,43 +1304,45 @@ func storeImportMedia(storage *Store,
 	return imported, path, nil
 }
 
-func storeImportOpenedMedia(storage *Store,
-	file *os.File,
-	item *contentapi.Item,
-	source string,
+func storeImportOpenedMedia(
+	storage *persistence,
+	input *mediaImport,
 ) (contentapi.Item, string, error) {
-	imported := *item
+	media := copyMediaImport(input)
 
-	err := settingsInspectImportedMedia(storage.settings, file, source, &imported)
+	err := settingsInspectImportedMedia(settingsValue(storage.settings), media)
 	if err != nil {
-		return *item, "", fmt.Errorf(importMediaErrorFormat, err)
+		return *itemRecord(input.item), "", fmt.Errorf(importMediaErrorFormat, err)
 	}
 
-	path, err := storePersistMedia(storage, file, &imported)
+	path, err := storePersistMedia(storage, media)
 	if err != nil {
-		return *item, "", fmt.Errorf(importMediaErrorFormat, err)
+		return *itemRecord(input.item), "", fmt.Errorf(importMediaErrorFormat, err)
 	}
 
-	return imported, path, nil
+	return *itemRecord(media.item), path, nil
 }
 
-func settingsInspectImportedMedia(settings *Settings, file *os.File,
-	source string,
-	item *contentapi.Item,
-) error {
-	size, err := regularMediaSize(file)
+func copyMediaImport(input *mediaImport) *mediaImport {
+	item := *itemRecord(input.item)
+
+	return &mediaImport{file: input.file, source: input.source, item: &item}
+}
+
+func settingsInspectImportedMedia(settings *Settings, media *mediaImport) error {
+	size, err := regularMediaSize(media.file)
 	if err != nil {
 		return fmt.Errorf("inspect selected file: %w", err)
 	}
 
-	mimeType, err := settingsInspectMedia(settings, file, item.Kind, source)
+	mimeType, err := settingsInspectMedia(settings, media)
 	if err != nil {
 		return fmt.Errorf("inspect media content: %w", err)
 	}
 
-	applyMediaMetadata(item, source, mimeType)
+	applyMediaMetadata(itemRecord(media.item), media.source, mimeType)
 
-	item.ByteSize = size
+	itemRecord(media.item).ByteSize = size
 
 	return nil
 }
@@ -1072,14 +1366,14 @@ func regularMediaSize(file *os.File) (int64, error) {
 	return info.Size(), nil
 }
 
-func storePersistMedia(storage *Store, file *os.File, item *contentapi.Item) (string, error) {
+func storePersistMedia(storage *persistence, media *mediaImport) (string, error) {
 	temp, err := os.CreateTemp(storage.mediaDir, ".import-*")
 	if err != nil {
 		return "", fmt.Errorf("create media staging file: %w", err)
 	}
 	defer storeRemoveMediaFile(storage, temp.Name())
 
-	path, err := storeStageAndCommitMedia(storage, temp, file, item)
+	path, err := storeStageAndCommitMedia(storage, temp, media)
 	if err != nil {
 		return path, fmt.Errorf("persist staged media: %w", err)
 	}
@@ -1087,16 +1381,20 @@ func storePersistMedia(storage *Store, file *os.File, item *contentapi.Item) (st
 	return path, nil
 }
 
-func storeStageAndCommitMedia(storage *Store,
-	temp, file *os.File,
-	item *contentapi.Item,
+func storeStageAndCommitMedia(storage *persistence,
+	temp *os.File,
+	media *mediaImport,
 ) (string, error) {
-	err := stageMediaFile(temp, file, item.ByteSize)
+	err := stageMediaFile(temp, media.file, itemRecord(media.item).ByteSize)
 	if err != nil {
 		return "", fmt.Errorf("stage media file: %w", err)
 	}
 
-	path, err := storeCommitMedia(storage, temp.Name(), storeMediaPath(storage, item.RelativePath))
+	path, err := storeCommitMedia(
+		storage,
+		temp.Name(),
+		storeMediaPath(storage, itemRecord(media.item).RelativePath),
+	)
 	if err != nil {
 		return "", fmt.Errorf("commit imported media: %w", err)
 	}
@@ -1131,7 +1429,7 @@ func copyMediaFile(target *os.File, source io.Reader) (int64, error) {
 	return size, nil
 }
 
-func storeCommitMedia(storage *Store, staged, path string) (string, error) {
+func storeCommitMedia(storage *persistence, staged, path string) (string, error) {
 	err := os.Rename(staged, path)
 	if err != nil {
 		return "", fmt.Errorf("rename imported media: %w", err)
@@ -1147,7 +1445,7 @@ func storeCommitMedia(storage *Store, staged, path string) (string, error) {
 	return path, nil
 }
 
-func storeCleanupMedia(storage *Store) error {
+func storeCleanupMedia(storage *persistence) error {
 	// Validate all referenced records before removing anything.
 	cards, err := storeListCards(storage)
 	if err != nil {
@@ -1159,7 +1457,12 @@ func storeCleanupMedia(storage *Store) error {
 		return fmt.Errorf(cleanupMediaErrorFormat, err)
 	}
 
-	return errors.Join(storeRemoveUnreferencedMedia(storage, referencedMedia(storage.settings, cards)))
+	return errors.Join(
+		storeRemoveUnreferencedMedia(
+			storage,
+			referencedMedia(settingsValue(storage.settings), cards),
+		),
+	)
 }
 
 func referencedMedia(settings *Settings, cards []cardapi.Card) map[string]bool {
@@ -1175,13 +1478,13 @@ func referencedMedia(settings *Settings, cards []cardapi.Card) map[string]bool {
 func referenceCardMedia(settings *Settings, card *cardapi.Card, referenced map[string]bool) {
 	for index := range contentapi.Items(card.Items) {
 		item := &contentapi.Items(card.Items)[index]
-		if item.Kind != settings.Rules.TextKind {
+		if item.Kind != rulesValue(settings.Rules).TextKind {
 			referenced[filepath.Base(item.RelativePath)] = true
 		}
 	}
 }
 
-func storeRemoveUnreferencedMedia(storage *Store, referenced map[string]bool) error {
+func storeRemoveUnreferencedMedia(storage *persistence, referenced map[string]bool) error {
 	entries, err := os.ReadDir(storage.mediaDir)
 	if err != nil {
 		return fmt.Errorf(cleanupMediaErrorFormat, err)
@@ -1190,7 +1493,11 @@ func storeRemoveUnreferencedMedia(storage *Store, referenced map[string]bool) er
 	return errors.Join(storeCleanMediaEntries(storage, entries, referenced))
 }
 
-func storeCleanMediaEntries(storage *Store, entries []os.DirEntry, referenced map[string]bool) error {
+func storeCleanMediaEntries(
+	storage *persistence,
+	entries []os.DirEntry,
+	referenced map[string]bool,
+) error {
 	for index := range entries {
 		err := storeCleanMediaEntry(storage, entries[index], referenced)
 		if err != nil {
@@ -1201,8 +1508,12 @@ func storeCleanMediaEntries(storage *Store, entries []os.DirEntry, referenced ma
 	return nil
 }
 
-func storeCleanMediaEntry(storage *Store, entry os.DirEntry, referenced map[string]bool) error {
-	if !removableMedia(storage.settings, entry, referenced) {
+func storeCleanMediaEntry(
+	storage *persistence,
+	entry os.DirEntry,
+	referenced map[string]bool,
+) error {
+	if !removableMedia(settingsValue(storage.settings), entry, referenced) {
 		return nil
 	}
 
@@ -1218,7 +1529,7 @@ func removableMedia(settings *Settings, entry os.DirEntry, referenced map[string
 	name := entry.Name()
 	managed := strings.HasPrefix(name, ".import-") ||
 		library.ValidMediaPath(
-			&settings.Rules,
+			rulesValue(settings.Rules),
 			"media/"+name,
 			strings.TrimSuffix(name, filepath.Ext(name)),
 		)
@@ -1228,7 +1539,7 @@ func removableMedia(settings *Settings, entry os.DirEntry, referenced map[string
 
 // MediaHandler serves only media records owned by the requested card.
 // ServeContent implements HEAD and byte ranges without buffering the file.
-func storeMediaHandler(storage *Store) http.HandlerFunc {
+func storeMediaHandler(storage *persistence) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		if !storage.ready.Load() {
 			http.Error(writer, "media storage is unavailable", http.StatusServiceUnavailable)
@@ -1240,24 +1551,14 @@ func storeMediaHandler(storage *Store) http.HandlerFunc {
 	}
 }
 
-func storeServeMedia(storage *Store, writer http.ResponseWriter, request *http.Request) {
+func storeServeMedia(storage *persistence, writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 
 		return
 	}
 
-	parts := strings.Split(
-		strings.TrimPrefix(request.URL.Path, storage.settings.MediaRoutePrefix),
-		"/",
-	)
-	if !validMediaRoute(storage.settings, request.URL.Path, parts) {
-		http.NotFound(writer, request)
-
-		return
-	}
-
-	storeServeOwnedMedia(storage, writer, request, parts)
+	storeServeOwnedMedia(storage, writer, request)
 }
 
 func validMediaRoute(settings *Settings, path string, parts []string) bool {
@@ -1265,21 +1566,40 @@ func validMediaRoute(settings *Settings, path string, parts []string) bool {
 		itemIDPattern.MatchString(parts[two])
 }
 
-func storeServeOwnedMedia(storage *Store,
+func storeServeOwnedMedia(storage *persistence,
 	writer http.ResponseWriter,
 	request *http.Request,
-	parts []string,
 ) {
-	file, item, err := storeOpenOwnedMedia(storage, parts)
+	file, item, err := storeOpenRequestedMedia(storage, request)
 	if err != nil {
 		http.NotFound(writer, request)
 
 		return
 	}
-	defer storeCloseMediaFile(storage, request.Context(), file)
+	defer storeCloseMediaFile(request.Context(), storage, file)
 
 	media := ownedMedia{file: file, item: &item}
 	ownedMediaServe(&media, writer, request)
+}
+
+func storeOpenRequestedMedia(
+	storage *persistence,
+	request *http.Request,
+) (*os.File, contentapi.Item, error) {
+	parts := strings.Split(
+		strings.TrimPrefix(request.URL.Path, settingsValue(storage.settings).MediaRoutePrefix),
+		"/",
+	)
+	if !validMediaRoute(settingsValue(storage.settings), request.URL.Path, parts) {
+		return nil, contentapi.Item{}, errMediaNotFound
+	}
+
+	file, item, err := storeOpenOwnedMedia(storage, parts)
+	if err != nil {
+		return nil, item, fmt.Errorf("open requested media: %w", err)
+	}
+
+	return file, item, nil
 }
 
 func ownedMediaServe(media *ownedMedia, writer http.ResponseWriter, request *http.Request) {
@@ -1290,8 +1610,14 @@ func ownedMediaServe(media *ownedMedia, writer http.ResponseWriter, request *htt
 		return
 	}
 
-	setMediaHeaders(writer.Header(), media.item.MIMEType)
-	http.ServeContent(writer, request, media.item.OriginalName, info.ModTime(), media.file)
+	setMediaHeaders(writer.Header(), itemRecord(media.item).MIMEType)
+	http.ServeContent(
+		writer,
+		request,
+		itemRecord(media.item).OriginalName,
+		info.ModTime(),
+		media.file,
+	)
 }
 
 func setMediaHeaders(header http.Header, mimeType string) {
@@ -1300,7 +1626,7 @@ func setMediaHeaders(header http.Header, mimeType string) {
 	header.Set("Cache-Control", "no-store")
 }
 
-func storeOpenOwnedMedia(storage *Store, parts []string) (*os.File, contentapi.Item, error) {
+func storeOpenOwnedMedia(storage *persistence, parts []string) (*os.File, contentapi.Item, error) {
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
 
@@ -1317,10 +1643,10 @@ func storeOpenOwnedMedia(storage *Store, parts []string) (*os.File, contentapi.I
 	return file, item, nil
 }
 
-func storeReadOwnedMedia(storage *Store, parts []string) (contentapi.Item, error) {
+func storeReadOwnedMedia(storage *persistence, parts []string) (contentapi.Item, error) {
 	var item contentapi.Item
 
-	err := storage.db.View(func(transaction *bolt.Tx) error {
+	err := storage.view(func(transaction *bolt.Tx) error {
 		var lookupErr error
 
 		item, lookupErr = storeLookupMedia(storage, transaction, parts)
@@ -1337,18 +1663,19 @@ func storeReadOwnedMedia(storage *Store, parts []string) (contentapi.Item, error
 	return item, nil
 }
 
-func storeLookupMedia(storage *Store,
+func storeLookupMedia(storage *persistence,
 	transaction *bolt.Tx,
 	parts []string,
 ) (contentapi.Item, error) {
-	card, err := storeLoadCard(storage, transaction, parts[zero], parts[one])
+	card, err := storeLoadCard(storage, transaction, &[two]string{parts[zero], parts[one]})
 	if err != nil {
 		return contentapi.Item{}, fmt.Errorf("media handler: %w", err)
 	}
 
 	for index := range contentapi.Items(card.Items) {
 		item := &contentapi.Items(card.Items)[index]
-		if item.ID == parts[two] && item.Kind != storage.settings.Rules.TextKind {
+		if item.ID == parts[two] &&
+			item.Kind != rulesValue(settingsValue(storage.settings).Rules).TextKind {
 			return *item, nil
 		}
 	}
@@ -1367,8 +1694,8 @@ func DefaultPath() (string, error) {
 }
 
 // Open opens and migrates library persistence, then reconciles saved media.
-func Open(path string, deps *Dependencies) (*Store, error) {
-	storage := New(path, deps)
+func openPersistenceStore(path string, deps *Dependencies) (*persistence, error) {
+	storage := newPersistence(path, deps)
 
 	err := storeStart(storage)
 	if err != nil {
@@ -1379,7 +1706,7 @@ func Open(path string, deps *Dependencies) (*Store, error) {
 }
 
 // New constructs persistence without acquiring the database lock.
-func New(path string, deps *Dependencies) *Store {
+func newPersistence(path string, deps *Dependencies) *persistence {
 	storage := newStore(nil, path, deps)
 
 	storage.logger = storageLogger([]*slog.Logger{deps.Logger})
@@ -1388,7 +1715,7 @@ func New(path string, deps *Dependencies) *Store {
 }
 
 // Start opens, migrates, and reconciles persistence before consumers begin work.
-func storeStart(storage *Store) error {
+func storeStart(storage *persistence) error {
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
 
@@ -1400,8 +1727,8 @@ func storeStart(storage *Store) error {
 	return nil
 }
 
-func storeOpenPersistence(storage *Store) error {
-	if storage.db != nil {
+func storeOpenPersistence(storage *persistence) error {
+	if storage.closeDatabase != nil {
 		return errStoreAlreadyStarted
 	}
 
@@ -1410,7 +1737,7 @@ func storeOpenPersistence(storage *Store) error {
 		return fmt.Errorf("open library persistence %q: %w", storage.path, err)
 	}
 
-	storage.db = db
+	bindDatabase(storage, db)
 
 	err = storePrepareOpenedDatabase(storage)
 	if err != nil {
@@ -1420,12 +1747,12 @@ func storeOpenPersistence(storage *Store) error {
 	return nil
 }
 
-func storePrepareOpenedDatabase(storage *Store) error {
+func storePrepareOpenedDatabase(storage *persistence) error {
 	err := storePrepare(storage, storage.path)
 	if err != nil {
-		failure := multierr.Append(err, storage.db.Close())
+		failure := multierr.Append(err, storage.closeDatabase())
 
-		storage.db = nil
+		storage.closeDatabase = nil
 
 		return fmt.Errorf("prepare library persistence: %w", failure)
 	}
@@ -1453,20 +1780,115 @@ func openDatabase(path string) (*bolt.DB, error) {
 	return db, nil
 }
 
-func newStore(db database, path string, deps *Dependencies) *Store {
-	settings := deps.Settings
+func newStore(db database, path string, deps *Dependencies) *persistence {
+	var storage persistence
 
-	return &Store{
-		settings:  &settings,
-		path:      path,
-		ready:     atomic.Bool{},
-		db:        db,
-		scheduler: deps.Scheduler,
-		batch:     deps.Batch,
-		mediaDir:  filepath.Join(filepath.Dir(path), "media"),
-		mediaMu:   sync.Mutex{},
-		logger:    nil,
+	storage.settings = deps.Settings
+	storage.path = path
+	bindDatabase(&storage, db)
+
+	storage.batch = deps.Batch
+	storage.initializeSchedule = deps.Initialize
+	storage.nextSchedule = deps.Next
+	storage.validateSchedule = deps.Validate
+	storage.mediaDir = filepath.Join(filepath.Dir(path), "media")
+
+	return &storage
+}
+
+// NewDependencies binds the consumer-owned execution ports to persistence operations.
+func NewDependencies(
+	batch ports.BatchExecutor,
+	scheduler ports.Scheduler,
+	settings *Settings,
+) *Dependencies {
+	return &Dependencies{
+		Batch: batch.Run, Initialize: scheduler.Initialize, Next: scheduler.Next,
+		Validate: scheduler.Validate, Settings: *settings, Logger: nil,
 	}
+}
+
+func settingsValue(value any) *Settings {
+	if settings, ok := value.(*Settings); ok {
+		return settings
+	}
+
+	if settings, ok := value.(Settings); ok {
+		return &settings
+	}
+
+	return new(Settings)
+}
+
+func cardRecord(value *any) *cardapi.Card {
+	if card, ok := (*value).(*cardapi.Card); ok {
+		return card
+	}
+
+	if card, ok := (*value).(cardapi.Card); ok {
+		*value = &card
+
+		return &card
+	}
+
+	card := new(cardapi.Card)
+
+	*value = card
+
+	return card
+}
+
+func cardRecords(value any) []cardapi.Card {
+	if cards, ok := value.([]cardapi.Card); ok {
+		return cards
+	}
+
+	return nil
+}
+
+func folderRecords(value any) []folderapi.Folder {
+	if folders, ok := value.([]folderapi.Folder); ok {
+		return folders
+	}
+
+	return nil
+}
+
+func indexedRecords(value any) map[string]*contentapi.Item {
+	if items, ok := value.(map[string]*contentapi.Item); ok {
+		return items
+	}
+
+	return nil
+}
+
+func itemRecord(value any) *contentapi.Item {
+	if item, ok := value.(*contentapi.Item); ok {
+		return item
+	}
+
+	return nil
+}
+
+func rulesValue(value any) *library.Rules {
+	rules, err := contentapi.Decode[library.Rules](value)
+	if err != nil {
+		return new(library.Rules)
+	}
+
+	return &rules
+}
+
+func bindDatabase(storage *persistence, db database) {
+	if db == nil {
+		return
+	}
+
+	storage.view = db.View
+	storage.update = db.Update
+	storage.closeDatabase = db.Close
+	storage.databasePath = db.Path
+	storage.databaseStats = db.Stats
 }
 
 func storageLogger(loggers []*slog.Logger) *slog.Logger {
@@ -1477,7 +1899,7 @@ func storageLogger(loggers []*slog.Logger) *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, nil))
 }
 
-func storePrepare(storage *Store, path string) error {
+func storePrepare(storage *persistence, path string) error {
 	err := storeInitialize(storage, path)
 	if err != nil {
 		return fmt.Errorf("initialize database: %w", err)
@@ -1491,19 +1913,19 @@ func storePrepare(storage *Store, path string) error {
 	return nil
 }
 
-func storeCloseMediaFile(storage *Store, ctx context.Context, file *os.File) {
+func storeCloseMediaFile(ctx context.Context, storage *persistence, file *os.File) {
 	err := file.Close()
 	if err != nil {
 		storage.logger.WarnContext(
 			ctx,
 			"could not close media file",
 			//nolint:sloglint // Log field names come from validated embedded configuration.
-			slog.Any(storage.settings.LogErrorKey, err),
+			slog.Any(settingsValue(storage.settings).LogErrorKey, err),
 		)
 	}
 }
 
-func storeRemoveMediaFile(storage *Store, path string) {
+func storeRemoveMediaFile(storage *persistence, path string) {
 	err := os.Remove(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return
@@ -1512,28 +1934,28 @@ func storeRemoveMediaFile(storage *Store, path string) {
 	storeReportCleanupFailure(storage, err)
 }
 
-func storeReportCleanupFailure(storage *Store, err error) {
+func storeReportCleanupFailure(storage *persistence, err error) {
 	if err != nil {
 		storage.logger.WarnContext(
 			context.Background(),
 			"could not clean up media",
 			//nolint:sloglint // Log field names come from validated embedded configuration.
-			slog.Any(storage.settings.LogErrorKey, err),
+			slog.Any(settingsValue(storage.settings).LogErrorKey, err),
 		)
 	}
 }
 
 // Close closes library persistence after current media operations finish.
-func storeClose(storage *Store) error {
+func storeClose(storage *persistence) error {
 	storage.ready.Store(false)
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
 
-	if storage.db == nil {
+	if storage.closeDatabase == nil {
 		return nil
 	}
 
-	forwardErr2 := storage.db.Close()
+	forwardErr2 := storage.closeDatabase()
 	if forwardErr2 != nil {
 		return fmt.Errorf("close: %w", forwardErr2)
 	}
@@ -1542,15 +1964,17 @@ func storeClose(storage *Store) error {
 }
 
 // ListFolders returns folder metadata in creation order.
-func storeListFolders(storage *Store) ([]folderapi.Folder, error) {
+func storeListFolders(storage *persistence) ([]folderapi.Folder, error) {
 	reader := folderListing{root: nil, folders: []folderapi.Folder{}}
 
-	err := storage.db.View(func(transaction *bolt.Tx) error { return folderListingRead(&reader, transaction) })
+	err := storage.view(
+		func(transaction *bolt.Tx) error { return folderListingRead(&reader, transaction) },
+	)
 	if err != nil {
 		return nil, fmt.Errorf("list folders: %w", err)
 	}
 
-	return reader.folders, nil
+	return folderRecords(reader.folders), nil
 }
 
 func folderListingRead(reader *folderListing, transaction *bolt.Tx) error {
@@ -1559,7 +1983,9 @@ func folderListingRead(reader *folderListing, transaction *bolt.Tx) error {
 		return errMissingFoldersBucket
 	}
 
-	err := reader.root.ForEach(func(key, value []byte) error { return folderListingAppendFolder(reader, key, value) })
+	err := reader.root.ForEach(
+		func(key, value []byte) error { return folderListingAppendFolder(reader, key, value) },
+	)
 	if err != nil {
 		return fmt.Errorf("read folder records: %w", err)
 	}
@@ -1573,7 +1999,7 @@ func folderListingAppendFolder(reader *folderListing, key, value []byte) error {
 		return fmt.Errorf("read folder %q: %w", key, err)
 	}
 
-	reader.folders = append(reader.folders, folder)
+	reader.folders = append(folderRecords(reader.folders), folder)
 
 	return nil
 }
@@ -1612,20 +2038,18 @@ func decodeFolder(data []byte, id string) (folderapi.Folder, error) {
 }
 
 // CreateFolder persists normalized metadata in a new folder.
-func storeCreateFolder(storage *Store, input *folderapi.CreateInput) (folderapi.Folder, error) {
+func storeCreateFolder(
+	storage *persistence,
+	input *folderapi.CreateInput,
+) (folderapi.Folder, error) {
 	folder, err := library.NormalizeFolder(input)
 	if err != nil {
 		return folderapi.Folder{}, fmt.Errorf(createFolderErrorFormat, err)
 	}
 
-	err = storage.db.Update(func(transaction *bolt.Tx) error {
-		persistErr := persistNewFolder(transaction, &folder)
-		if persistErr != nil {
-			return fmt.Errorf(createFolderErrorFormat, persistErr)
-		}
-
-		return nil
-	})
+	err = storage.update(
+		func(transaction *bolt.Tx) error { return errors.Join(persistNewFolder(transaction, &folder)) },
+	)
 	if err != nil {
 		return folderapi.Folder{}, fmt.Errorf(createFolderErrorFormat, err)
 	}
@@ -1707,12 +2131,12 @@ func writeFolderMetadata(bucket *bolt.Bucket, folder *folderapi.Folder) error {
 }
 
 // DeleteCard deletes an owned card and reconciles its media files.
-func storeDeleteCard(storage *Store, folderID, cardID string) error {
+func storeDeleteCard(storage *persistence, folderID, cardID string) error {
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
 
-	err := storage.db.Update(func(transaction *bolt.Tx) error {
-		return storeDeleteCardRecords(storage, transaction, folderID, cardID)
+	err := storage.update(func(transaction *bolt.Tx) error {
+		return storeDeleteCardRecords(storage, transaction, &[two]string{folderID, cardID})
 	})
 	if err != nil {
 		return fmt.Errorf(deleteCardErrorFormat, err)
@@ -1724,13 +2148,17 @@ func storeDeleteCard(storage *Store, folderID, cardID string) error {
 	return nil
 }
 
-func storeDeleteCardRecords(storage *Store, transaction *bolt.Tx, folderID, cardID string) error {
-	card, err := storeLoadCard(storage, transaction, folderID, cardID)
+func storeDeleteCardRecords(
+	storage *persistence,
+	transaction *bolt.Tx,
+	identity *[two]string,
+) error {
+	card, err := storeLoadCard(storage, transaction, &[two]string{identity[zero], identity[one]})
 	if err != nil {
 		return fmt.Errorf(deleteCardErrorFormat, err)
 	}
 
-	folder := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(folderID))
+	folder := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(identity[zero]))
 
 	err = deleteOwnedCard(folder, card.ID)
 	if err != nil {
@@ -1755,11 +2183,11 @@ func deleteOwnedCard(folder *bolt.Bucket, cardID string) error {
 }
 
 // DeleteFolder deletes a folder and reconciles its media files.
-func storeDeleteFolder(storage *Store, folderID string) error {
+func storeDeleteFolder(storage *persistence, folderID string) error {
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
 
-	err := storage.db.Update(func(transaction *bolt.Tx) error {
+	err := storage.update(func(transaction *bolt.Tx) error {
 		root := transaction.Bucket([]byte(foldersBucket))
 		if root == nil || folderID == "" || root.Bucket([]byte(folderID)) == nil {
 			return errFolderNotFound
@@ -1804,16 +2232,16 @@ func validFolderContent(folder *bolt.Bucket) bool {
 		folder.Bucket([]byte(itemsBucket)) != nil
 }
 
-func storeLoadCard(storage *Store,
+func storeLoadCard(storage *persistence,
 	transaction *bolt.Tx,
-	folderID, cardID string,
+	identity *[two]string,
 ) (cardapi.Card, error) {
-	bucket, err := cardBucket(transaction, folderID)
+	bucket, err := cardBucket(transaction, identity[zero])
 	if err != nil {
 		return cardapi.Card{}, fmt.Errorf(loadCardErrorFormat, err)
 	}
 
-	card, err := readCardMetadata(bucket, folderID, cardID)
+	card, err := readCardMetadata(bucket, identity[zero], identity[one])
 	if err != nil {
 		return cardapi.Card{}, fmt.Errorf(loadCardErrorFormat, err)
 	}
@@ -1826,7 +2254,7 @@ func storeLoadCard(storage *Store,
 	return hydrated, nil
 }
 
-func storeHydrateStoredCard(storage *Store,
+func storeHydrateStoredCard(storage *persistence,
 	transaction *bolt.Tx,
 	card *cardapi.Card,
 ) (cardapi.Card, error) {
@@ -1876,7 +2304,7 @@ func validCardMetadata(card *cardapi.Card, folderID, cardID string) bool {
 	return card.ID == cardID && card.FolderID == folderID && card.CreatedAt > zero
 }
 
-func storeLoadCardItems(storage *Store, transaction *bolt.Tx, card *cardapi.Card) error {
+func storeLoadCardItems(storage *persistence, transaction *bolt.Tx, card *cardapi.Card) error {
 	items := transaction.Bucket([]byte(foldersBucket)).
 		Bucket([]byte(card.FolderID)).
 		Bucket([]byte(itemsBucket)).
@@ -1896,7 +2324,7 @@ func cardContentReaderLoad(reader *cardContentReader, items *bolt.Bucket) error 
 		return errMissingCardContent
 	}
 
-	reader.card.Items = []contentapi.Item{}
+	cardRecord(&reader.card).Items = []contentapi.Item{}
 
 	err := cardContentReaderReadItems(reader, items)
 	if err != nil {
@@ -1907,20 +2335,22 @@ func cardContentReaderLoad(reader *cardContentReader, items *bolt.Bucket) error 
 }
 
 func newCardContentReader(
-	storage *Store,
+	storage *persistence,
 	transaction *bolt.Tx,
 	card *cardapi.Card,
 ) *cardContentReader {
 	return &cardContentReader{
-		settings:  storage.settings,
-		card:      card,
-		scheduler: storage.scheduler,
-		schema:    readSchemaVersion(transaction),
+		settings: settingsValue(storage.settings),
+		card:     card,
+		validate: storage.validateSchedule,
+		schema:   readSchemaVersion(transaction),
 	}
 }
 
 func cardContentReaderReadItems(reader *cardContentReader, items *bolt.Bucket) error {
-	err := items.ForEach(func(id, data []byte) error { return cardContentReaderAppendItem(reader, id, data) })
+	err := items.ForEach(
+		func(id, data []byte) error { return cardContentReaderAppendItem(reader, id, data) },
+	)
 	if err != nil {
 		return fmt.Errorf("read card content: %w", err)
 	}
@@ -1929,12 +2359,12 @@ func cardContentReaderReadItems(reader *cardContentReader, items *bolt.Bucket) e
 }
 
 func cardContentReaderAppendItem(reader *cardContentReader, id, data []byte) error {
-	item, err := decodeContentItem(reader.settings, data)
+	item, err := decodeContentItem(settingsValue(reader.settings), data)
 	if err != nil {
 		return fmt.Errorf("decode card content: %w", err)
 	}
 
-	if !contentBelongsTo(reader.card, &item, string(id)) {
+	if !contentBelongsTo(cardRecord(&reader.card), &item, string(id)) {
 		return errInvalidContentOwnership
 	}
 
@@ -1943,7 +2373,10 @@ func cardContentReaderAppendItem(reader *cardContentReader, id, data []byte) err
 		return fmt.Errorf("validate card content: %w", err)
 	}
 
-	reader.card.Items = append(contentapi.Items(reader.card.Items), item)
+	cardRecord(&reader.card).Items = append(
+		contentapi.Items(cardRecord(&reader.card).Items),
+		item,
+	)
 
 	return nil
 }
@@ -1956,7 +2389,7 @@ func decodeContentItem(settings *Settings, data []byte) (contentapi.Item, error)
 		return item, fmt.Errorf("decode content item: %w", err)
 	}
 
-	err = library.ValidateItem(&settings.Rules, &item)
+	err = library.ValidateItem(rulesValue(settings.Rules), &item)
 	if err != nil {
 		return item, fmt.Errorf("validate content item: %w", err)
 	}
@@ -1973,7 +2406,7 @@ func cardContentReaderValidateSchedule(reader *cardContentReader, item *contenta
 		return errMissingItemSchedule
 	}
 
-	err := reader.scheduler.Validate(new(contentapi.Schedule(item.Schedule)))
+	err := reader.validate(new(contentapi.Schedule(item.Schedule)))
 	if err != nil {
 		return fmt.Errorf("invalid item schedule: %w", err)
 	}
@@ -2088,20 +2521,22 @@ func writeRecord(
 }
 
 // ListCards returns hydrated cards from every folder.
-func storeListCards(storage *Store) ([]cardapi.Card, error) {
+func storeListCards(storage *persistence) ([]cardapi.Card, error) {
 	reader := cardListing{
-		storage: storage, cards: []cardapi.Card{}, root: nil, items: nil, schema: "", folderID: "",
+		cards: []cardapi.Card{}, root: nil, items: nil, schema: "", folderID: "",
 	}
 
-	err := storage.db.View(func(transaction *bolt.Tx) error { return cardListingRead(&reader, transaction) })
+	err := storage.view(
+		func(transaction *bolt.Tx) error { return cardListingRead(storage, &reader, transaction) },
+	)
 	if err != nil {
 		return nil, fmt.Errorf("list cards: %w", err)
 	}
 
-	return reader.cards, nil
+	return cardRecords(reader.cards), nil
 }
 
-func cardListingRead(reader *cardListing, transaction *bolt.Tx) error {
+func cardListingRead(storage *persistence, reader *cardListing, transaction *bolt.Tx) error {
 	reader.root = transaction.Bucket([]byte(foldersBucket))
 	reader.schema = readSchemaVersion(transaction)
 
@@ -2109,7 +2544,11 @@ func cardListingRead(reader *cardListing, transaction *bolt.Tx) error {
 		return errMissingFoldersBucket
 	}
 
-	err := reader.root.ForEach(func(folderID, value []byte) error { return cardListingAppendFolder(reader, folderID, value) })
+	err := reader.root.ForEach(
+		func(folderID, value []byte) error {
+			return cardListingAppendFolder(storage, reader, &[two][]byte{folderID, value})
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("read folders containing cards: %w", err)
 	}
@@ -2117,16 +2556,21 @@ func cardListingRead(reader *cardListing, transaction *bolt.Tx) error {
 	return nil
 }
 
-func cardListingAppendFolder(reader *cardListing, folderID, value []byte) error {
-	folder := reader.root.Bucket(folderID)
-	if !validFolderContent(folder) || value != nil {
+func cardListingAppendFolder(
+	storage *persistence,
+	reader *cardListing,
+	entry *[two][]byte,
+) error {
+	folder := reader.root.Bucket(entry[zero])
+	if !validFolderContent(folder) || entry[one] != nil {
 		return errInvalidFolderBucket
 	}
 
-	reader.folderID = string(folderID)
+	reader.folderID = string(entry[zero])
 	reader.items = folder.Bucket([]byte(itemsBucket))
 
-	err := folder.Bucket([]byte(cardsBucket)).ForEach(func(id, data []byte) error { return cardListingAppendCard(reader, id, data) })
+	err := folder.Bucket([]byte(cardsBucket)).
+		ForEach(func(id, data []byte) error { return cardListingAppendCard(storage, reader, &[two][]byte{id, data}) })
 	if err != nil {
 		return fmt.Errorf("read folder cards: %w", err)
 	}
@@ -2134,29 +2578,33 @@ func cardListingAppendFolder(reader *cardListing, folderID, value []byte) error 
 	return nil
 }
 
-func cardListingAppendCard(reader *cardListing, id, data []byte) error {
-	card, err := cardListingLoadCard(reader, id, data)
+func cardListingAppendCard(storage *persistence, reader *cardListing, entry *[two][]byte) error {
+	card, err := cardListingLoadCard(storage, reader, &[two][]byte{entry[zero], entry[one]})
 	if err != nil {
-		return fmt.Errorf("read card %q: %w", id, err)
+		return fmt.Errorf("read card %q: %w", entry[zero], err)
 	}
 
-	reader.cards = append(reader.cards, card)
+	reader.cards = append(cardRecords(reader.cards), card)
 
 	return nil
 }
 
-func cardListingLoadCard(reader *cardListing, id, data []byte) (cardapi.Card, error) {
-	card, err := decodeCardMetadata(data, reader.folderID, string(id))
+func cardListingLoadCard(
+	storage *persistence,
+	reader *cardListing,
+	entry *[two][]byte,
+) (cardapi.Card, error) {
+	card, err := decodeCardMetadata(entry[one], reader.folderID, string(entry[zero]))
 	if err != nil {
 		return card, fmt.Errorf("decode listed metadata: %w", err)
 	}
 
 	content := cardContentReader{
-		settings: reader.storage.settings, scheduler: reader.storage.scheduler,
+		settings: settingsValue(storage.settings), validate: storage.validateSchedule,
 		card: &card, schema: reader.schema,
 	}
 
-	card, err = cardContentReaderHydrate(&content, reader.items.Bucket(id))
+	card, err = cardContentReaderHydrate(&content, reader.items.Bucket(entry[zero]))
 	if err != nil {
 		return cardapi.Card{}, fmt.Errorf("load listed content: %w", err)
 	}
@@ -2170,7 +2618,7 @@ func cardContentReaderHydrate(reader *cardContentReader, items *bolt.Bucket) (ca
 		return cardapi.Card{}, fmt.Errorf("read content to hydrate: %w", err)
 	}
 
-	card, err := library.Hydrate(reader.card)
+	card, err := library.Hydrate(cardRecord(&reader.card))
 	if err != nil {
 		return cardapi.Card{}, fmt.Errorf("hydrate listed card: %w", err)
 	}
@@ -2179,8 +2627,13 @@ func cardContentReaderHydrate(reader *cardContentReader, items *bolt.Bucket) (ca
 }
 
 // CreateCard persists new content and initializes its schedules.
-func storeCreateCard(storage *Store, input *cardapi.CreateInput) (cardapi.Card, error) {
-	result5, forwardErr7 := storeSaveCard(storage, input.FolderID, "", contentapi.Drafts(input.Items))
+func storeCreateCard(storage *persistence, input *cardapi.CreateInput) (cardapi.Card, error) {
+	result5, forwardErr7 := storeSaveCard(
+		storage,
+		newCardWrite(input.FolderID,
+			""),
+		contentapi.Drafts(input.Items),
+	)
 	if forwardErr7 != nil {
 		return result5, fmt.Errorf("create card: %w", forwardErr7)
 	}
@@ -2189,14 +2642,14 @@ func storeCreateCard(storage *Store, input *cardapi.CreateInput) (cardapi.Card, 
 }
 
 // UpdateCard updates owned content while preserving current review state.
-func storeUpdateCard(storage *Store, input *cardapi.UpdateInput) (cardapi.Card, error) {
+func storeUpdateCard(storage *persistence, input *cardapi.UpdateInput) (cardapi.Card, error) {
 	if input.CardID == "" {
 		return cardapi.Card{}, errCardIDIsRequired
 	}
 
 	result6, forwardErr8 := storeSaveCard(storage,
-		input.FolderID,
-		input.CardID,
+		newCardWrite(input.FolderID,
+			input.CardID),
 		contentapi.Drafts(input.Items),
 	)
 	if forwardErr8 != nil {
@@ -2206,70 +2659,66 @@ func storeUpdateCard(storage *Store, input *cardapi.UpdateInput) (cardapi.Card, 
 	return result6, nil
 }
 
-func storeSaveCard(storage *Store,
-	folderID, cardID string,
+func storeSaveCard(storage *persistence,
+	write *cardWrite,
 	drafts []contentapi.Draft,
 ) (cardapi.Card, error) {
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
 
-	write := newCardWrite(storage, folderID, cardID)
-	defer cardWriteDiscardImports(write)
+	defer cardWriteDiscardImports(storage, write)
 
-	err := cardWriteExecute(write, drafts)
+	err := cardWriteExecute(storage, write, drafts)
 	if err != nil {
 		return cardapi.Card{}, fmt.Errorf(saveCardErrorFormat, err)
 	}
 
-	return write.card, nil
+	return (*cardRecord(&write.card)), nil
 }
 
-func newCardWrite(storage *Store, folderID, cardID string) *cardWrite {
+func newCardWrite(folderID, cardID string) *cardWrite {
 	var write cardWrite
 
-	write.storage = storage
 	write.folderID = folderID
 	write.cardID = cardID
 
 	return &write
 }
 
-func cardWriteExecute(write *cardWrite, drafts []contentapi.Draft) error {
-	err := cardWritePrepare(write, drafts)
+func cardWriteExecute(storage *persistence, write *cardWrite, drafts []contentapi.Draft) error {
+	err := cardWritePrepare(storage, write, drafts)
 	if err != nil {
 		return fmt.Errorf("prepare card edit: %w", err)
 	}
 
-	err = write.storage.db.Update(func(transaction *bolt.Tx) error { return cardWritePersist(write, transaction) })
+	err = storage.update(
+		func(transaction *bolt.Tx) error { return cardWritePersist(storage, write, transaction) },
+	)
 	if err != nil {
 		return fmt.Errorf("commit card edit: %w", err)
 	}
 
 	write.committed = true
-	cardWriteRemoveObsoleteMedia(write)
+	cardWriteRemoveObsoleteMedia(storage, write)
 
 	return nil
 }
 
-func cardWritePrepare(write *cardWrite, drafts []contentapi.Draft) error {
-	err := write.storage.db.View(func(transaction *bolt.Tx) error { return cardWriteLoadPrevious(write, transaction) })
+func cardWritePrepare(storage *persistence, write *cardWrite, drafts []contentapi.Draft) error {
+	err := storage.view(
+		func(transaction *bolt.Tx) error { return cardWriteLoadPrevious(storage, write, transaction) },
+	)
 	if err != nil {
 		return fmt.Errorf("read previous card: %w", err)
 	}
 
-	write.items, write.imported, err = library.PrepareItems(&write.storage.settings.Rules,
+	write.items, write.imported, err = library.PrepareItems(
 		context.Background(),
-		&library.PreparationInput{Drafts: drafts, Previous: contentapi.Items(write.previous.Items)},
-		&library.PreparationDependencies{
-			Batch: write.storage.batch,
-			ImportMedia: func(
-				item *contentapi.Item,
-				source string,
-			) (contentapi.Item, string, error) {
-				return storeImportMedia(write.storage, item, source)
-			},
-			NewID: newItemID,
+		&library.PreparationInput{
+			Drafts:   drafts,
+			Previous: contentapi.Items(cardRecord(&write.previous).Items),
 		},
+		cardPreparationDependencies(storage),
 	)
 	if err != nil {
 		return fmt.Errorf("prepare card content: %w", err)
@@ -2278,14 +2727,32 @@ func cardWritePrepare(write *cardWrite, drafts []contentapi.Draft) error {
 	return nil
 }
 
-func cardWriteLoadPrevious(write *cardWrite, transaction *bolt.Tx) error {
+func cardPreparationDependencies(storage *persistence) *library.PreparationDependencies {
+	return &library.PreparationDependencies{
+		Rules: settingsValue(storage.settings).Rules,
+		Batch: storage.batch,
+		ImportMedia: func(item json.RawMessage, source string) (json.RawMessage, string, error) {
+			return importMediaRecord(storage, item, source)
+		},
+		NewID: newItemID,
+	}
+}
+
+func cardWriteLoadPrevious(storage *persistence, write *cardWrite, transaction *bolt.Tx) error {
 	var err error
 
 	switch write.cardID {
 	case "":
 		err = validateDestinationFolder(transaction, write.folderID)
 	default:
-		write.previous, err = storeLoadCard(write.storage, transaction, write.folderID, write.cardID)
+		(*cardRecord(&write.previous)), err = storeLoadCard(
+			storage,
+			transaction,
+			&[two]string{
+				write.folderID,
+				write.cardID,
+			},
+		)
 	}
 
 	if err != nil {
@@ -2308,28 +2775,28 @@ func validateDestinationFolder(transaction *bolt.Tx, folderID string) error {
 	return nil
 }
 
-func cardWriteDiscardImports(write *cardWrite) {
+func cardWriteDiscardImports(storage *persistence, write *cardWrite) {
 	if write.committed {
 		return
 	}
 
 	for index := range write.imported {
-		storeRemoveMediaFile(write.storage, write.imported[index])
+		storeRemoveMediaFile(storage, write.imported[index])
 	}
 }
 
-func cardWritePersist(write *cardWrite, transaction *bolt.Tx) error {
-	bucket, err := cardBucket(transaction, write.folderID)
+func cardWritePersist(storage *persistence, write *cardWrite, transaction *bolt.Tx) error {
+	scope, err := newCardTransaction(transaction, write.folderID)
 	if err != nil {
 		return fmt.Errorf("open destination folder: %w", err)
 	}
 
-	err = cardWriteLoadFresh(write, transaction, bucket)
+	err = cardWriteLoadFresh(storage, write, scope)
 	if err != nil {
 		return fmt.Errorf("read current card: %w", err)
 	}
 
-	err = cardWritePersistPreparedCard(write, transaction, bucket)
+	err = cardWritePersistPreparedCard(storage, write, scope)
 	if err != nil {
 		return fmt.Errorf("persist prepared card: %w", err)
 	}
@@ -2337,13 +2804,26 @@ func cardWritePersist(write *cardWrite, transaction *bolt.Tx) error {
 	return nil
 }
 
-func cardWritePersistPreparedCard(write *cardWrite, transaction *bolt.Tx, bucket *bolt.Bucket) error {
-	err := cardWriteMergeSchedules(write)
+func newCardTransaction(transaction *bolt.Tx, folderID string) (*cardTransaction, error) {
+	bucket, err := cardBucket(transaction, folderID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve card transaction: %w", err)
+	}
+
+	return &cardTransaction{transaction: transaction, bucket: bucket}, nil
+}
+
+func cardWritePersistPreparedCard(
+	storage *persistence,
+	write *cardWrite,
+	scope *cardTransaction,
+) error {
+	err := cardWriteMergeSchedules(storage, write)
 	if err != nil {
 		return fmt.Errorf("merge current schedules: %w", err)
 	}
 
-	err = cardWriteWriteRecords(write, transaction, bucket)
+	err = cardWriteWriteRecords(storage, write, scope)
 	if err != nil {
 		return fmt.Errorf("persist card records: %w", err)
 	}
@@ -2351,20 +2831,26 @@ func cardWritePersistPreparedCard(write *cardWrite, transaction *bolt.Tx, bucket
 	return nil
 }
 
-func cardWriteLoadFresh(write *cardWrite, transaction *bolt.Tx, bucket *bolt.Bucket) error {
-	var err error
-
-	switch write.cardID {
-	case "":
-		err = cardWriteAllocate(write, bucket)
-	default:
-		// Reload after copying media to preserve concurrent reviews and acknowledgments.
-		write.card, err = storeLoadCard(write.storage, transaction, write.folderID, write.cardID)
+func cardWriteLoadFresh(
+	storage *persistence,
+	write *cardWrite,
+	scope *cardTransaction,
+) error {
+	if write.cardID == "" {
+		return errors.Join(cardWriteAllocate(write, scope.bucket))
 	}
 
+	// Reload after copying media to preserve concurrent reviews and acknowledgments.
+	return errors.Join(cardWriteReload(storage, write, scope.transaction))
+}
+
+func cardWriteReload(storage *persistence, write *cardWrite, transaction *bolt.Tx) error {
+	card, err := storeLoadCard(storage, transaction, &[two]string{write.folderID, write.cardID})
 	if err != nil {
 		return fmt.Errorf(loadCardForWriteErrorFormat, err)
 	}
+
+	write.card = &card
 
 	return nil
 }
@@ -2372,7 +2858,7 @@ func cardWriteLoadFresh(write *cardWrite, transaction *bolt.Tx, bucket *bolt.Buc
 func cardWriteAllocate(write *cardWrite, bucket *bolt.Bucket) error {
 	var err error
 
-	write.card, err = allocateCard(bucket, write.folderID)
+	(*cardRecord(&write.card)), err = allocateCard(bucket, write.folderID)
 	if err != nil {
 		return fmt.Errorf(loadCardForWriteErrorFormat, err)
 	}
@@ -2403,23 +2889,25 @@ func allocateCard(bucket *bolt.Bucket, folderID string) (cardapi.Card, error) {
 	return card, nil
 }
 
-func cardWriteMergeSchedules(write *cardWrite) error {
-	fresh := indexContentItems(contentapi.Items(write.card.Items))
+func cardWriteMergeSchedules(storage *persistence, write *cardWrite) error {
+	fresh := indexContentItems(contentapi.Items(cardRecord(&write.card).Items))
 
-	write.card.Items = append([]contentapi.Item(nil), write.items...)
+	cardRecord(&write.card).Items = append(
+		[]contentapi.Item(nil),
+		contentapi.Items(write.items)...)
 
-	initializedAt := time.Now()
+	initialization := &itemInitialization{at: time.Now(), initialize: storage.initializeSchedule}
 
-	for index := range contentapi.Items(write.card.Items) {
-		item := &contentapi.Items(write.card.Items)[index]
+	for index := range contentapi.Items(cardRecord(&write.card).Items) {
+		item := &contentapi.Items(cardRecord(&write.card).Items)[index]
 
-		err := storeRestoreItemSchedule(write.storage, item, fresh[item.ID], initializedAt)
+		err := storeRestoreItemSchedule(item, fresh[item.ID], initialization)
 		if err != nil {
 			return fmt.Errorf("prepare item schedule: %w", err)
 		}
 	}
 
-	assignContentOwnership(&write.card)
+	assignContentOwnership(cardRecord(&write.card))
 
 	return nil
 }
@@ -2433,9 +2921,9 @@ func indexContentItems(items []contentapi.Item) map[string]*contentapi.Item {
 	return indexed
 }
 
-func storeRestoreItemSchedule(storage *Store,
+func storeRestoreItemSchedule(
 	item, previous *contentapi.Item,
-	now time.Time,
+	initialization *itemInitialization,
 ) error {
 	if previous != nil {
 		item.Schedule = contentapi.Schedule(previous.Schedule)
@@ -2445,7 +2933,7 @@ func storeRestoreItemSchedule(storage *Store,
 		return nil
 	}
 
-	err := library.InitializeItem(item, now, storage.scheduler)
+	err := library.InitializeItem(item, initialization.at, initialization.initialize)
 	if err != nil {
 		return fmt.Errorf("initialize item schedule: %w", err)
 	}
@@ -2460,13 +2948,19 @@ func assignContentOwnership(card *cardapi.Card) {
 	}
 }
 
-func cardWriteWriteRecords(write *cardWrite, transaction *bolt.Tx, bucket *bolt.Bucket) error {
-	err := writeCardRecords(transaction, bucket, &write.card)
+func cardWriteWriteRecords(
+	storage *persistence,
+	write *cardWrite,
+	scope *cardTransaction,
+) error {
+	err := writeCardRecords(scope.transaction, scope.bucket, cardRecord(&write.card))
 	if err != nil {
 		return fmt.Errorf("write card: %w", err)
 	}
 
-	write.card, err = storeLoadCard(write.storage, transaction, write.folderID, write.card.ID)
+	write.cardID = cardRecord(&write.card).ID
+
+	err = cardWriteReload(storage, write, scope.transaction)
 	if err != nil {
 		return fmt.Errorf("read saved card: %w", err)
 	}
@@ -2488,23 +2982,24 @@ func writeCardRecords(transaction *bolt.Tx, bucket *bolt.Bucket, card *cardapi.C
 	return nil
 }
 
-func cardWriteRemoveObsoleteMedia(write *cardWrite) {
+func cardWriteRemoveObsoleteMedia(storage *persistence, write *cardWrite) {
 	kept := make(map[string]bool)
 
-	for index := range contentapi.Items(write.card.Items) {
-		kept[contentapi.Items(write.card.Items)[index].ID] = true
+	for index := range contentapi.Items(cardRecord(&write.card).Items) {
+		kept[contentapi.Items(cardRecord(&write.card).Items)[index].ID] = true
 	}
 
-	for index := range contentapi.Items(write.previous.Items) {
-		item := &contentapi.Items(write.previous.Items)[index]
-		if item.Kind != write.storage.settings.Rules.TextKind && !kept[item.ID] {
-			storeRemoveMediaFile(write.storage, storeMediaPath(write.storage, item.RelativePath))
+	for index := range contentapi.Items(cardRecord(&write.previous).Items) {
+		item := &contentapi.Items(cardRecord(&write.previous).Items)[index]
+		if item.Kind != rulesValue(settingsValue(storage.settings).Rules).TextKind &&
+			!kept[item.ID] {
+			storeRemoveMediaFile(storage, storeMediaPath(storage, item.RelativePath))
 		}
 	}
 }
 
 // ReviewItem records a user rating for an owned content item.
-func storeReviewItem(storage *Store, input *cardapi.ReviewInput) (cardapi.Card, error) {
+func storeReviewItem(storage *persistence, input *cardapi.ReviewInput) (cardapi.Card, error) {
 	result7, forwardErr9 := storeReviewItemAt(storage, input, time.Time{})
 	if forwardErr9 != nil {
 		return result7, fmt.Errorf(reviewItemErrorFormat, forwardErr9)
@@ -2513,7 +3008,7 @@ func storeReviewItem(storage *Store, input *cardapi.ReviewInput) (cardapi.Card, 
 	return result7, nil
 }
 
-func storeReviewItemAt(storage *Store,
+func storeReviewItemAt(storage *persistence,
 	input *cardapi.ReviewInput,
 	now time.Time,
 ) (cardapi.Card, error) {
@@ -2521,35 +3016,36 @@ func storeReviewItemAt(storage *Store,
 		return cardapi.Card{}, errInvalidReviewRating
 	}
 
-	review := newCardRating(storage, input.FolderID, input.CardID)
+	review := newCardRating(input.FolderID, input.CardID)
 
 	review.itemID, review.rating, review.now = input.ItemID, input.Rating, now
 
-	err := storage.db.Update(func(transaction *bolt.Tx) error { return cardRatingApply(review, transaction) })
+	err := storage.update(
+		func(transaction *bolt.Tx) error { return cardRatingApply(storage, review, transaction) },
+	)
 	if err != nil {
 		return cardapi.Card{}, fmt.Errorf(reviewItemErrorFormat, err)
 	}
 
-	return review.card, nil
+	return (*cardRecord(&review.card)), nil
 }
 
-func newCardRating(storage *Store, folderID, cardID string) *cardRating {
+func newCardRating(folderID, cardID string) *cardRating {
 	var review cardRating
 
-	review.storage = storage
 	review.folderID = folderID
 	review.cardID = cardID
 
 	return &review
 }
 
-func cardRatingApply(review *cardRating, transaction *bolt.Tx) error {
-	item, err := cardRatingReadAndRate(review, transaction)
+func cardRatingApply(storage *persistence, review *cardRating, transaction *bolt.Tx) error {
+	err := cardRatingReadAndRate(storage, review, transaction)
 	if err != nil {
 		return fmt.Errorf(reviewItemAtErrorFormat, err)
 	}
 
-	err = cardRatingPersistItem(review, transaction, item)
+	err = cardRatingPersistItem(storage, review, transaction)
 	if err != nil {
 		return fmt.Errorf(reviewItemAtErrorFormat, err)
 	}
@@ -2560,7 +3056,7 @@ func cardRatingApply(review *cardRating, transaction *bolt.Tx) error {
 func cardRatingHydrate(review *cardRating) error {
 	var err error
 
-	review.card, err = library.Hydrate(&review.card)
+	(*cardRecord(&review.card)), err = library.Hydrate(cardRecord(&review.card))
 	if err != nil {
 		return fmt.Errorf(reviewItemAtErrorFormat, err)
 	}
@@ -2568,18 +3064,19 @@ func cardRatingHydrate(review *cardRating) error {
 	return nil
 }
 
-func cardRatingPersistItem(review *cardRating, transaction *bolt.Tx, item *contentapi.Item) error {
-	reader := newCardContentReader(review.storage, transaction, &review.card)
+func cardRatingPersistItem(
+	storage *persistence,
+	review *cardRating,
+	transaction *bolt.Tx,
+) error {
+	reader := newCardContentReader(storage, transaction, cardRecord(&review.card))
 
-	err := cardContentReaderValidateSchedule(reader, item)
+	err := cardContentReaderValidateSchedule(reader, itemRecord(review.item))
 	if err != nil {
 		return fmt.Errorf("validate reviewed schedule: %w", err)
 	}
 
-	bucket := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(review.folderID)).
-		Bucket([]byte(itemsBucket)).Bucket([]byte(review.cardID))
-
-	err = writeContentItem(bucket, item)
+	err = writeContentItem(cardRatingItemBucket(transaction, review), itemRecord(review.item))
 	if err != nil {
 		return fmt.Errorf("persist reviewed item: %w", err)
 	}
@@ -2587,30 +3084,50 @@ func cardRatingPersistItem(review *cardRating, transaction *bolt.Tx, item *conte
 	return nil
 }
 
-func cardRatingReadAndRate(review *cardRating, transaction *bolt.Tx) (*contentapi.Item, error) {
-	var err error
-
-	review.card, err = storeLoadCard(review.storage, transaction, review.folderID, review.cardID)
-	if err != nil {
-		return nil, fmt.Errorf("read card to review: %w", err)
-	}
-
-	item, err := cardRatingRateCard(review)
-	if err != nil {
-		return nil, fmt.Errorf("review owned content: %w", err)
-	}
-
-	return item, nil
+func cardRatingItemBucket(transaction *bolt.Tx, review *cardRating) *bolt.Bucket {
+	return transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(review.folderID)).
+		Bucket([]byte(itemsBucket)).Bucket([]byte(review.cardID))
 }
 
-func cardRatingRateCard(review *cardRating) (*contentapi.Item, error) {
-	for index := range contentapi.Items(review.card.Items) {
-		item := &contentapi.Items(review.card.Items)[index]
+func cardRatingReadAndRate(
+	storage *persistence,
+	review *cardRating,
+	transaction *bolt.Tx,
+) error {
+	err := cardRatingLoadCard(storage, review, transaction)
+	if err != nil {
+		return fmt.Errorf("read card to review: %w", err)
+	}
+
+	item, err := cardRatingRateCard(storage, review)
+	if err != nil {
+		return fmt.Errorf("review owned content: %w", err)
+	}
+
+	review.item = item
+
+	return nil
+}
+
+func cardRatingLoadCard(storage *persistence, review *cardRating, transaction *bolt.Tx) error {
+	card, err := storeLoadCard(storage, transaction, &[two]string{review.folderID, review.cardID})
+	if err != nil {
+		return fmt.Errorf("load reviewed card: %w", err)
+	}
+
+	review.card = &card
+
+	return nil
+}
+
+func cardRatingRateCard(storage *persistence, review *cardRating) (*contentapi.Item, error) {
+	for index := range contentapi.Items(cardRecord(&review.card).Items) {
+		item := &contentapi.Items(cardRecord(&review.card).Items)[index]
 		if item.ID != review.itemID {
 			continue
 		}
 
-		err := cardRatingRateItem(review, item)
+		err := cardRatingRateItem(storage, review, item)
 		if err != nil {
 			return nil, fmt.Errorf("rate item: %w", err)
 		}
@@ -2621,13 +3138,18 @@ func cardRatingRateCard(review *cardRating) (*contentapi.Item, error) {
 	return nil, errContentItemNotFound
 }
 
-func cardRatingRateItem(review *cardRating, item *contentapi.Item) error {
+func cardRatingRateItem(storage *persistence, review *cardRating, item *contentapi.Item) error {
 	if review.now.IsZero() {
 		review.now = time.Now()
 	}
 
-	err := library.ApplyReview(&review.storage.settings.Rules,
-		item, &reviewapi.Attempt{At: review.now, Rating: review.rating}, review.storage.scheduler,
+	err := library.ApplyReview(
+		item,
+		&reviewapi.Attempt{At: review.now, Rating: review.rating},
+		&library.ReviewDependencies{
+			Rules: settingsValue(storage.settings).Rules,
+			Next:  storage.nextSchedule,
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("advance reviewed item: %w", err)
@@ -2685,8 +3207,8 @@ func normalizeDecoded(target any) (err error) {
 		err = contentapi.NormalizeItem(record)
 	case *cardapi.Card:
 		err = cardapi.Normalize(record)
-	case *legacyItem:
-		err = contentapi.NormalizeItem(record.Item)
+	default:
+		return nil
 	}
 
 	if err != nil {
@@ -2874,7 +3396,7 @@ func settingsLegacyCollector(settings *Settings,
 	old *[]*legacyItem,
 ) func([]byte, []byte) error {
 	return func(id, data []byte) error {
-		item, err := settingsReadLegacyItem(settings, id, data, card)
+		item, err := settingsReadLegacyItem(settings, &legacyEntry{id: id, value: data}, card)
 		if err != nil {
 			return fmt.Errorf(mergeLegacyItemsErrorFormat, err)
 		}

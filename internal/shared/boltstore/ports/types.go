@@ -8,10 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"time"
-
-	cardapi "raven/api/cards"
-	folderapi "raven/api/folders"
-	reviewapi "raven/api/reviews"
 )
 
 type (
@@ -33,23 +29,23 @@ type (
 
 	// Folders persists folder metadata and ownership.
 	Folders interface {
-		ListFolders() ([]folderapi.Folder, error)
-		CreateFolder(input *folderapi.CreateInput) (folderapi.Folder, error)
+		ListFolders() (string, error)
+		CreateFolder(input string) (string, error)
 		DeleteFolder(folderID string) error
 	}
 
 	// Cards persists card content and schedules.
 	Cards interface {
-		ListCards() ([]cardapi.Card, error)
-		CreateCard(input *cardapi.CreateInput) (cardapi.Card, error)
-		UpdateCard(input *cardapi.UpdateInput) (cardapi.Card, error)
+		ListCards() (string, error)
+		CreateCard(input string) (string, error)
+		UpdateCard(input string) (string, error)
 		DeleteCard(folderID, cardID string) error
-		ReviewItem(input *cardapi.ReviewInput) (cardapi.Card, error)
+		ReviewItem(input string) (string, error)
 	}
 
 	// ReviewSettings persists reminder acknowledgments and one-time initialization.
 	ReviewSettings interface {
-		MarkNotified(occurrences []reviewapi.DueOccurrence) error
+		MarkNotified(occurrences string) error
 		ClaimNotificationPrompt() (bool, error)
 		ClaimAutostartInitialization() (bool, error)
 	}

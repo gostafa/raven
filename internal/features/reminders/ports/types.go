@@ -11,7 +11,7 @@ type (
 		Wake()
 		Stop()
 	}
-	// Store acknowledges notification delivery for unchanged item schedules.
+	// Store acknowledges a JSON batch of due occurrences after notification delivery.
 	Store interface {
 		MarkNotified(occurrences string) error
 	}

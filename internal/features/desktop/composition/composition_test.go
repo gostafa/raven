@@ -31,7 +31,11 @@ func TestNativeDesktopProvidersAndLifecycle(t *testing.T) {
 	runtime := lifetime.New()
 	t.Cleanup(runtime.Cancel)
 	app := newApplication(appParams{
-		Media:      mediawails.NewRegistry(cffbatch.New(), nil, logger, &mediawails.Settings{}),
+		Media: mediawails.NewRegistry(
+			cffbatch.New(),
+			&mediawails.Dependencies{Logger: logger},
+			&mediawails.Settings{},
+		),
 		Visibility: requests.Visibility(),
 		Logger:     logger,
 		Assets: Assets{
@@ -191,4 +195,40 @@ func configurationFixture() configuration.Settings {
 		panic(err)
 	}
 	return settings
+}
+
+type bindingWindows struct{ shown int }
+
+func (windows *bindingWindows) ShowMain()           { windows.shown++ }
+func (*bindingWindows) HideMain()                   {}
+func (*bindingWindows) ConfigureWidget()            {}
+func (*bindingWindows) ResetWidget()                {}
+func (*bindingWindows) PositionFloatingReview()     {}
+func (*bindingWindows) RequestFloatingReviewClose() {}
+func (*bindingWindows) ToggleFloatingReview()       {}
+func (*bindingWindows) HideFloatingReview()         {}
+func (*bindingWindows) Quit()                       {}
+
+type bindingReminders struct{ wakes int }
+
+func (*bindingReminders) Start()          {}
+func (*bindingReminders) Stop()           {}
+func (reminders *bindingReminders) Wake() { reminders.wakes++ }
+
+func TestDesktopCapabilitiesBindOnlyPresentFeatures(t *testing.T) {
+	deps := &desktopwails.Dependencies{}
+	bindDesktopWindows(deps, desktopParams{})
+	bindDesktopReminders(deps, desktopParams{})
+	if deps.ShowMain != nil || deps.WakeReminders != nil {
+		t.Fatal("absent features acquired native callbacks")
+	}
+	windows, reminders := &bindingWindows{}, &bindingReminders{}
+	params := desktopParams{Windows: windows, Reminders: reminders}
+	bindDesktopWindows(deps, params)
+	bindDesktopReminders(deps, params)
+	deps.ShowMain()
+	deps.WakeReminders()
+	if windows.shown != 1 || reminders.wakes != 1 {
+		t.Fatal("feature callbacks did not retain their owners")
+	}
 }

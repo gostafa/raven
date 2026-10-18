@@ -42,12 +42,15 @@ func storeDependencies(
 	params storeParams,
 	settings configuration.Settings,
 ) *boltstore.Dependencies {
-	return &boltstore.Dependencies{
-		Batch: params.Batch, Scheduler: params.Scheduler, Logger: params.Logger,
-		Settings: boltstore.Settings{
+	return func() *boltstore.Dependencies {
+		deps := boltstore.NewDependencies(params.Batch, params.Scheduler, &boltstore.Settings{
 			Rules:            configuration.Library(settings),
 			MediaRoutePrefix: settings.MediaRoutePrefix(),
 			LogErrorKey:      settings.LogErrorKey(),
-		},
-	}
+		})
+
+		deps.Logger = params.Logger
+
+		return deps
+	}()
 }

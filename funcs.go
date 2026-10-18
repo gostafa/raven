@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,10 +16,7 @@ import (
 	"go.uber.org/fx/fxevent"
 	"go.uber.org/multierr"
 
-	cardapi "raven/api/cards"
 	configurationapi "raven/api/configuration"
-	folderapi "raven/api/folders"
-	mediaapi "raven/api/media"
 	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopcomposition "raven/internal/features/desktop/composition"
@@ -25,14 +24,226 @@ import (
 )
 
 func newService(deps serviceParams, settings configuration.Settings) *RavenService {
-	return &RavenService{
-		configuration: settings,
-		store:         deps.Repository,
-		media:         deps.Media,
-		windows:       deps.Windows,
-		events:        deps.Events,
-		reminders:     deps.Reminders,
+	operations := libraryOperations(deps.Repository)
+	changed := func() { schedulesChanged(deps, settings) }
+	bindCardOperations(operations, deps.Repository, changed)
+	bindWindowOperations(operations, deps)
+	bindAuxiliaryOperations(operations, deps, settings)
+
+	return &RavenService{operations: operations}
+}
+
+func libraryOperations(
+	repository libraryports.Repository,
+) map[string]func(string, string) serviceResult[string] {
+	return map[string]func(string, string) serviceResult[string]{
+		"ListFolders": func(string, string) serviceResult[string] {
+			return readLibrary(
+				repository,
+				folderStorageIsUnavailable,
+				libraryports.Repository.ListFolders,
+			)
+		},
+		"ListCards": func(string, string) serviceResult[string] {
+			return readLibrary(
+				repository,
+				cardStorageIsUnavailable,
+				libraryports.Repository.ListCards,
+			)
+		},
+		"CreateFolder": func(input, _ string) serviceResult[string] { return createFolder(repository, input) },
 	}
+}
+
+func createFolder(repository libraryports.Repository, input string) serviceResult[string] {
+	if repository == nil {
+		return publicResult("", &ServiceError{Message: folderStorageIsUnavailable})
+	}
+
+	return publicResult(repository.CreateFolder(input))
+}
+
+func bindCardOperations(
+	operations map[string]func(string, string) serviceResult[string],
+	repository libraryports.Repository,
+	changed func(),
+) {
+	edits := map[string]func(libraryports.Repository, string) (string, error){
+		"CreateCard": libraryports.Repository.CreateCard,
+		"UpdateCard": libraryports.Repository.UpdateCard,
+		"ReviewItem": libraryports.Repository.ReviewItem,
+	}
+
+	for name := range edits {
+		edit := edits[name]
+
+		operations[name] = func(input, _ string) serviceResult[string] {
+			return changedResult(editLibrary(repository, input, edit), changed)
+		}
+	}
+
+	bindDeletionOperations(operations, repository, changed)
+}
+
+func editLibrary(
+	repository libraryports.Repository,
+	input string,
+	edit func(libraryports.Repository, string) (string, error),
+) serviceResult[string] {
+	if repository == nil {
+		return publicResult("", &ServiceError{Message: cardStorageIsUnavailable})
+	}
+
+	return publicResult(edit(repository, input))
+}
+
+func bindDeletionOperations(
+	operations map[string]func(string, string) serviceResult[string],
+	repository libraryports.Repository,
+	changed func(),
+) {
+	operations["DeleteFolder"] = folderDeletion(repository, changed)
+	operations["DeleteCard"] = cardDeletion(repository, changed)
+}
+
+func folderDeletion(
+	repository libraryports.Repository,
+	changed func(),
+) func(string, string) serviceResult[string] {
+	return func(folder, _ string) serviceResult[string] {
+		result := deleteLibrary(
+			repository,
+			folderStorageIsUnavailable,
+			func(repo libraryports.Repository) error {
+				return errors.Join(repo.DeleteFolder(folder))
+			},
+		)
+
+		return changedResult(result, changed)
+	}
+}
+
+func cardDeletion(
+	repository libraryports.Repository,
+	changed func(),
+) func(string, string) serviceResult[string] {
+	return func(folder, card string) serviceResult[string] {
+		result := deleteLibrary(
+			repository,
+			cardStorageIsUnavailable,
+			func(repo libraryports.Repository) error {
+				return errors.Join(repo.DeleteCard(folder, card))
+			},
+		)
+
+		return changedResult(result, changed)
+	}
+}
+
+func deleteLibrary(
+	repository libraryports.Repository,
+	unavailable string,
+	remove func(libraryports.Repository) error,
+) serviceResult[string] {
+	if repository == nil {
+		return publicResult("", &ServiceError{Message: unavailable})
+	}
+
+	return publicResult("", remove(repository))
+}
+
+func changedResult(result serviceResult[string], changed func()) serviceResult[string] {
+	if result.failure == nil {
+		changed()
+	}
+
+	return result
+}
+
+func bindWindowOperations(
+	operations map[string]func(string, string) serviceResult[string],
+	deps serviceParams,
+) {
+	actions := windowActions(deps)
+
+	for name := range actions {
+		action := actions[name]
+
+		operations[name] = func(string, string) serviceResult[string] {
+			action()
+
+			return serviceResult[string]{value: "", failure: nil}
+		}
+	}
+}
+
+func windowActions(deps serviceParams) map[string]func() {
+	return map[string]func(){
+		"ShowMain":             func() { deps.Windows.ShowMain() },
+		"HideMain":             func() { deps.Windows.HideMain() },
+		"ResetWidget":          func() { deps.Windows.ResetWidget() },
+		"Quit":                 func() { deps.Windows.Quit() },
+		"ToggleFloatingReview": func() { deps.Windows.ToggleFloatingReview() },
+		"HideFloatingReview":   func() { deps.Windows.HideFloatingReview() },
+	}
+}
+
+func bindAuxiliaryOperations(
+	operations map[string]func(string, string) serviceResult[string],
+	deps serviceParams,
+	settings configuration.Settings,
+) {
+	operations["GetConfiguration"] = func(string, string) serviceResult[string] {
+		return encodePublic(configurationSnapshot(settings))
+	}
+	operations["SelectMediaFiles"] = func(kind, _ string) serviceResult[string] { return selectMedia(deps, kind) }
+	bindInteractionOperations(operations, deps, settings)
+}
+
+func bindInteractionOperations(
+	operations map[string]func(string, string) serviceResult[string],
+	deps serviceParams,
+	settings configuration.Settings,
+) {
+	operations["ShowReviews"] = func(string, string) serviceResult[string] {
+		deps.Windows.ShowMain()
+		deps.Events.Emit(settings.ShowReviews())
+
+		return serviceResult[string]{value: "", failure: nil}
+	}
+	operations["RefreshReminders"] = func(string, string) serviceResult[string] {
+		refreshReminders(deps)
+
+		return serviceResult[string]{value: "", failure: nil}
+	}
+}
+
+func schedulesChanged(deps serviceParams, settings configuration.Settings) {
+	if deps.Events != nil {
+		deps.Events.Emit(settings.SchedulesChanged())
+	}
+
+	refreshReminders(deps)
+}
+
+func refreshReminders(deps serviceParams) {
+	if deps.Reminders != nil {
+		deps.Reminders.Wake()
+	}
+}
+
+func selectMedia(deps serviceParams, kind string) serviceResult[string] {
+	if deps.Media == nil {
+		return publicResult("", &ServiceError{Message: "file selection is unavailable"})
+	}
+
+	return publicResult(deps.Media.Select(kind))
+}
+
+func encodePublic(value any) serviceResult[string] {
+	data, err := json.Marshal(value)
+
+	return publicResult(string(data), err)
 }
 
 func newLogger() *slog.Logger { return slog.New(slog.NewTextHandler(os.Stderr, nil)) }
@@ -109,127 +320,96 @@ func runDesktop(
 
 func desktopRuntime(desktop *desktopwails.Desktop) *desktopwails.Desktop { return desktop }
 
-// ListFolders returns folders in creation order.
-func (service *RavenService) ListFolders() ([]folderapi.Folder, error) {
-	result := readLibrary(
-		service.store,
-		folderStorageIsUnavailable,
-		libraryports.Repository.ListFolders,
-	)
+// ListFolders returns folders in creation order as JSON.
+func (service *RavenService) ListFolders() (string, error) {
+	result := service.operations["ListFolders"]("", "")
 
 	return result.value, result.failure
 }
 
-// CreateFolder creates a folder from editable metadata.
-func (service *RavenService) CreateFolder(input *folderapi.CreateInput) (folderapi.Folder, error) {
-	if service.store == nil {
-		return folderapi.Folder{}, &ServiceError{Message: folderStorageIsUnavailable}
-	}
-
-	result := publicResult(service.store.CreateFolder(nonNilInput(input)))
+// CreateFolder creates a folder from JSON metadata and returns its JSON record.
+func (service *RavenService) CreateFolder(input string) (string, error) {
+	result := service.operations["CreateFolder"](input, "")
 
 	return result.value, result.failure
 }
 
-// ListCards returns the persisted library cards.
-func (service *RavenService) ListCards() ([]cardapi.Card, error) {
-	result := readLibrary(
-		service.store,
-		cardStorageIsUnavailable,
-		libraryports.Repository.ListCards,
-	)
+// ListCards returns persisted library cards as JSON.
+func (service *RavenService) ListCards() (string, error) {
+	result := service.operations["ListCards"]("", "")
 
 	return result.value, result.failure
 }
 
 // DeleteFolder deletes a folder and its content.
 func (service *RavenService) DeleteFolder(folderID string) error {
-	if service.store == nil {
-		return &ServiceError{Message: folderStorageIsUnavailable}
-	}
-
-	err := service.store.DeleteFolder(folderID)
-	if err == nil {
-		service.schedulesChanged()
-	}
-
-	if err != nil {
-		return &ServiceError{Message: err.Error()}
-	}
-
-	return nil
+	return service.operations["DeleteFolder"](folderID, "").failure
 }
 
 // DeleteCard deletes a card from its owning folder.
 func (service *RavenService) DeleteCard(folderID, cardID string) error {
-	if service.store == nil {
-		return &ServiceError{Message: cardStorageIsUnavailable}
-	}
-
-	err := service.store.DeleteCard(folderID, cardID)
-	if err == nil {
-		service.schedulesChanged()
-	}
-
-	if err != nil {
-		return &ServiceError{Message: err.Error()}
-	}
-
-	return nil
+	return service.operations["DeleteCard"](folderID, cardID).failure
 }
 
-// CreateCard creates a card and initializes its item schedules.
-func (service *RavenService) CreateCard(input *cardapi.CreateInput) (cardapi.Card, error) {
-	result := changeCard(service, input, libraryports.Cards.CreateCard)
+// CreateCard creates a card from JSON and returns its initialized JSON record.
+func (service *RavenService) CreateCard(input string) (string, error) {
+	result := service.operations["CreateCard"](input, "")
 
 	return result.value, result.failure
 }
 
-// UpdateCard updates card content while preserving retained item schedules.
-func (service *RavenService) UpdateCard(input *cardapi.UpdateInput) (cardapi.Card, error) {
-	result := changeCard(service, input, libraryports.Cards.UpdateCard)
+// UpdateCard replaces JSON card content while retaining existing schedules.
+func (service *RavenService) UpdateCard(input string) (string, error) {
+	result := service.operations["UpdateCard"](input, "")
 
 	return result.value, result.failure
 }
 
-// ReviewItem records a rating and advances an item schedule.
-func (service *RavenService) ReviewItem(input *cardapi.ReviewInput) (cardapi.Card, error) {
-	result := changeCard(service, input, libraryports.Cards.ReviewItem)
+// ReviewItem records a JSON rating and returns the updated JSON card.
+func (service *RavenService) ReviewItem(input string) (string, error) {
+	result := service.operations["ReviewItem"](input, "")
 
 	return result.value, result.failure
 }
 
 // ShowMain shows and focuses the main library window.
-func (service *RavenService) ShowMain() { service.windows.ShowMain() }
+func (service *RavenService) ShowMain() { service.operations["ShowMain"]("", "") }
 
 // HideMain hides the main library window.
-func (service *RavenService) HideMain() { service.windows.HideMain() }
+func (service *RavenService) HideMain() { service.operations["HideMain"]("", "") }
 
 // ResetWidget moves the floating widget onto the primary screen.
-func (service *RavenService) ResetWidget() { service.windows.ResetWidget() }
+func (service *RavenService) ResetWidget() { service.operations["ResetWidget"]("", "") }
 
 // Quit terminates Raven.
-func (service *RavenService) Quit() { service.windows.Quit() }
+func (service *RavenService) Quit() { service.operations["Quit"]("", "") }
 
 // ShowReviews opens the library review session.
-func (service *RavenService) ShowReviews() {
-	service.ShowMain()
-	service.events.Emit(service.configuration.ShowReviews())
-}
+func (service *RavenService) ShowReviews() { service.operations["ShowReviews"]("", "") }
 
 // RefreshReminders requests reconciliation of persisted review schedules.
-func (service *RavenService) RefreshReminders() {
-	if service.reminders != nil {
-		service.reminders.Wake()
-	}
+func (service *RavenService) RefreshReminders() { service.operations["RefreshReminders"]("", "") }
+
+// ToggleFloatingReview opens or requests closing the floating review window.
+func (service *RavenService) ToggleFloatingReview() {
+	service.operations["ToggleFloatingReview"]("", "")
 }
 
-func (service *RavenService) schedulesChanged() {
-	if service.events != nil {
-		service.events.Emit(service.configuration.SchedulesChanged())
-	}
+// HideFloatingReview hides the floating review window.
+func (service *RavenService) HideFloatingReview() { service.operations["HideFloatingReview"]("", "") }
 
-	service.RefreshReminders()
+// SelectMediaFiles returns selected draft media as JSON.
+func (service *RavenService) SelectMediaFiles(kind string) (string, error) {
+	result := service.operations["SelectMediaFiles"](kind, "")
+
+	return result.value, result.failure
+}
+
+// GetConfiguration returns the frontend configuration snapshot as JSON.
+func (service *RavenService) GetConfiguration() (string, error) {
+	result := service.operations["GetConfiguration"]("", "")
+
+	return result.value, result.failure
 }
 
 // Error returns the public service error message.
@@ -259,54 +439,7 @@ func readLibrary[Value any](
 	return publicResult(read(repository))
 }
 
-func changeCard[Input any](
-	service *RavenService,
-	input *Input,
-	change func(libraryports.Cards, *Input) (cardapi.Card, error),
-) serviceResult[cardapi.Card] {
-	var card cardapi.Card
-
-	if service.store == nil {
-		return publicResult(card, &ServiceError{Message: cardStorageIsUnavailable})
-	}
-
-	card, err := change(service.store, nonNilInput(input))
-	if err == nil {
-		service.schedulesChanged()
-	}
-
-	return publicResult(card, err)
-}
-
-// SelectMediaFiles selects local media for a card draft.
-func (service *RavenService) SelectMediaFiles(kind string) ([]mediaapi.Selection, error) {
-	if service.media == nil {
-		return nil, &ServiceError{Message: "file selection is unavailable"}
-	}
-
-	result := publicResult(service.media.Select(kind))
-
-	return result.value, result.failure
-}
-
-// ToggleFloatingReview opens or requests closing the floating review window.
-func (service *RavenService) ToggleFloatingReview() { service.windows.ToggleFloatingReview() }
-
-// HideFloatingReview hides the floating review window.
-func (service *RavenService) HideFloatingReview() { service.windows.HideFloatingReview() }
-
-func nonNilInput[Value any](value *Value) *Value {
-	if value == nil {
-		return new(Value)
-	}
-
-	return value
-}
-
-// GetConfiguration returns the frontend's immutable configuration snapshot.
-func (service *RavenService) GetConfiguration() configurationapi.Settings {
-	settings := service.configuration
-
+func configurationSnapshot(settings configuration.Settings) configurationapi.Settings {
 	return configurationapi.Settings{
 		PreferencesStorageKey: settings.PreferencesStorageKey(),
 		MediaRoutePrefix:      settings.MediaRoutePrefix(),

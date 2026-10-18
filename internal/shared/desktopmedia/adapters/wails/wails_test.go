@@ -3,6 +3,7 @@ package wails
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	contentapi "raven/api/content"
 	mediaapi "raven/api/media"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
@@ -288,8 +290,7 @@ func mediaSettingsFixture() *Settings {
 func testPicker(saved func() http.Handler) *testMedia {
 	state := newMediaState(
 		cffbatch.New(),
-		saved,
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		&Dependencies{Saved: saved, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
 		mediaSettingsFixture(),
 	)
 	registry := bindRegistry(state)
@@ -300,18 +301,18 @@ func TestConfiguredMediaRoutesReachPickerAndMiddleware(t *testing.T) {
 	settings := mediaSettingsFixture()
 	settings.MediaRoutePrefix = "/saved/"
 	settings.PreviewRoutePrefix = "/preview/"
-	registry := NewRegistry(cffbatch.New(), func() http.Handler {
+	registry := NewRegistry(cffbatch.New(), &Dependencies{Saved: func() http.Handler {
 		return http.HandlerFunc(
 			func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) },
 		)
-	}, slog.New(slog.NewTextHandler(io.Discard, nil)), settings)
+	}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, settings)
 	picker := NewPicker(nil, nil, registry)
 	path := filepath.Join(t.TempDir(), "selected.png")
 	if err := os.WriteFile(path, []byte("selected image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	picker.choose = func(string, string) ([]string, error) { return []string{path}, nil }
-	selected, err := picker.Select("image")
+	selected, err := selectedFixture(picker, "image")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,5 +353,23 @@ func (media *testMedia) previewPath(path string) (string, bool) {
 }
 
 func (media *testMedia) closePreview(ctx context.Context, file *os.File) {
-	closePreview(media.mediaState, ctx, file)
+	closePreview(ctx, media.mediaState, file)
+}
+
+func selectedFixture(picker *Picker, kind string) ([]mediaapi.Selection, error) {
+	encoded, err := picker.Select(kind)
+	if err != nil {
+		return nil, err
+	}
+	return contentapi.Decode[[]mediaapi.Selection](json.RawMessage(encoded))
+}
+
+func (media *testMedia) Select(kind string) ([]mediaapi.Selection, error) {
+	return selectedFixture(media.Picker, kind)
+}
+
+func TestSelectionWireRejectsUnsupportedValues(t *testing.T) {
+	if _, err := marshalSelection(func() {}); err == nil {
+		t.Fatal("encoded an unsupported media value")
+	}
 }

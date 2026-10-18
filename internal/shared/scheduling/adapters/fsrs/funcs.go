@@ -5,6 +5,7 @@ package fsrs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,63 +26,101 @@ func newScheduler(engine schedulingEngine, rules *library.Rules) Scheduler {
 		next: engine.Next, repeat: engine.Repeat,
 		minimumRating: rules.MinimumRating, maximumRating: rules.MaximumRating,
 	}
+
 	return Scheduler{
-		execute: func(operation string, value any, now time.Time, rating int) (json.RawMessage, json.RawMessage, error) {
-			return executeSchedule(runtime, operation, value, now, rating)
+		execute: func(request *scheduleRequest) (state, decision json.RawMessage, failure error) {
+			state, decision, err := executeSchedule(runtime, request)
+
+			return state, decision, errors.Join(err)
 		},
 	}
 }
 
-// Initialize creates the initial spaced repetition state and scheduling decision.
-func (scheduler Scheduler) Initialize(now time.Time) (json.RawMessage, json.RawMessage, error) {
-	return scheduler.execute("initialize", nil, now, 0)
+// Initialize creates initial spaced repetition state and its scheduling decision.
+func (scheduler Scheduler) Initialize(
+	now time.Time,
+) (state, decision json.RawMessage, failure error) {
+	state, decision, err := scheduler.execute(
+		&scheduleRequest{
+			operation: initializeCommand,
+			now:       now,
+			value:     nil,
+			card:      nil,
+			rating:    unrated,
+		},
+	)
+
+	return state, decision, errors.Join(err)
 }
 
-// Next advances JSON-valued scheduling state for the supplied user rating.
+// Next advances JSON-valued scheduling state for the supplied rating.
 func (scheduler Scheduler) Next(
 	schedule any,
 	now time.Time,
 	rating int,
-) (json.RawMessage, json.RawMessage, error) {
-	return scheduler.execute("next", schedule, now, rating)
+) (state, decision json.RawMessage, failure error) {
+	state, decision, err := scheduler.execute(&scheduleRequest{
+		operation: "next", value: schedule, now: now, rating: rating, card: nil,
+	})
+
+	return state, decision, errors.Join(err)
 }
 
-// Validate validates JSON-valued persisted scheduling state with FSRS.
+// Validate checks JSON-valued persisted scheduling state with FSRS.
 func (scheduler Scheduler) Validate(schedule any) error {
-	_, _, err := scheduler.execute("validate", schedule, time.Time{}, 0)
-	return err
+	return errors.Join(
+		schedulingFailure(
+			scheduler.execute(
+				&scheduleRequest{
+					operation: validateCommand,
+					value:     schedule,
+					card:      nil,
+					now:       time.Time{},
+					rating:    unrated,
+				},
+			),
+		),
+	)
 }
 
 func executeSchedule(
 	runtime *schedulerRuntime,
-	operation string,
-	value any,
-	now time.Time,
-	rating int,
-) (json.RawMessage, json.RawMessage, error) {
-	if operation == "initialize" {
-		card := fsrs.NewCard(now)
-		return encodedAdvance(runtime, &card, now, runtime.minimumRating)
+	request *scheduleRequest,
+) (state, decision json.RawMessage, failure error) {
+	if request.operation == initializeCommand {
+		card := fsrs.NewCard(request.now)
+
+		request.card, request.rating = &card, runtime.minimumRating
+
+		encodedState, encodedDecision, err := encodedAdvance(runtime, request)
+
+		return encodedState, encodedDecision, errors.Join(err)
 	}
-	return executeExisting(runtime, operation, value, now, rating)
+
+	state, decision, err := executeExisting(runtime, request)
+
+	return state, decision, errors.Join(err)
 }
 
 func executeExisting(
 	runtime *schedulerRuntime,
-	operation string,
-	value any,
-	now time.Time,
-	rating int,
-) (json.RawMessage, json.RawMessage, error) {
-	schedule, err := contentapi.Decode[reviewapi.Schedule](value)
+	request *scheduleRequest,
+) (state, decision json.RawMessage, failure error) {
+	schedule, err := contentapi.Decode[reviewapi.Schedule](request.value)
 	if err != nil {
 		return nil, nil, fmt.Errorf("decode scheduling state: %w", err)
 	}
-	if operation == "validate" {
-		return nil, nil, validateSchedule(runtime, &schedule)
+
+	if request.operation == validateCommand {
+		return nil, nil, errors.Join(validateSchedule(runtime, &schedule))
 	}
+
 	card := toCard(&schedule)
-	return encodedAdvance(runtime, &card, now, rating)
+
+	request.card = &card
+	state, decision, err = encodedAdvance(runtime, request)
+
+	return state, decision, errors.Join(err)
 }
 
 func validateSchedule(runtime *schedulerRuntime, schedule *reviewapi.Schedule) error {
@@ -89,27 +128,30 @@ func validateSchedule(runtime *schedulerRuntime, schedule *reviewapi.Schedule) e
 	if err != nil {
 		return fmt.Errorf("validate schedule: %w", err)
 	}
+
 	if len(records) != runtime.maximumRating {
 		return errIncompleteSchedules
 	}
+
 	return nil
 }
 
 func advance(
 	runtime *schedulerRuntime,
-	card *fsrs.Card,
-	now time.Time,
-	rating int,
+	request *scheduleRequest,
 ) (reviewapi.Schedule, reviewapi.Log, error) {
-	if rating < runtime.minimumRating || rating > runtime.maximumRating {
+	if request.rating < runtime.minimumRating || request.rating > runtime.maximumRating {
 		return reviewapi.Schedule{}, reviewapi.Log{}, errInvalidRating
 	}
-	nativeRating, err := ratingFor(rating)
+
+	nativeRating, err := ratingFor(request.rating)
 	if err != nil {
 		return reviewapi.Schedule{}, reviewapi.Log{}, fmt.Errorf("translate rating: %w", err)
 	}
-	result, err := runtime.next(*card, now, nativeRating)
-	return fromCard(&result.Card), fromLog(&result.ReviewLog), err
+
+	result, err := runtime.next(*request.card, request.now, nativeRating)
+
+	return fromCard(&result.Card), fromLog(&result.ReviewLog), errors.Join(err)
 }
 
 func toCard(value *reviewapi.Schedule) fsrs.Card {
@@ -163,28 +205,33 @@ func ratingFor(rating int) (fsrs.Rating, error) {
 
 func encodedAdvance(
 	runtime *schedulerRuntime,
-	card *fsrs.Card,
-	now time.Time,
-	rating int,
-) (json.RawMessage, json.RawMessage, error) {
-	schedule, log, err := advance(runtime, card, now, rating)
+	request *scheduleRequest,
+) (state, decision json.RawMessage, failure error) {
+	schedule, log, err := advance(runtime, request)
 	if err != nil {
 		return nil, nil, fmt.Errorf("advance schedule: %w", err)
 	}
-	return encodeSchedule(&schedule, &log)
+
+	state, decision, err = encodeSchedule(&schedule, &log)
+
+	return state, decision, errors.Join(err)
 }
 
 func encodeSchedule(
 	schedule *reviewapi.Schedule,
 	log *reviewapi.Log,
-) (json.RawMessage, json.RawMessage, error) {
+) (state, decision json.RawMessage, failure error) {
 	state, err := json.Marshal(schedule)
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode schedule: %w", err)
 	}
-	decision, err := json.Marshal(log)
+
+	decision, err = json.Marshal(log)
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode scheduling decision: %w", err)
 	}
+
 	return state, decision, nil
 }
+
+func schedulingFailure(_, _ json.RawMessage, err error) error { return errors.Join(err) }

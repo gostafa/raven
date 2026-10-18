@@ -47,22 +47,28 @@ func New(deps *Dependencies) *Desktop { return newDesktopOperations(newDesktopSt
 
 func newDesktopState(deps *Dependencies) *Dependencies {
 	state := *deps
+
 	state.run = deps.App.Run
 	state.invoke = application.InvokeSync
 	state.showDialog = (*application.MessageDialog).Show
+
 	return &state
 }
 
 func newDesktopOperations(state *Dependencies) *Desktop {
 	operations := desktopLifecycleOperations(state)
+
 	operations["configure"] = func(context.Context, *application.Service, <-chan struct{}) desktopResult {
 		Configure(state)
-		return desktopResult{}
+
+		return desktopResult{failure: nil}
 	}
 	operations["register"] = func(_ context.Context, service *application.Service, _ <-chan struct{}) desktopResult {
 		state.App.RegisterService(*service)
-		return desktopResult{}
+
+		return desktopResult{failure: nil}
 	}
+
 	return &Desktop{operations: operations}
 }
 
@@ -75,11 +81,13 @@ func desktopLifecycleOperations(
 		},
 		"dispose": func(context.Context, *application.Service, <-chan struct{}) desktopResult {
 			Dispose(state)
-			return desktopResult{}
+
+			return desktopResult{failure: nil}
 		},
 		"open": func(ctx context.Context, _ *application.Service, requests <-chan struct{}) desktopResult {
-			Open(state, ctx, requests)
-			return desktopResult{}
+			Open(ctx, state, requests)
+
+			return desktopResult{failure: nil}
 		},
 	}
 }
@@ -138,7 +146,7 @@ func Run(desktop *Dependencies) error {
 }
 
 // Open handles queued launch requests until the runtime context is canceled.
-func Open(desktop *Dependencies, ctx context.Context, requests <-chan struct{}) {
+func Open(ctx context.Context, desktop *Dependencies, requests <-chan struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -339,7 +347,11 @@ func configureLifecycleEvents(desktop *Dependencies) {
 		events.Mac.ApplicationShouldHandleReopen,
 		applicationHandler(desktop, reopened),
 	))
-	track(desktop, app.Event.OnApplicationEvent(
+	configureFocusEvents(desktop)
+}
+
+func configureFocusEvents(desktop *Dependencies) {
+	track(desktop, desktop.App.Event.OnApplicationEvent(
 		events.Mac.ApplicationDidBecomeActive,
 		applicationHandler(desktop, becameActive),
 	))

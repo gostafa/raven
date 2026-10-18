@@ -13,6 +13,20 @@ import (
 )
 
 type (
+	// Dependencies supplies saved-media resolution and resource cleanup logging.
+	Dependencies struct {
+		// Saved resolves the handler for persisted library media.
+		Saved func() http.Handler
+		// Logger receives failures encountered while releasing preview resources.
+		Logger *slog.Logger
+	}
+
+	previewRequest struct {
+		writer  http.ResponseWriter
+		request *http.Request
+		path    string
+	}
+
 	// Settings supplies the media endpoints and log field name.
 	Settings struct {
 		// MediaRoutePrefix identifies persisted library media requests.

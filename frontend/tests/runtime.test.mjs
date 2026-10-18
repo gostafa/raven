@@ -18,11 +18,22 @@ const hooks = registerHooks({
       ],
       [
         '../../../../bindings/raven',
-        `export const RavenService = {
+        `function transport(name, args = []) {
+          globalThis.ravenRuntime.calls.push({ name, args });
+          return globalThis.ravenRuntime.responses[name];
+        }
+        export const RavenService = {
         async GetConfiguration() {
           if (globalThis.ravenRuntime.failure) throw globalThis.ravenRuntime.failure;
-          return globalThis.ravenRuntime.configuration;
-        }
+          return JSON.stringify(globalThis.ravenRuntime.configuration);
+        },
+        async ListFolders() { return transport('ListFolders'); },
+        async CreateFolder(input) { return transport('CreateFolder', [input]); },
+        async ListCards() { return transport('ListCards'); },
+        async CreateCard(input) { return transport('CreateCard', [input]); },
+        async UpdateCard(input) { return transport('UpdateCard', [input]); },
+        async ReviewItem(input) { return transport('ReviewItem', [input]); },
+        async SelectMediaFiles(kind) { return transport('SelectMediaFiles', [kind]); }
       };`,
       ],
     ]);
@@ -31,6 +42,52 @@ const hooks = registerHooks({
       ? { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true }
       : next(specifier, context);
   },
+});
+
+test('runtime JSON transport preserves requests, records, nullable lists, and parse failures', async (t) => {
+  const folder = { id: 'folder', title: 'Ideas', description: '', tags: [] };
+  const card = { id: 'card', folder_id: 'folder', created_at: 1, due_at: 2, last_reviewed: 0, items: [] };
+  globalThis.ravenRuntime = {
+    calls: [],
+    responses: {
+      ListFolders: JSON.stringify([folder]),
+      CreateFolder: JSON.stringify(folder),
+      ListCards: JSON.stringify([card]),
+      CreateCard: JSON.stringify(card),
+      UpdateCard: JSON.stringify(card),
+      ReviewItem: JSON.stringify(card),
+      SelectMediaFiles: JSON.stringify([
+        { source_path: '/test.png', original_name: 'test.png', byte_size: 8, preview_url: '/preview/test' },
+      ]),
+    },
+  };
+  t.after(() => {
+    delete globalThis.ravenRuntime;
+  });
+  const { createRuntime } = await import('../src/features/workspace/adapters/funcs.ts');
+  const runtime = createRuntime({ mediaRoutePrefix: '/media/', textKind: 'plain' });
+  assert.deepEqual(await runtime.ListFolders(), [folder]);
+  assert.deepEqual(await runtime.CreateFolder({ title: 'Ideas', description: '', tags: [] }), folder);
+  assert.equal((await runtime.ListCards())[0].folderId, 'folder');
+  const input = { folderId: 'folder', items: [{ kind: 'text', text: 'Remember' }] };
+  assert.equal((await runtime.CreateCard(input)).id, 'card');
+  await runtime.UpdateCard({ ...input, cardId: 'card' });
+  await runtime.ReviewItem('folder', 'card', 'item', 3);
+  assert.equal((await runtime.SelectMediaFiles('image'))[0].sourcePath, '/test.png');
+  const create = globalThis.ravenRuntime.calls.find((call) => call.name === 'CreateCard');
+  assert.deepEqual(JSON.parse(create.args[0]), { folder_id: 'folder', items: [{ kind: 'plain', text: 'Remember' }] });
+  const update = globalThis.ravenRuntime.calls.find((call) => call.name === 'UpdateCard');
+  assert.equal(JSON.parse(update.args[0]).card_id, 'card');
+  const review = globalThis.ravenRuntime.calls.find((call) => call.name === 'ReviewItem');
+  assert.deepEqual(JSON.parse(review.args[0]), { folder_id: 'folder', card_id: 'card', item_id: 'item', rating: 3 });
+  globalThis.ravenRuntime.responses.ListCards = 'null';
+  assert.deepEqual(await runtime.ListCards(), []);
+  globalThis.ravenRuntime.responses.ListFolders = 'null';
+  assert.deepEqual(await runtime.ListFolders(), []);
+  globalThis.ravenRuntime.responses.SelectMediaFiles = 'null';
+  assert.deepEqual(await runtime.SelectMediaFiles('image'), []);
+  globalThis.ravenRuntime.responses.ListCards = '{invalid';
+  await assert.rejects(runtime.ListCards(), /JSON/);
 });
 after(() => hooks.deregister());
 

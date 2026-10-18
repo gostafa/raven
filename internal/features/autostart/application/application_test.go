@@ -20,9 +20,9 @@ type fakeAutostart struct {
 	ignoreEnable             bool
 }
 
-func (f *fakeAutostart) EnableWithOptions(options *ports.Options) error {
+func (f *fakeAutostart) EnableWithOptions(identifier string, arguments []string) error {
 	f.enables++
-	f.options = *options
+	f.options = ports.Options{Identifier: identifier, Arguments: arguments}
 	if f.operationErr == nil && !f.ignoreEnable {
 		f.enabled = true
 	}

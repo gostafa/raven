@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"mime"
@@ -18,7 +19,6 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	contentapi "raven/api/content"
 	mediaapi "raven/api/media"
 	"raven/internal/shared/desktopmedia/ports"
 	localfiles "raven/internal/shared/filesystem"
@@ -43,26 +43,26 @@ func NewPicker(
 // NewRegistry binds media routes, inspection, and preview storage to injected dependencies.
 func NewRegistry(
 	batch ports.BatchExecutor,
-	saved func() http.Handler,
-	logger *slog.Logger,
+	dependencies *Dependencies,
 	settings *Settings,
 ) *Registry {
-	return bindRegistry(newMediaState(batch, saved, logger, settings))
+	return bindRegistry(newMediaState(batch, dependencies, settings))
 }
 
 func newMediaState(
 	batch ports.BatchExecutor,
-	saved func() http.Handler,
-	logger *slog.Logger,
+	dependencies *Dependencies,
 	settings *Settings,
 ) *mediaState {
+	saved := dependencies.Saved
 	if saved == nil {
 		saved = func() http.Handler { return nil }
 	}
+
 	return &mediaState{
 		runBatch:           batch.Run,
 		saved:              saved,
-		logger:             logger,
+		logger:             dependencies.Logger,
 		mediaRoutePrefix:   settings.MediaRoutePrefix,
 		previewRoutePrefix: settings.PreviewRoutePrefix,
 		logErrorKey:        settings.LogErrorKey,
@@ -84,11 +84,10 @@ func inspectMedia(state *mediaState, paths []string, filter string) (json.RawMes
 	if err != nil {
 		return nil, fmt.Errorf("inspect media: %w", err)
 	}
-	encoded, err := json.Marshal(selected)
-	if err != nil {
-		return nil, fmt.Errorf("encode media selection: %w", err)
-	}
-	return encoded, nil
+
+	encoded, err := marshalSelection(selected)
+
+	return encoded, errors.Join(err)
 }
 
 func nativeChooser(
@@ -115,40 +114,30 @@ func nativeChooser(
 }
 
 // Select selects supported media and returns its temporary preview capabilities.
-func (picker *Picker) Select(kind string) ([]mediaapi.Selection, error) {
-	return selectMedia(picker.choose, picker.inspect, kind)
+func (picker *Picker) Select(kind string) (string, error) {
+	selected, err := selectMedia(picker.choose, picker.inspect, kind)
+
+	return string(selected), errors.Join(err)
 }
 
 func selectMedia(
 	choose func(string, string) ([]string, error),
 	inspect func([]string, string) (json.RawMessage, error),
 	kind string,
-) ([]mediaapi.Selection, error) {
+) (json.RawMessage, error) {
 	filter := selectionFilter(kind)
 	if filter == "" {
 		return nil, errInvalidMediaType
 	}
+
 	paths, err := choose(kind, filter)
 	if err != nil {
 		return nil, fmt.Errorf("select media: %w", err)
 	}
-	return inspectedSelection(inspect, paths, filter)
-}
 
-func inspectedSelection(
-	inspect func([]string, string) (json.RawMessage, error),
-	paths []string,
-	filter string,
-) ([]mediaapi.Selection, error) {
 	encoded, err := inspect(paths, filter)
-	if err != nil {
-		return nil, fmt.Errorf("inspect selection: %w", err)
-	}
-	selected, err := contentapi.Decode[[]mediaapi.Selection](encoded)
-	if err != nil {
-		return nil, fmt.Errorf("decode media selection: %w", err)
-	}
-	return selected, nil
+
+	return encoded, errors.Join(err)
 }
 
 func selectionFilter(kind string) string {
@@ -255,7 +244,11 @@ func middleware(picker *mediaState, next http.Handler) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
 		switch {
 		case strings.HasPrefix(request.URL.Path, picker.previewRoutePrefix):
-			servePreview(picker, writer, request)
+			servePreview(
+				request.Context(),
+				picker,
+				&previewRequest{writer: writer, request: request, path: ""},
+			)
 		case strings.HasPrefix(request.URL.Path, picker.mediaRoutePrefix):
 			serveSaved(picker, writer, request)
 		default:
@@ -275,7 +268,8 @@ func serveSaved(picker *mediaState, writer http.ResponseWriter, request *http.Re
 	handler.ServeHTTP(writer, request)
 }
 
-func servePreview(picker *mediaState, writer http.ResponseWriter, request *http.Request) {
+func servePreview(ctx context.Context, picker *mediaState, preview *previewRequest) {
+	writer, request := preview.writer, preview.request
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 
@@ -289,7 +283,8 @@ func servePreview(picker *mediaState, writer http.ResponseWriter, request *http.
 		return
 	}
 
-	servePreviewPath(picker, writer, request, path)
+	preview.path = path
+	servePreviewPath(ctx, picker, preview)
 }
 
 func previewPath(picker *mediaState, url string) (string, bool) {
@@ -305,23 +300,19 @@ func previewPath(picker *mediaState, url string) (string, bool) {
 	return path, valid
 }
 
-func servePreviewPath(picker *mediaState,
-	writer http.ResponseWriter,
-	request *http.Request,
-	path string,
-) {
-	file, err := localfiles.OpenSelected(path)
+func servePreviewPath(ctx context.Context, picker *mediaState, request *previewRequest) {
+	file, err := localfiles.OpenSelected(request.path)
 	if err != nil {
-		http.NotFound(writer, request)
+		http.NotFound(request.writer, request.request)
 
 		return
 	}
-	defer closePreview(picker, request.Context(), file)
+	defer closePreview(ctx, picker, file)
 
-	servePreviewFile(writer, request, file)
+	servePreviewFile(request.writer, request.request, file)
 }
 
-func closePreview(picker *mediaState, ctx context.Context, file *os.File) {
+func closePreview(ctx context.Context, picker *mediaState, file *os.File) {
 	err := file.Close()
 	if err != nil {
 		picker.logger.WarnContext(
@@ -353,4 +344,13 @@ func setPreviewHeaders(writer http.ResponseWriter, name string) {
 	writer.Header().Set("Content-Type", mime.TypeByExtension(strings.ToLower(filepath.Ext(name))))
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.Header().Set("Cache-Control", "no-store")
+}
+
+func marshalSelection(value any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode media value: %w", err)
+	}
+
+	return encoded, nil
 }

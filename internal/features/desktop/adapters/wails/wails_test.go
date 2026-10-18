@@ -113,6 +113,8 @@ func TestDesktopLifecycleAndNativeRegistrations(t *testing.T) {
 		LogErrorKey: "error",
 	})
 	desktop := &desktopFixture{newDesktopOperations(state), state}
+	var reviewAction func()
+	state.OnReview = func(show func()) { reviewAction = show }
 	desktop.invoke = func(callback func()) { callback() }
 	dialogs := 0
 	desktop.showDialog = func(dialog *application.MessageDialog) {
@@ -136,7 +138,7 @@ func TestDesktopLifecycleAndNativeRegistrations(t *testing.T) {
 	if len(desktop.subscriptions) != 11 {
 		t.Fatalf("registered %d handlers", len(desktop.subscriptions))
 	}
-	applicationStarted(desktop.Dependencies, nil)
+	applicationHandler(state, applicationStarted)(nil)
 	widgetShown(desktop.Dependencies, nil)
 	widgetMoved(desktop.Dependencies, nil)
 	for _, closeWindow := range []func(*application.WindowEvent){windowHandler(state, reviewClosing), windowHandler(state, mainClosing), cancelClosing} {
@@ -151,10 +153,10 @@ func TestDesktopLifecycleAndNativeRegistrations(t *testing.T) {
 	mainFocused(desktop.Dependencies, nil)
 	reopened(desktop.Dependencies, nil)
 	visibility.Classify(true)
-	openClicked(desktop.Dependencies, nil)
+	menuHandler(state, openClicked)(nil)
 	resetClicked(desktop.Dependencies, nil)
 	quitClicked(desktop.Dependencies, nil)
-	showReviews(desktop.Dependencies)
+	reviewAction()
 	NewEvents(app).Emit("test:event")
 	if windows.configured != 2 || windows.positioned != 1 || windows.hidden != 1 ||
 		windows.closed != 1 ||

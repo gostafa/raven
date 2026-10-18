@@ -1,13 +1,14 @@
-import type { Settings as TransportConfiguration } from '../../../../../bindings/raven/api/configuration/models';
-import type { RuntimeConfiguration } from '../../domain/types';
-import type { Card as TransportCard } from '../../../../../bindings/raven/api/cards/models';
-import type { Item as TransportItem, Draft as TransportDraft } from '../../../../../bindings/raven/api/content/models';
-import type { Folder as TransportFolder } from '../../../../../bindings/raven/api/folders/models';
 import type {
-  Log as TransportReview,
-  Schedule as TransportSchedule,
-} from '../../../../../bindings/raven/api/reviews/models';
-import type { Selection as TransportMedia } from '../../../../../bindings/raven/api/media/models';
+  TransportConfiguration,
+  TransportCard,
+  TransportItem,
+  TransportDraft,
+  TransportFolder,
+  TransportReview,
+  TransportSchedule,
+  TransportMedia,
+} from './types';
+import type { RuntimeConfiguration } from '../../domain/types';
 import type { Card } from '../../../cards';
 import type { Folder } from '../../../folders';
 import type { AppPorts } from '../../domain/types';
@@ -104,4 +105,8 @@ export function configurationFromTransport(value: TransportConfiguration): Runti
 function timestampFromTransport(value: unknown): string {
   if (typeof value !== 'string') throw new Error('Raven returned an invalid review timestamp.');
   return value;
+}
+
+export function parseTransport(payload: string): unknown {
+  return JSON.parse(payload) as unknown;
 }

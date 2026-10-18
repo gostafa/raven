@@ -54,13 +54,13 @@ type (
 	// DueOccurrence identifies the precise item schedule acknowledged by a notification.
 	DueOccurrence struct {
 		// FolderID identifies the owning folder.
-		FolderID string
+		FolderID string `json:"FolderID"`
 		// CardID identifies the owning card.
-		CardID string
+		CardID string `json:"CardID"`
 		// ItemID identifies the content item.
-		ItemID string
+		ItemID string `json:"ItemID"`
 		// Due is the next scheduled review time.
-		Due int64
+		Due int64 `json:"Due"`
 	}
 
 	// Attempt contains the time and rating of a manual review.

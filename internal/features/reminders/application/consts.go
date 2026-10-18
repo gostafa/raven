@@ -8,8 +8,12 @@ import (
 )
 
 const (
-	pollInterval = 30 * time.Second
-	wakeBuffer   = 1
+	enableCommand = "enable"
+	startCommand  = "start"
+	wakeCommand   = "wake"
+	stopCommand   = "stop"
+	pollInterval  = 30 * time.Second
+	wakeBuffer    = 1
 
 	zero = 0
 )

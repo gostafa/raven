@@ -40,6 +40,7 @@ const (
 	four                                    = 4
 	importMediaErrorFormat                  = "import media: %w"
 	loadCardErrorFormat                     = "load card: %w"
+	loadNotificationCardErrorFormat         = "load notification card: %w"
 	loadMediaErrorFormat                    = "load media: %w"
 	loadCardForWriteErrorFormat             = "load card for write: %w"
 	markNotifiedErrorFormat                 = "mark notified: %w"

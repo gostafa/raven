@@ -9,7 +9,6 @@ import (
 	"go.uber.org/fx"
 
 	companion "raven/internal/features/companion/domain"
-	configuration "raven/internal/features/configuration/domain"
 	desktopports "raven/internal/features/desktop/ports"
 	reminderports "raven/internal/features/reminders/ports"
 	libraryports "raven/internal/shared/boltstore/ports"
@@ -44,13 +43,11 @@ type (
 	}
 	// RavenService exposes Raven operations using injected feature ports.
 	RavenService struct {
-		configuration configuration.Settings
-		store         libraryports.Repository
-		media         mediaports.Selection
-		windows       companion.Windows
-		events        desktopports.Events
-		reminders     reminderports.Control
+		operations map[string]func(string, string) serviceResult[string]
 	}
 	// ServiceError exposes a message without retaining an implementation error chain.
-	ServiceError struct{ Message string }
+	ServiceError struct {
+		// Message describes a failed frontend operation.
+		Message string
+	}
 )

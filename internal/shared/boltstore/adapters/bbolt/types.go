@@ -5,6 +5,8 @@
 package bbolt
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -16,12 +18,12 @@ import (
 
 	cardapi "raven/api/cards"
 	contentapi "raven/api/content"
-	folderapi "raven/api/folders"
-	library "raven/internal/shared/boltstore/domain"
-	"raven/internal/shared/boltstore/ports"
 )
 
 type (
+	// Store exposes transactional persistence through JSON records.
+	Store struct{ state *persistence }
+
 	database interface {
 		View(callback func(*bolt.Tx) error) error
 		Update(callback func(*bolt.Tx) error) error
@@ -39,99 +41,137 @@ type (
 	}
 	// Dependencies supplies stable runtime dependencies and shared persistence settings.
 	Dependencies struct {
-		Batch     ports.BatchExecutor
-		Scheduler ports.Scheduler
-		Logger    *slog.Logger
-		Settings  Settings
+		// Batch drains bounded concurrent media jobs.
+		Batch func(context.Context, []func(context.Context) error) error
+		// Initialize allocates the first scheduling state and review log.
+		Initialize func(time.Time) (json.RawMessage, json.RawMessage, error)
+		// Next advances a validated schedule after a rating.
+		Next func(any, time.Time, int) (json.RawMessage, json.RawMessage, error)
+		// Validate verifies a scheduling state.
+		Validate func(any) error
+		// Logger records cleanup failures.
+		Logger *slog.Logger
+		// Settings contains immutable validated persistence settings.
+		Settings any
 	}
 	legacyContentLoader func(*Settings, *bolt.Bucket, *cardapi.Card) ([]contentapi.Item, error)
 
 	// Settings supplies content rules, media routes, and log field names.
 	Settings struct {
+		Rules            any
 		MediaRoutePrefix string
 		LogErrorKey      string
-		Rules            library.Rules
 	}
 
 	// Store owns atomic database and media persistence.
-	Store struct {
-		batch     ports.BatchExecutor
-		settings  *Settings
-		scheduler ports.Scheduler
-		logger    *slog.Logger
-		db        database
-		path      string
-		mediaDir  string
-		mediaMu   sync.Mutex
-		ready     atomic.Bool
+	persistence struct {
+		batch              func(context.Context, []func(context.Context) error) error
+		settings           any
+		initializeSchedule func(time.Time) (json.RawMessage, json.RawMessage, error)
+		nextSchedule       func(any, time.Time, int) (json.RawMessage, json.RawMessage, error)
+		validateSchedule   func(any) error
+		logger             *slog.Logger
+		view               func(func(*bolt.Tx) error) error
+		update             func(func(*bolt.Tx) error) error
+		closeDatabase      func() error
+		databasePath       func() string
+		databaseStats      func() bolt.Stats
+
+		path     string
+		mediaDir string
+		mediaMu  sync.Mutex
+		ready    atomic.Bool
 	}
 
 	legacyItem struct {
-		*contentapi.Item
-
+		// Item contains the normalized content fields of the flattened legacy record.
+		Item any `json:"-"`
+		// Side identifies the historical prompt or answer group.
 		Side string `json:"side"`
 	}
 	migrationFolder struct {
 		parent *bolt.Bucket
 		items  *bolt.Bucket
+		id     []byte
+	}
+	legacyEntry struct {
+		id    []byte
+		value []byte
 	}
 	schemaState struct {
 		version  string
 		existing bool
 	}
 	schemaMigration struct {
-		now     time.Time
-		storage *Store
-		state   schemaState
+		now         time.Time
+		settings    any
+		initialize  func(time.Time) (json.RawMessage, json.RawMessage, error)
+		writeBackup func(*os.File) error
+		loadItems   func(*bolt.Tx, string, string) ([]any, error)
+		version     string
+		existing    bool
 	}
 	cardContentReader struct {
-		settings  *Settings
-		card      *cardapi.Card
-		scheduler ports.Scheduler
-		schema    string
+		settings any
+		card     any
+		validate func(any) error
+		schema   string
 	}
 	// cardWrite owns the staged files and database transaction for one card edit.
 	cardWrite struct {
-		storage   *Store
+		items     any
+		previous  any
+		card      any
 		folderID  string
 		cardID    string
-		items     []contentapi.Item
 		imported  []string
-		previous  cardapi.Card
-		card      cardapi.Card
 		committed bool
 	}
+	cardTransaction struct {
+		transaction *bolt.Tx
+		bucket      *bolt.Bucket
+	}
+	itemInitialization struct {
+		at         time.Time
+		initialize func(time.Time) (json.RawMessage, json.RawMessage, error)
+	}
 	cardRating struct {
+		card     any
+		item     any
 		now      time.Time
-		storage  *Store
 		folderID string
 		cardID   string
 		itemID   string
-		card     cardapi.Card
 		rating   int
 	}
 	cardListing struct {
-		storage  *Store
+		cards    any
 		root     *bolt.Bucket
 		items    *bolt.Bucket
 		schema   string
 		folderID string
-		cards    []cardapi.Card
 	}
 	notificationCard struct {
-		items  map[string]*contentapi.Item
+		items  any
 		bucket *bolt.Bucket
 	}
 	folderListing struct {
 		root    *bolt.Bucket
-		folders []folderapi.Folder
+		folders any
 	}
 	legacyText struct {
+		// Prompt contains the original question text.
 		Prompt string `json:"prompt"`
+		// Answer contains the original answer text.
 		Answer string `json:"answer"`
 	}
 	ownedMedia struct {
 		file *os.File
-		item *contentapi.Item
+		item any
+	}
+	mediaImport struct {
+		item   any
+		file   *os.File
+		source string
 	}
 )

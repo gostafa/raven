@@ -14,7 +14,15 @@ import (
 type (
 	// Scheduler translates JSON-valued schedules through the consumer-owned scheduling port.
 	Scheduler struct {
-		execute func(string, any, time.Time, int) (json.RawMessage, json.RawMessage, error)
+		execute func(*scheduleRequest) (json.RawMessage, json.RawMessage, error)
+	}
+
+	scheduleRequest struct {
+		value     any
+		card      *fsrs.Card
+		now       time.Time
+		operation string
+		rating    int
 	}
 
 	schedulerRuntime struct {

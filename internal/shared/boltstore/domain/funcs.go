@@ -38,7 +38,9 @@ func validateKind(rules *Rules, item *contentapi.Item) error {
 
 	if item.Kind == rules.TextKind {
 		err = validateText(item)
-	} else {
+	}
+
+	if item.Kind != rules.TextKind {
 		err = validateMedia(rules, item)
 	}
 
@@ -257,15 +259,31 @@ func InitializeItem(item *contentapi.Item, now time.Time,
 }
 
 // ApplyReview advances a schedule after a validated user rating.
-func ApplyReview(rules *Rules,
+func ApplyReview(
 	item *contentapi.Item,
 	attempt *reviewapi.Attempt,
-	next func(any, time.Time, int) (json.RawMessage, json.RawMessage, error),
+	dependencies *ReviewDependencies,
 ) error {
+	rules, err := contentapi.Decode[Rules](dependencies.Rules)
+	if err != nil {
+		return fmt.Errorf("decode review policy: %w", err)
+	}
+
 	if attempt.Rating < rules.MinimumRating || attempt.Rating > rules.MaximumRating {
 		return errInvalidReviewRating
 	}
 
+	err = advanceReview(item, attempt, dependencies.Next)
+	if err != nil {
+		return fmt.Errorf("apply review: %w", err)
+	}
+
+	return nil
+}
+
+func advanceReview(item *contentapi.Item, attempt *reviewapi.Attempt,
+	next func(any, time.Time, int) (json.RawMessage, json.RawMessage, error),
+) error {
 	current := contentapi.Schedule(item.Schedule)
 
 	schedule, log, err := next(&current, attempt.At, attempt.Rating)
@@ -287,19 +305,17 @@ func appendReview(item *contentapi.Item, log json.RawMessage) {
 }
 
 // PrepareItems validates drafts and returns newly imported files for rollback.
-func PrepareItems(rules *Rules,
+func PrepareItems(
 	ctx context.Context,
 	input *PreparationInput,
 	dependencies *PreparationDependencies,
 ) ([]contentapi.Item, []string, error) {
-	items, err := resolveDrafts(input, dependencies)
+	media, err := newMediaPreparation(input, dependencies)
 	if err != nil {
 		return nil, nil, fmt.Errorf("prepare card content: %w", err)
 	}
 
-	media := newMediaPreparation(rules, items, input, dependencies)
-
-	result, imported, err := finishPreparation(rules, ctx, media)
+	result, imported, err := finishPreparation(ctx, media)
 	if err != nil {
 		return nil, imported, fmt.Errorf("finish card content: %w", err)
 	}
@@ -307,51 +323,78 @@ func PrepareItems(rules *Rules,
 	return result, imported, nil
 }
 
-func resolveDrafts(input *PreparationInput, dependencies *PreparationDependencies) ([]contentapi.Item, error) {
+func resolveDrafts(
+	input *PreparationInput,
+	dependencies *PreparationDependencies,
+) ([]contentapi.Item, error) {
 	preparation, err := newItemPreparation(input, dependencies)
 	if err != nil {
 		return nil, fmt.Errorf("prepare previous content: %w", err)
 	}
+
 	drafts, err := contentapi.Decode[[]contentapi.Draft](input.Drafts)
 	if err != nil {
 		return nil, fmt.Errorf("decode content drafts: %w", err)
 	}
+
 	items, err := prepareAll(preparation, drafts)
 	if err != nil {
 		return nil, fmt.Errorf("resolve content drafts: %w", err)
 	}
+
 	return items, nil
 }
 
-func newItemPreparation(input *PreparationInput, dependencies *PreparationDependencies) (*itemPreparation, error) {
+func newItemPreparation(
+	input *PreparationInput,
+	dependencies *PreparationDependencies,
+) (*itemPreparation, error) {
 	previous, err := contentapi.Decode[[]contentapi.Item](input.Previous)
 	if err != nil {
 		return nil, fmt.Errorf("decode previous content: %w", err)
 	}
-	return &itemPreparation{previous: indexItems(previous), seen: make(map[string]bool), newID: dependencies.NewID}, nil
+
+	return &itemPreparation{
+		previous: indexItems(previous), seen: make(map[string]bool), newID: dependencies.NewID,
+	}, nil
 }
 
-func newMediaPreparation(rules *Rules,
-	items []contentapi.Item,
+func newMediaPreparation(
 	input *PreparationInput,
 	dependencies *PreparationDependencies,
-) *mediaPreparation {
-	return &mediaPreparation{
-		items: items, drafts: contentapi.Drafts(input.Drafts), batch: dependencies.Batch, importMedia: dependencies.ImportMedia,
-		textKind: rules.TextKind, paths: []string{},
+) (*mediaPreparation, error) {
+	rules, err := contentapi.Decode[Rules](dependencies.Rules)
+	if err != nil {
+		return nil, fmt.Errorf("decode content policy: %w", err)
 	}
+
+	items, err := resolveDrafts(input, dependencies)
+	if err != nil {
+		return nil, fmt.Errorf("resolve preparation content: %w", err)
+	}
+
+	return &mediaPreparation{
+		rules: rules, items: items, drafts: contentapi.Drafts(input.Drafts),
+		batch: dependencies.Batch, importMedia: dependencies.ImportMedia,
+		textKind: rules.TextKind, paths: []string{},
+	}, nil
 }
 
-func finishPreparation(rules *Rules,
+func finishPreparation(
 	ctx context.Context,
 	media *mediaPreparation,
 ) ([]contentapi.Item, []string, error) {
-	imported, err := importAll(media, ctx)
+	rules, err := contentapi.Decode[Rules](media.rules)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode prepared policy: %w", err)
+	}
+
+	imported, err := importAll(ctx, media)
 	if err != nil {
 		return nil, imported, fmt.Errorf("import card content: %w", err)
 	}
 
-	err = applyDrafts(rules, contentapi.Items(media.items), contentapi.Drafts(media.drafts))
+	err = applyDrafts(&rules, contentapi.Items(media.items), contentapi.Drafts(media.drafts))
 	if err != nil {
 		return nil, imported, fmt.Errorf("apply drafts: %w", err)
 	}
@@ -370,7 +413,7 @@ func applyDrafts(rules *Rules, items []contentapi.Item, drafts []contentapi.Draf
 	return nil
 }
 
-func importAll(preparation *mediaPreparation, ctx context.Context) ([]string, error) {
+func importAll(ctx context.Context, preparation *mediaPreparation) ([]string, error) {
 	jobs := jobs(preparation)
 	err := preparation.batch(ctx, jobs)
 	imported := importedPaths(preparation)
@@ -472,13 +515,13 @@ func prepare(preparation *itemPreparation,
 }
 
 func resolve(preparation *itemPreparation, draft *contentapi.Draft) (contentapi.Item, error) {
-	var item contentapi.Item
-	var err error
+	resolveDraft := create
+
 	if draft.ID != "" {
-		item, err = retain(preparation, draft)
-	} else {
-		item, err = create(preparation, draft)
+		resolveDraft = retain
 	}
+
+	item, err := resolveDraft(preparation, draft)
 	if err != nil {
 		return contentapi.Item{}, fmt.Errorf("resolve draft content: %w", err)
 	}
@@ -563,6 +606,7 @@ func indexedItems(value any) map[string]contentapi.Item {
 	if !ok {
 		return nil
 	}
+
 	return items
 }
 
@@ -571,13 +615,19 @@ func importItem(preparation *mediaPreparation, index int) (contentapi.Item, stri
 	if err != nil {
 		return contentapi.Item{}, "", fmt.Errorf("encode media content: %w", err)
 	}
-	imported, path, err := preparation.importMedia(encoded, contentapi.Drafts(preparation.drafts)[index].SourcePath)
+
+	imported, path, err := preparation.importMedia(
+		encoded,
+		contentapi.Drafts(preparation.drafts)[index].SourcePath,
+	)
 	if err != nil {
 		return contentapi.Item{}, path, fmt.Errorf("import media content: %w", err)
 	}
+
 	item, err := contentapi.Decode[contentapi.Item](imported)
 	if err != nil {
 		return contentapi.Item{}, path, fmt.Errorf("decode imported content: %w", err)
 	}
+
 	return item, path, nil
 }

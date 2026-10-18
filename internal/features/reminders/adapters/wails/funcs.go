@@ -17,11 +17,14 @@ import (
 func NewRuntime(native NativeRuntime, logger *slog.Logger, logErrorKey string) *Runtime {
 	available := new(atomic.Bool)
 	operations := New(native).operations
+
 	operations["start"] = func(ctx context.Context, _ int, _ func()) notificationResult {
 		startNativeNotifications(ctx, native, notificationWarning(logger, logErrorKey, available))
-		return notificationResult{allowed: available.Load()}
+
+		return notificationResult{allowed: available.Load(), failure: nil}
 	}
 	bindNotificationLifecycle(operations, native, available)
+
 	return &Runtime{operations: operations}
 }
 
@@ -33,8 +36,10 @@ func notificationWarning(
 	return func(ctx context.Context, err error) {
 		if err == nil {
 			available.Store(true)
+
 			return
 		}
+
 		logger.WarnContext(ctx, "desktop notifications unavailable",
 			//nolint:sloglint // Log field names come from validated embedded configuration.
 			slog.Any(key, err))
@@ -46,7 +51,9 @@ func startNativeNotifications(
 	native NativeRuntime,
 	report func(context.Context, error),
 ) {
-	report(ctx, native.ServiceStartup(ctx, application.ServiceOptions{}))
+	var options application.ServiceOptions
+
+	report(ctx, native.ServiceStartup(ctx, options))
 }
 
 func bindNotificationLifecycle(
@@ -55,16 +62,20 @@ func bindNotificationLifecycle(
 	available *atomic.Bool,
 ) {
 	operations["available"] = func(context.Context, int, func()) notificationResult {
-		return notificationResult{allowed: available.Load()}
+		return notificationResult{allowed: available.Load(), failure: nil}
 	}
 	operations["stop"] = func(context.Context, int, func()) notificationResult {
-		return notificationResult{failure: stopNativeNotifications(native, available)}
+		return notificationResult{
+			allowed: false,
+			failure: stopNativeNotifications(native, available),
+		}
 	}
 	operations["review"] = func(_ context.Context, _ int, show func()) notificationResult {
 		native.OnNotificationResponse(func(result notifications.NotificationResult) {
-			notificationResponse(result, available, show)
+			notificationResponse(&result, available, show)
 		})
-		return notificationResult{}
+
+		return notificationResult{allowed: false, failure: nil}
 	}
 }
 
@@ -72,52 +83,59 @@ func stopNativeNotifications(native NativeRuntime, available *atomic.Bool) error
 	if !available.Swap(false) {
 		return nil
 	}
+
 	err := native.ServiceShutdown()
 	if err != nil {
 		return fmt.Errorf("stop notifications: %w", err)
 	}
+
 	return nil
 }
 
 func notificationResponse(
-	result notifications.NotificationResult,
+	result *notifications.NotificationResult,
 	available *atomic.Bool,
 	show func(),
 ) {
 	if result.Error != nil || !available.Load() {
 		return
 	}
+
 	if result.Response.ActionIdentifier == notifications.DefaultActionIdentifier {
 		show()
 	}
 }
 
 // Start initializes notifications without making native availability fatal.
-func (runtime *Runtime) Start(ctx context.Context) { runtime.operations["start"](ctx, 0, nil) }
+func (runtime *Runtime) Start(ctx context.Context) { runtime.operations["start"](ctx, zero, nil) }
 
 // Available reports whether native initialization succeeded.
 func (runtime *Runtime) Available() bool {
-	return runtime.operations["available"](context.Background(), 0, nil).allowed
+	return runtime.operations["available"](context.Background(), zero, nil).allowed
 }
 
 // Stop releases only a successfully initialized notification service.
 func (runtime *Runtime) Stop() error {
-	return runtime.operations["stop"](context.Background(), 0, nil).failure
+	return runtime.operations["stop"](context.Background(), zero, nil).failure
 }
 
 // OnReview opens reviews only for a successful default notification action.
 func (runtime *Runtime) OnReview(show func()) {
-	runtime.operations["review"](context.Background(), 0, show)
+	runtime.operations["review"](context.Background(), zero, show)
 }
 
 // CheckNotificationAuthorization reports whether native notifications are authorized.
 func (runtime *Runtime) CheckNotificationAuthorization() (bool, error) {
-	return authorizationResult(runtime.operations["check"](context.Background(), 0, nil))
+	result := runtime.operations["check"](context.Background(), zero, nil)
+
+	return result.allowed, result.failure
 }
 
 // RequestAuthorization requests native notification authorization.
 func (runtime *Runtime) RequestAuthorization() (bool, error) {
-	return authorizationResult(runtime.operations["request"](context.Background(), 0, nil))
+	result := runtime.operations["request"](context.Background(), zero, nil)
+
+	return result.allowed, result.failure
 }
 
 // Send delivers a reminder for the supplied number of due items.
@@ -131,14 +149,16 @@ func New(native NativeNotifications) Notifier {
 		"check":   func(context.Context, int, func()) notificationResult { return checkAuthorization(native) },
 		"request": func(context.Context, int, func()) notificationResult { return requestAuthorization(native) },
 		"send": func(_ context.Context, count int, _ func()) notificationResult {
-			return notificationResult{failure: sendReminder(native, count)}
+			return notificationResult{allowed: false, failure: sendReminder(native, count)}
 		},
 	}}
 }
 
 // CheckNotificationAuthorization reports whether native notifications are authorized.
 func (notifier Notifier) CheckNotificationAuthorization() (bool, error) {
-	return authorizationResult(notifier.operations["check"](context.Background(), 0, nil))
+	result := notifier.operations["check"](context.Background(), zero, nil)
+
+	return result.allowed, result.failure
 }
 
 // Send delivers a reminder for the supplied number of due items.
@@ -148,10 +168,8 @@ func (notifier Notifier) Send(count int) error {
 
 // RequestAuthorization requests native notification authorization.
 func (notifier Notifier) RequestAuthorization() (bool, error) {
-	return authorizationResult(notifier.operations["request"](context.Background(), 0, nil))
-}
+	result := notifier.operations["request"](context.Background(), zero, nil)
 
-func authorizationResult(result notificationResult) (bool, error) {
 	return result.allowed, result.failure
 }
 
@@ -163,15 +181,20 @@ func checkAuthorization(native NativeNotifications) notificationResult {
 			failure: fmt.Errorf("check notification authorization: %w", err),
 		}
 	}
-	return notificationResult{allowed: allowed}
+
+	return notificationResult{allowed: allowed, failure: nil}
 }
 
 func requestAuthorization(native NativeNotifications) notificationResult {
 	allowed, err := native.RequestNotificationAuthorization()
 	if err != nil {
-		return notificationResult{failure: fmt.Errorf("request authorization: %w", err)}
+		return notificationResult{
+			allowed: false,
+			failure: fmt.Errorf("request authorization: %w", err),
+		}
 	}
-	return notificationResult{allowed: allowed}
+
+	return notificationResult{allowed: allowed, failure: nil}
 }
 
 func sendReminder(native NativeNotifications, count int) error {
@@ -179,15 +202,18 @@ func sendReminder(native NativeNotifications, count int) error {
 	if err != nil {
 		return fmt.Errorf("send reminder: %w", err)
 	}
+
 	return nil
 }
 
 func reminderOptions(count int) notifications.NotificationOptions {
 	var options notifications.NotificationOptions
+
 	options.Sound = reminderSound()
 	options.ID = "raven-due"
 	options.Title = "Time to review"
 	options.Body = fmt.Sprintf("%d items are ready to review in Raven.", count)
 	options.ThreadID = "raven-reviews"
+
 	return options
 }

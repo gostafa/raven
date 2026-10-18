@@ -277,12 +277,13 @@ func (fixture *reconciliationFixture) runtime() *reconciliation {
 	if source == nil {
 		source = new(testSource)
 	}
-	return newReconciliation(
+	runtime := newReconciliation(
 		source,
-		fixture.notifier,
 		fixture.callbacks,
 		&coordinatorSignals{changed: fixture.changed, stopping: fixture.stopping},
 	)
+	bindNotifications(runtime, source, fixture.notifier)
+	return runtime
 }
 
 func (fixture *reconciliationFixture) deliver(pending []reviewapi.DueOccurrence) {
@@ -317,5 +318,36 @@ func TestDecodedReminderCardsRejectInvalidNestedSchedulesAndHistory(t *testing.T
 	pending, _ := Snapshot(cards, time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC))
 	if len(pending) != 1 || pending[0].ItemID != "item" {
 		t.Fatalf("decoded schedule lost due occurrence: %+v", pending)
+	}
+}
+
+func TestReminderWireFailuresDoNotDeliverOrAcknowledge(t *testing.T) {
+	source := new(testSource)
+	if err := deliverEncoded(source, new(testNotifier), []byte("{")); err == nil {
+		t.Fatal("delivered malformed occurrences")
+	}
+	called := false
+	if err := encodeDelivery(
+		func([]byte) error { called = true; return nil },
+		func() {},
+	); err == nil {
+		t.Fatal("encoded unsupported occurrences")
+	}
+	if called {
+		t.Fatal("delivered a batch after serialization failed")
+	}
+	if err := acknowledgeDelivery(source, func() {}); err == nil {
+		t.Fatal("acknowledged unsupported occurrences")
+	}
+	if source.marked != 0 {
+		t.Fatal("acknowledged a batch after serialization failed")
+	}
+}
+
+func TestUnknownWorkerOperationLeavesReadinessUnchanged(t *testing.T) {
+	state := new(workerState)
+	updateWorker(state, "unknown")
+	if state.enabled || state.stopped || state.wake != nil || state.stop != nil {
+		t.Fatal("unknown operation changed worker state")
 	}
 }

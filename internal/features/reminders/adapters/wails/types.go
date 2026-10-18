@@ -37,7 +37,7 @@ type (
 		operations map[string]func(context.Context, int, func()) notificationResult
 	}
 	notificationResult struct {
-		allowed bool
 		failure error
+		allowed bool
 	}
 )

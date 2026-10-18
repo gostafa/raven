@@ -7,6 +7,7 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 type (
@@ -35,6 +36,8 @@ type (
 	}
 	// PreparationDependencies supplies media import and identifier generation.
 	PreparationDependencies struct {
+		// Rules contains independently validated content policy.
+		Rules any
 		// Batch runs independent media imports to completion.
 		Batch func(context.Context, []func(context.Context) error) error
 		// ImportMedia copies media for a JSON-valued content record.
@@ -43,7 +46,16 @@ type (
 		NewID func() (string, error)
 	}
 
+	// ReviewDependencies supplies content policy and the scheduling capability.
+	ReviewDependencies struct {
+		// Rules contains independently validated rating policy.
+		Rules any
+		// Next advances JSON-valued scheduling state after a review.
+		Next func(any, time.Time, int) (json.RawMessage, json.RawMessage, error)
+	}
+
 	mediaPreparation struct {
+		rules       any
 		items       any
 		drafts      any
 		batch       func(context.Context, []func(context.Context) error) error

@@ -5,6 +5,7 @@ package composition
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -28,36 +29,39 @@ func newApplication(params appParams, settings configuration.Settings) *applicat
 
 func newDesktop(params desktopParams, settings configuration.Settings) *desktopwails.Desktop {
 	deps := desktopDependencies(params)
+
 	deps.ShowReviews, deps.LogErrorKey = settings.ShowReviews(), settings.LogErrorKey()
+
 	desktop := desktopwails.New(deps)
 	params.Lifecycle.Append(desktopLifecycle(desktop, params.Runtime, params.Requests))
+
 	return desktop
 }
 
 func desktopDependencies(params desktopParams) *desktopwails.Dependencies {
-	deps := &desktopwails.Dependencies{
-		App:                 params.App,
-		Main:                params.Handles.Main,
-		Widget:              params.Handles.Widget,
-		Review:              params.Handles.Review,
-		ApplicationStarted:  params.Visibility.ApplicationStarted,
-		RequestOpen:         params.Visibility.RequestOpen,
-		InitializeStartup:   params.Startup.Initialize,
-		RefreshStartup:      params.Startup.Refresh,
-		ToggleStartup:       params.Startup.Toggle,
-		SetStartupPublisher: params.Startup.SetPublisher,
-		OnReview:            params.Notifications.OnReview,
-		Icon:                params.Assets.Icon,
-	}
-	bindDesktopWindows(deps, params)
-	bindDesktopReminders(deps, params)
-	return deps
+	var deps desktopwails.Dependencies
+
+	deps.App, deps.Main = params.App, params.Handles.Main
+	deps.Widget, deps.Review = params.Handles.Widget, params.Handles.Review
+	deps.OnReview, deps.Icon = params.Notifications.OnReview, params.Assets.Icon
+	bindDesktopStartup(&deps, params)
+	bindDesktopWindows(&deps, params)
+	bindDesktopReminders(&deps, params)
+
+	return &deps
+}
+
+func bindDesktopStartup(deps *desktopwails.Dependencies, params desktopParams) {
+	deps.ApplicationStarted, deps.RequestOpen = params.Visibility.ApplicationStarted, params.Visibility.RequestOpen
+	deps.InitializeStartup, deps.RefreshStartup = params.Startup.Initialize, params.Startup.Refresh
+	deps.ToggleStartup, deps.SetStartupPublisher = params.Startup.Toggle, params.Startup.SetPublisher
 }
 
 func bindDesktopWindows(deps *desktopwails.Dependencies, params desktopParams) {
 	if params.Windows == nil {
 		return
 	}
+
 	deps.ShowMain, deps.HideMain = params.Windows.ShowMain, params.Windows.HideMain
 	deps.ConfigureWidget, deps.ResetWidget = params.Windows.ConfigureWidget, params.Windows.ResetWidget
 	deps.PositionFloatingReview = params.Windows.PositionFloatingReview
@@ -68,6 +72,7 @@ func bindDesktopReminders(deps *desktopwails.Dependencies, params desktopParams)
 	if params.Reminders == nil {
 		return
 	}
+
 	deps.StartReminders, deps.WakeReminders = params.Reminders.Start, params.Reminders.Wake
 }
 
@@ -124,15 +129,21 @@ func configureDesktop(desktop *desktopwails.Desktop) { desktop.Configure() }
 
 // NewBridge binds graph control before the native event loop starts.
 func NewBridge(graph Lifecycle, runtime *lifetime.Runtime) *Bridge {
-	var startOnce, stopOnce sync.Once
-	var startErr, stopErr error
+	var (
+		startOnce, stopOnce sync.Once
+		startErr, stopErr   error
+	)
+
 	return &Bridge{lifecycle: func(ctx context.Context, starting bool) error {
 		if starting {
 			startOnce.Do(func() { startErr = startBridge(ctx, runtime, graph.Start) })
-			return startErr
+
+			return errors.Join(startErr)
 		}
-		stopOnce.Do(func() { stopErr = stopBridge(runtime.Cancel, graph.Stop) })
-		return stopErr
+
+		stopOnce.Do(func() { stopErr = stopBridge(ctx, runtime.Cancel, graph.Stop) })
+
+		return errors.Join(stopErr)
 	}}
 }
 
@@ -142,29 +153,38 @@ func startBridge(
 	start func(context.Context) error,
 ) error {
 	runtime.Attach(ctx)
+
 	startup, cancel := context.WithTimeout(ctx, lifecycleTimeout)
+
 	defer cancel()
+
 	err := isolate(start(startup))
 	if err != nil {
 		runtime.Cancel()
 	}
-	return err
+
+	return errors.Join(err)
 }
 
-func stopBridge(cancelRuntime func(), stop func(context.Context) error) error {
+func stopBridge(ctx context.Context, cancelRuntime func(), stop func(context.Context) error) error {
 	cancelRuntime()
-	ctx, cancel := context.WithTimeout(context.Background(), lifecycleTimeout)
+
+	shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), lifecycleTimeout)
+
 	defer cancel()
-	return isolate(stop(ctx))
+
+	return errors.Join(isolate(stop(shutdown)))
 }
 
 // ServiceStartup starts the graph with an independent worker lifetime.
 func (bridge *Bridge) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
-	return bridge.lifecycle(ctx, true)
+	return errors.Join(bridge.lifecycle(ctx, true))
 }
 
 // ServiceShutdown releases the graph once, including after an unsuccessful Run.
-func (bridge *Bridge) ServiceShutdown() error { return bridge.lifecycle(context.Background(), false) }
+func (bridge *Bridge) ServiceShutdown() error {
+	return errors.Join(bridge.lifecycle(context.Background(), false))
+}
 
 func isolate(err error) error {
 	if err != nil {
@@ -178,6 +198,7 @@ func (failure *lifecycleError) Error() string { return failure.message }
 
 func desktopConfiguration(settings configuration.Settings) *desktopwails.Configuration {
 	layout := configuration.Layout(settings)
+
 	return &desktopwails.Configuration{
 		ApplicationID: settings.ApplicationID(), WidgetSize: layout.WidgetSize,
 		ReviewWidth: layout.ReviewWidth, ReviewHeight: layout.ReviewHeight,

@@ -130,6 +130,7 @@ func TestWindowVisibilityAndReviewEvents(t *testing.T) {
 	if quits != 1 {
 		t.Fatal("quit was not delegated")
 	}
+	windows.RequestFloatingReviewClose()
 }
 
 func TestReviewPlacementUsesWidgetScreenAndFallsBackToPrimary(t *testing.T) {

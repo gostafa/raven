@@ -11,7 +11,7 @@ type (
 	}
 	// Backend provides operating system login startup registration.
 	Backend interface {
-		EnableWithOptions(options *Options) error
+		EnableWithOptions(identifier string, arguments []string) error
 		Disable() error
 		IsEnabled() (bool, error)
 	}

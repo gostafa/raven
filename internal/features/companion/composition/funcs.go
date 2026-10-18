@@ -14,6 +14,7 @@ func newConfiguration(handles wails.WindowSet) wails.Widget {
 
 func newWindows(params windowParams, settings configuration.Settings) *wails.Windows {
 	layout := configuration.Layout(settings)
+
 	return wails.New(&wails.Dependencies{
 		App: params.App, Main: params.Handles.Main, Widget: params.Handles.Widget,
 		Review: params.Handles.Review, Configure: params.Configuration.Configure,

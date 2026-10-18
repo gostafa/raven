@@ -1,6 +1,7 @@
 package application_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -68,14 +69,13 @@ func (n *fakeReminderNotifier) Send(count int) error {
 
 func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
-	store, err := boltstore.Open(
+	store, err := openRepository(
 		path,
-		&boltstore.Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    nil,
-			Settings:  *storeSettingsFixture(),
-		},
+		boltstore.NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -119,14 +119,13 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 		t.Fatal("due items not grouped")
 	}
 	_ = store.Close()
-	store, err = boltstore.Open(
+	store, err = openRepository(
 		path,
-		&boltstore.Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    nil,
-			Settings:  *storeSettingsFixture(),
-		},
+		boltstore.NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -216,4 +215,56 @@ func storeSettingsFixture() *boltstore.Settings {
 		MediaRoutePrefix: settings.MediaRoutePrefix(),
 		LogErrorKey:      settings.LogErrorKey(),
 	}
+}
+
+// testRepository translates public JSON records while retaining typed test assertions.
+type testRepository struct{ *boltstore.Store }
+
+func openRepository(path string, dependencies *boltstore.Dependencies) (*testRepository, error) {
+	store, err := boltstore.Open(path, dependencies)
+	return &testRepository{Store: store}, err
+}
+
+func encodeRecord(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded)
+}
+
+func (store *testRepository) ListCards() ([]cardapi.Card, error) {
+	encoded, err := store.Store.ListCards()
+	if err != nil {
+		return nil, err
+	}
+	return reminders.DecodeCards(encoded)
+}
+
+func (store *testRepository) CreateFolder(input *folderapi.CreateInput) (folderapi.Folder, error) {
+	encoded, err := store.Store.CreateFolder(encodeRecord(input))
+	if err != nil {
+		return folderapi.Folder{}, err
+	}
+	return contentapi.Decode[folderapi.Folder](json.RawMessage(encoded))
+}
+
+func (store *testRepository) CreateCard(input *cardapi.CreateInput) (cardapi.Card, error) {
+	return decodeCard(store.Store.CreateCard(encodeRecord(input)))
+}
+
+func (store *testRepository) ReviewItem(input *cardapi.ReviewInput) (cardapi.Card, error) {
+	return decodeCard(store.Store.ReviewItem(encodeRecord(input)))
+}
+
+func decodeCard(encoded string, err error) (cardapi.Card, error) {
+	if err != nil {
+		return cardapi.Card{}, err
+	}
+	card, err := contentapi.Decode[cardapi.Card](json.RawMessage(encoded))
+	if err != nil {
+		return cardapi.Card{}, err
+	}
+	err = cardapi.Normalize(&card)
+	return card, err
 }

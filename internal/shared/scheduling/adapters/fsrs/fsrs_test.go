@@ -81,3 +81,19 @@ func TestSchedulingRejectsValuesOutsideTheWireSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestSchedulingWireRejectsUnrepresentableTimestamps(t *testing.T) {
+	invalid := time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	if _, _, err := encodeSchedule(
+		&reviewapi.Schedule{Due: invalid},
+		&reviewapi.Log{},
+	); err == nil {
+		t.Fatal("encoded a scheduling timestamp outside JSON's supported range")
+	}
+	if _, _, err := encodeSchedule(
+		&reviewapi.Schedule{},
+		&reviewapi.Log{Review: invalid},
+	); err == nil {
+		t.Fatal("encoded a review timestamp outside JSON's supported range")
+	}
+}

@@ -149,12 +149,11 @@ func TestLifecycleOrderingReadinessAndLockRelease(t *testing.T) {
 	control.Wake()
 	reopened, err := boltstore.Open(
 		path,
-		&boltstore.Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    nil,
-			Settings:  *storeSettingsFixture(),
-		},
+		boltstore.NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
 	)
 	if err != nil {
 		t.Fatalf("shutdown retained database lock: %v", err)
@@ -212,12 +211,11 @@ func TestPartialStartupRollsBackEveryStartedResource(t *testing.T) {
 	}
 	store, err := boltstore.Open(
 		path,
-		&boltstore.Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    nil,
-			Settings:  *storeSettingsFixture(),
-		},
+		boltstore.NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
 	)
 	if err != nil {
 		t.Fatalf("rollback retained database lock: %v", err)

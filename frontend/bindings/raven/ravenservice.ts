@@ -10,30 +10,17 @@
 // @ts-ignore: Unused imports
 import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as cards$0 from "./api/cards/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as configuration$0 from "./api/configuration/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as folders$0 from "./api/folders/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as media$0 from "./api/media/models.js";
-
 /**
- * CreateCard creates a card and initializes its item schedules.
+ * CreateCard creates a card from JSON and returns its initialized JSON record.
  */
-export function CreateCard(input: cards$0.CreateInput | null): $CancellablePromise<cards$0.Card> {
+export function CreateCard(input: string): $CancellablePromise<string> {
     return $Call.ByID(2101102601, input);
 }
 
 /**
- * CreateFolder creates a folder from editable metadata.
+ * CreateFolder creates a folder from JSON metadata and returns its JSON record.
  */
-export function CreateFolder(input: folders$0.CreateInput | null): $CancellablePromise<folders$0.Folder> {
+export function CreateFolder(input: string): $CancellablePromise<string> {
     return $Call.ByID(1359139579, input);
 }
 
@@ -52,9 +39,9 @@ export function DeleteFolder(folderID: string): $CancellablePromise<void> {
 }
 
 /**
- * GetConfiguration returns the frontend's immutable configuration snapshot.
+ * GetConfiguration returns the frontend configuration snapshot as JSON.
  */
-export function GetConfiguration(): $CancellablePromise<configuration$0.Settings> {
+export function GetConfiguration(): $CancellablePromise<string> {
     return $Call.ByID(2073266893);
 }
 
@@ -73,16 +60,16 @@ export function HideMain(): $CancellablePromise<void> {
 }
 
 /**
- * ListCards returns the persisted library cards.
+ * ListCards returns persisted library cards as JSON.
  */
-export function ListCards(): $CancellablePromise<cards$0.Card[] | null> {
+export function ListCards(): $CancellablePromise<string> {
     return $Call.ByID(1147556462);
 }
 
 /**
- * ListFolders returns folders in creation order.
+ * ListFolders returns folders in creation order as JSON.
  */
-export function ListFolders(): $CancellablePromise<folders$0.Folder[] | null> {
+export function ListFolders(): $CancellablePromise<string> {
     return $Call.ByID(3506033272);
 }
 
@@ -108,16 +95,16 @@ export function ResetWidget(): $CancellablePromise<void> {
 }
 
 /**
- * ReviewItem records a rating and advances an item schedule.
+ * ReviewItem records a JSON rating and returns the updated JSON card.
  */
-export function ReviewItem(input: cards$0.ReviewInput | null): $CancellablePromise<cards$0.Card> {
+export function ReviewItem(input: string): $CancellablePromise<string> {
     return $Call.ByID(3012119832, input);
 }
 
 /**
- * SelectMediaFiles selects local media for a card draft.
+ * SelectMediaFiles returns selected draft media as JSON.
  */
-export function SelectMediaFiles(kind: string): $CancellablePromise<media$0.Selection[] | null> {
+export function SelectMediaFiles(kind: string): $CancellablePromise<string> {
     return $Call.ByID(2266179524, kind);
 }
 
@@ -143,8 +130,8 @@ export function ToggleFloatingReview(): $CancellablePromise<void> {
 }
 
 /**
- * UpdateCard updates card content while preserving retained item schedules.
+ * UpdateCard replaces JSON card content while retaining existing schedules.
  */
-export function UpdateCard(input: cards$0.UpdateInput | null): $CancellablePromise<cards$0.Card> {
+export function UpdateCard(input: string): $CancellablePromise<string> {
     return $Call.ByID(3646724196, input);
 }

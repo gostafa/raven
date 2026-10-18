@@ -13,7 +13,7 @@ import (
 
 type (
 
-	// Source provides persisted schedules and notification prompt state.
+	// Source provides JSON card records and durable notification prompt state.
 	Source interface {
 		ports.Store
 		ListCards() (string, error)

@@ -20,6 +20,7 @@ import (
 	"go.uber.org/fx/fxevent"
 
 	cardapi "raven/api/cards"
+	configurationapi "raven/api/configuration"
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	mediaapi "raven/api/media"
@@ -123,8 +124,8 @@ func (reminders *facadeReminders) Wake() { reminders.wakes++ }
 
 type facadeMedia struct{ failure error }
 
-func (media facadeMedia) Select(string) ([]mediaapi.Selection, error) {
-	return []mediaapi.Selection{{OriginalName: "test.png"}}, media.failure
+func (media facadeMedia) Select(string) (string, error) {
+	return encodeFacade([]mediaapi.Selection{{OriginalName: "test.png"}}), media.failure
 }
 
 type facadeRepository struct {
@@ -137,10 +138,13 @@ func (repository facadeRepository) DeleteCard(string, string) error { return rep
 
 func TestFacadeWindowCommandsAndDeletionEvents(t *testing.T) {
 	windows, events, reminders := &facadeWindows{}, &facadeEvents{}, &facadeReminders{}
-	service := newService(
-		serviceParams{Windows: windows, Events: events, Reminders: reminders, Media: facadeMedia{}},
-		configurationFixture(),
-	)
+	deps := serviceParams{
+		Windows:   windows,
+		Events:    events,
+		Reminders: reminders,
+		Media:     facadeMedia{},
+	}
+	service := newService(deps, configurationFixture())
 	service.ShowMain()
 	service.HideMain()
 	service.ResetWidget()
@@ -148,34 +152,38 @@ func TestFacadeWindowCommandsAndDeletionEvents(t *testing.T) {
 	service.ToggleFloatingReview()
 	service.HideFloatingReview()
 	service.ShowReviews()
+	service.RefreshReminders()
 	if !reflect.DeepEqual(
 		windows.calls,
 		[]string{"show", "hide", "reset", "quit", "toggle", "hide-review", "show"},
 	) {
 		t.Fatal(windows.calls)
 	}
-	if len(events.names) != 1 || events.names[0] != service.configuration.ShowReviews() {
+	if len(events.names) != 1 || events.names[0] != configurationFixture().ShowReviews() {
 		t.Fatal(events.names)
 	}
 	for _, remove := range []func() error{func() error { return service.DeleteFolder("folder") }, func() error { return service.DeleteCard("folder", "card") }} {
-		service.store = nil
+		deps.Repository = nil
+		service = newService(deps, configurationFixture())
 		if err := remove(); err == nil {
 			t.Fatal("missing storage accepted")
 		}
 		failure := errors.New("delete failed")
-		service.store = facadeRepository{failure: failure}
+		deps.Repository = facadeRepository{failure: failure}
+		service = newService(deps, configurationFixture())
 		if err := remove(); err == nil || errors.Is(err, failure) {
 			t.Fatalf("delete failure: %v", err)
 		}
-		service.store = facadeRepository{}
+		deps.Repository = facadeRepository{}
+		service = newService(deps, configurationFixture())
 		if err := remove(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if reminders.wakes != 2 || len(events.names) != 3 {
+	if reminders.wakes != 3 || len(events.names) != 3 {
 		t.Fatal("deletions did not reconcile schedules")
 	}
-	selected, err := service.SelectMediaFiles("image")
+	selected, err := decodeFacade[[]mediaapi.Selection](service.SelectMediaFiles("image"))
 	if err != nil || len(selected) != 1 || selected[0].OriginalName != "test.png" {
 		t.Fatalf("media=%v error=%v", selected, err)
 	}
@@ -192,15 +200,15 @@ type failingRepository struct {
 	failure error
 }
 
-func (r failingRepository) ListFolders() ([]folderapi.Folder, error) { return nil, r.failure }
+func (r failingRepository) ListFolders() (string, error) { return "", r.failure }
 
 func TestFacadeOwnsErrorContract(t *testing.T) {
 	cause := fmt.Errorf("read library: %w", bolt.ErrDatabaseNotOpen)
-	service := &RavenService{
-		configuration: configurationFixture(),
-		store:         failingRepository{failure: cause},
-	}
-	_, err := service.ListFolders()
+	service := newService(
+		serviceParams{Repository: failingRepository{failure: cause}},
+		configurationFixture(),
+	)
+	_, err := decodeFacade[[]folderapi.Folder](service.ListFolders())
 	var public *ServiceError
 	if !errors.As(err, &public) || public.Message != cause.Error() {
 		t.Fatalf("unexpected public error: %v", err)
@@ -275,27 +283,28 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
 	store, err := boltstore.Open(
 		path,
-		&boltstore.Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    nil,
-			Settings:  *storeSettingsFixture(),
-		},
+		boltstore.NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	service := &RavenService{configuration: configurationFixture(), store: store}
-	folder, err := service.CreateFolder(&folderapi.CreateInput{Title: " Ideas "})
+	service := newService(serviceParams{Repository: store}, configurationFixture())
+	folder, err := decodeFacade[folderapi.Folder](
+		service.CreateFolder(encodeFacade(&folderapi.CreateInput{Title: " Ideas "})),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	folders, err := service.ListFolders()
+	folders, err := decodeFacade[[]folderapi.Folder](service.ListFolders())
 	if err != nil || !reflect.DeepEqual(folders, []folderapi.Folder{folder}) {
 		t.Fatalf("service folders: %+v, error=%v", folders, err)
 	}
-	card, err := service.CreateCard(
+	card, err := decodeFacade[cardapi.Card](service.CreateCard(encodeFacade(
 		&cardapi.CreateInput{
 			FolderID: folder.ID,
 			Items: []contentapi.Draft{
@@ -303,62 +312,64 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 				{Kind: "text", Text: "An answer"},
 			},
 		},
-	)
+	)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	card, err = service.ReviewItem(
+	card, err = decodeFacade[cardapi.Card](service.ReviewItem(encodeFacade(
 		&cardapi.ReviewInput{
 			FolderID: folder.ID,
 			CardID:   card.ID,
 			ItemID:   contentapi.Items(card.Items)[0].ID,
 			Rating:   3,
 		},
-	)
+	)))
 	if err != nil || contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).Reps != 2 ||
 		card.DueAt <= card.LastReviewed {
 		t.Fatalf("service review: %+v, error=%v", card, err)
 	}
 	due := card.DueAt
-	card, err = service.UpdateCard(
+	card, err = decodeFacade[cardapi.Card](service.UpdateCard(encodeFacade(
 		&cardapi.UpdateInput{FolderID: folder.ID, CardID: card.ID, Items: []contentapi.Draft{
 			{ID: contentapi.Items(card.Items)[0].ID, Kind: "text", Text: "An edited question"},
 			{ID: contentapi.Items(card.Items)[1].ID, Kind: "text", Text: "An edited answer"},
 		}},
-	)
+	)))
 	if err != nil || card.DueAt != due ||
 		contentapi.Items(card.Items)[0].Text != "An edited question" {
 		t.Fatalf("service edit: %+v, error=%v", card, err)
 	}
-	cards, err := service.ListCards()
+	cards, err := decodeFacade[[]cardapi.Card](service.ListCards())
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("service cards: %+v, error=%v", cards, err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ListFolders(); err == nil || errors.Is(err, bolt.ErrDatabaseNotOpen) {
+	if _, err := decodeFacade[[]folderapi.Folder](
+		service.ListFolders(),
+	); err == nil ||
+		errors.Is(err, bolt.ErrDatabaseNotOpen) {
 		t.Fatalf("shutdown did not close storage: %v", err)
 	}
 	reopened, err := boltstore.Open(
 		path,
-		&boltstore.Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    nil,
-			Settings:  *storeSettingsFixture(),
-		},
+		boltstore.NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
 	)
 	if err != nil {
 		t.Fatalf("shutdown did not release the database lock: %v", err)
 	}
 	defer reopened.Close()
-	rawFolders, err := reopened.ListFolders()
+	rawFolders, err := decodeFacade[[]folderapi.Folder](reopened.ListFolders())
 	folders = rawFolders
 	if err != nil || !reflect.DeepEqual(folders, []folderapi.Folder{folder}) {
 		t.Fatalf("folders after service shutdown: %+v, error=%v", folders, err)
 	}
-	rawCards, err := reopened.ListCards()
+	rawCards, err := decodeFacade[[]cardapi.Card](reopened.ListCards())
 	cards = rawCards
 	if err != nil || !reflect.DeepEqual(cards, []cardapi.Card{card}) {
 		t.Fatalf("cards after service shutdown: %+v, error=%v", cards, err)
@@ -366,7 +377,7 @@ func TestFolderServiceAndShutdown(t *testing.T) {
 }
 
 func TestMediaMiddlewareAndPickerErrors(t *testing.T) {
-	service := &RavenService{configuration: configurationFixture()}
+	service := newService(serviceParams{}, configurationFixture())
 	next := http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) },
 	)
@@ -375,7 +386,7 @@ func TestMediaMiddlewareAndPickerErrors(t *testing.T) {
 		status int
 	}{{"/", http.StatusAccepted}, {"/media/folder/card/item", http.StatusServiceUnavailable}} {
 		w := httptest.NewRecorder()
-		desktopmedia.NewRegistry(cffbatch.New(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)), mediaSettingsFixture()).
+		desktopmedia.NewRegistry(cffbatch.New(), &desktopmedia.Dependencies{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, mediaSettingsFixture()).
 			Middleware(next).
 			ServeHTTP(w, httptest.NewRequest("GET", test.path, nil))
 		if w.Code != test.status {
@@ -383,32 +394,40 @@ func TestMediaMiddlewareAndPickerErrors(t *testing.T) {
 		}
 	}
 	for _, kind := range []string{"image", "audio", "video", "invalid"} {
-		if _, err := service.SelectMediaFiles(kind); err == nil {
+		if _, err := decodeFacade[[]mediaapi.Selection](
+			service.SelectMediaFiles(kind),
+		); err == nil {
 			t.Fatalf("picker with unavailable window accepted %s", kind)
 		}
 	}
 }
 
 func TestFolderServiceWithoutStorage(t *testing.T) {
-	service := &RavenService{configuration: configurationFixture()}
-	if _, err := service.ListFolders(); err == nil {
+	service := newService(serviceParams{}, configurationFixture())
+	if _, err := decodeFacade[[]folderapi.Folder](service.ListFolders()); err == nil {
 		t.Fatal("listing without storage should fail")
 	}
-	if _, err := service.CreateFolder(&folderapi.CreateInput{Title: "Ideas"}); err == nil {
+	if _, err := decodeFacade[folderapi.Folder](
+		service.CreateFolder(encodeFacade(&folderapi.CreateInput{Title: "Ideas"})),
+	); err == nil {
 		t.Fatal("creating without storage should fail")
 	}
-	if _, err := service.ListCards(); err == nil {
+	if _, err := decodeFacade[[]cardapi.Card](service.ListCards()); err == nil {
 		t.Fatal("listing cards without storage should fail")
 	}
-	if _, err := service.CreateCard(&cardapi.CreateInput{}); err == nil {
+	if _, err := decodeFacade[cardapi.Card](
+		service.CreateCard(encodeFacade(&cardapi.CreateInput{})),
+	); err == nil {
 		t.Fatal("creating cards without storage should fail")
 	}
-	if _, err := service.UpdateCard(&cardapi.UpdateInput{}); err == nil {
+	if _, err := decodeFacade[cardapi.Card](
+		service.UpdateCard(encodeFacade(&cardapi.UpdateInput{})),
+	); err == nil {
 		t.Fatal("editing without storage should fail")
 	}
-	if _, err := service.ReviewItem(
+	if _, err := decodeFacade[cardapi.Card](service.ReviewItem(encodeFacade(
 		&cardapi.ReviewInput{FolderID: "folder", CardID: "card", ItemID: "item", Rating: 3},
-	); err == nil {
+	))); err == nil {
 		t.Fatal("reviewing cards without storage should fail")
 	}
 }
@@ -416,12 +435,11 @@ func TestFolderServiceWithoutStorage(t *testing.T) {
 func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
 	store, err := boltstore.Open(
 		filepath.Join(t.TempDir(), "raven.db"),
-		&boltstore.Dependencies{
-			Batch:     cffbatch.New(),
-			Scheduler: scheduling.New(new(configuration.Library(configurationFixture()))),
-			Logger:    nil,
-			Settings:  *storeSettingsFixture(),
-		},
+		boltstore.NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -431,17 +449,19 @@ func TestNullFacadeInputsUseExistingValidation(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	service := &RavenService{configuration: configurationFixture(), store: store}
-	if _, err := service.CreateFolder(nil); err == nil {
+	service := newService(serviceParams{Repository: store}, configurationFixture())
+	if _, err := decodeFacade[folderapi.Folder](
+		service.CreateFolder(encodeFacade(nil)),
+	); err == nil {
 		t.Fatal("accepted empty folder input")
 	}
-	if _, err := service.CreateCard(nil); err == nil {
+	if _, err := decodeFacade[cardapi.Card](service.CreateCard(encodeFacade(nil))); err == nil {
 		t.Fatal("accepted empty card input")
 	}
-	if _, err := service.UpdateCard(nil); err == nil {
+	if _, err := decodeFacade[cardapi.Card](service.UpdateCard(encodeFacade(nil))); err == nil {
 		t.Fatal("accepted empty card update")
 	}
-	folders, err := service.ListFolders()
+	folders, err := decodeFacade[[]folderapi.Folder](service.ListFolders())
 	if err != nil || len(folders) != 0 {
 		t.Fatalf("invalid inputs wrote records: %+v %v", folders, err)
 	}
@@ -475,8 +495,8 @@ func mediaSettingsFixture() *desktopmedia.Settings {
 
 func TestConfigurationFacadeReturnsOwnedFrontendSnapshot(t *testing.T) {
 	settings := customConfiguration{Settings: configurationFixture()}
-	service := &RavenService{configuration: settings}
-	value := service.GetConfiguration()
+	service := newService(serviceParams{}, settings)
+	value := mustFacade[configurationapi.Settings](service.GetConfiguration())
 	if value.PreferencesStorageKey != settings.PreferencesStorageKey() ||
 		value.MediaRoutePrefix != settings.MediaRoutePrefix() ||
 		value.TextKind != configuration.Library(settings).TextKind ||
@@ -487,7 +507,9 @@ func TestConfigurationFacadeReturnsOwnedFrontendSnapshot(t *testing.T) {
 		t.Fatal("configuration facade omitted or changed values", value)
 	}
 	value.PreferencesStorageKey = "edited"
-	if service.GetConfiguration().PreferencesStorageKey != "custom.preferences" {
+	if mustFacade[configurationapi.Settings](
+		service.GetConfiguration(),
+	).PreferencesStorageKey != "custom.preferences" {
 		t.Fatal("facade returned shared mutable state")
 	}
 }
@@ -496,3 +518,49 @@ type customConfiguration struct{ configuration.Settings }
 
 func (customConfiguration) PreferencesStorageKey() string { return "custom.preferences" }
 func (customConfiguration) MediaRoutePrefix() string      { return "/saved/" }
+
+func encodeFacade(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}
+
+func decodeFacade[Value any](payload string, err error) (Value, error) {
+	var value Value
+	if err != nil {
+		return value, err
+	}
+	if err = json.Unmarshal([]byte(payload), &value); err != nil {
+		return value, err
+	}
+	switch record := any(&value).(type) {
+	case *cardapi.Card:
+		err = cardapi.Normalize(record)
+	case *[]cardapi.Card:
+		for index := range *record {
+			if err = cardapi.Normalize(&(*record)[index]); err != nil {
+				break
+			}
+		}
+	}
+	return value, err
+}
+
+func mustFacade[Value any](payload string, err error) Value {
+	value, err := decodeFacade[Value](payload, err)
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+func TestJSONEncodingFailureUsesPublicErrorContract(t *testing.T) {
+	result := encodePublic(func() {})
+	var failure *ServiceError
+	if !errors.As(result.failure, &failure) || failure.Message == "" ||
+		errors.Unwrap(result.failure) != nil {
+		t.Fatalf("invalid transport error: %v", result.failure)
+	}
+}
