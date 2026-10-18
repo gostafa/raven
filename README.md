@@ -90,17 +90,17 @@ The widget uses native clipping on macOS and Windows, and transparent GTK stylin
 
 Verified against live registries on **15 October 2026**. Direct dependencies are pinned; Bun lockfiles and `go.sum` are included.
 
-| Tool / package       | Version           |
-| -------------------- | ----------------- |
-| Go                   | 1.27.2            |
-| Bun                  | 1.4.2             |
-| Wails / JS runtime   | 3.0.0-beta.29     |
-| bbolt                | 1.5.0             |
-| go-fsrs              | 4.0.0             |
-| Svelte               | 5.57.2            |
-| Vite / Svelte plugin | 8.3.4 / 7.3.1     |
-| svelte-check         | 4.7.6             |
-| TypeScript           | 6.0.3             |
+| Tool / package       | Version       |
+| -------------------- | ------------- |
+| Go                   | 1.27.2        |
+| Bun                  | 1.4.2         |
+| Wails / JS runtime   | 3.0.0-beta.29 |
+| bbolt                | 1.5.0         |
+| go-fsrs              | 4.0.0         |
+| Svelte               | 5.57.2        |
+| Vite / Svelte plugin | 8.3.4 / 7.3.1 |
+| svelte-check         | 4.7.6         |
+| TypeScript           | 6.0.3         |
 
 Wails 3 is currently beta. TypeScript 7.0.2 is the latest release, but svelte-check 4.7.6 supports only TypeScript 5 and 6, so Raven uses the latest supported TypeScript 6 release.
 
