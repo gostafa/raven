@@ -1,6 +1,6 @@
 **/*.yml
 **/*.yaml
-
+**/*.md
 taskotter/**
 frontend/bindings/**
 frontend/dist/**

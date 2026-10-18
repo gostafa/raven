@@ -38,6 +38,8 @@ jobs:
           - windows-latest
           - macos-latest
     runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
     permissions:
       contents: write
       pull-requests: write

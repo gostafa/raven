@@ -15,7 +15,9 @@ runs:
       run: task ci:install:tooling
     - name: Run CI
       shell: bash
-      run: YAMLFIX_EXTRA_ARGS='--exclude ".github/workflows/**/*" --exclude "taskotter/**/*"' task ci:fix
+      run: >-
+        YAMLFIX_EXTRA_ARGS='--exclude "node_modules/**/*" --exclude ".github/workflows/**/*"
+        --exclude "taskotter/**/*"' task ci:fix
     - name: Create fix PR
       uses: $/.github/actions/auto-fix
       with:
