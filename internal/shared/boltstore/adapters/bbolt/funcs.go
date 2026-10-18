@@ -537,7 +537,11 @@ func schemaMigrationFinishBackup(
 		)
 	}
 
-	err = syncDirectory(directory)
+	return errors.Join(syncMigrationBackupDirectory(directory, syncDirectory))
+}
+
+func syncMigrationBackupDirectory(directory string, syncDirectory func(string) error) error {
+	err := syncDirectory(directory)
 	if err != nil {
 		return fmt.Errorf("sync migration backup: %w", err)
 	}
@@ -1435,7 +1439,17 @@ func storeCommitMedia(storage *persistence, staged, path string) (string, error)
 		return "", fmt.Errorf("rename imported media: %w", err)
 	}
 
-	err = syncDirectory(storage.mediaDir)
+	committedPath, err := syncMediaDirectory(storage, path, syncDirectory)
+
+	return committedPath, errors.Join(err)
+}
+
+func syncMediaDirectory(
+	storage *persistence,
+	path string,
+	syncDirectory func(string) error,
+) (string, error) {
+	err := syncDirectory(storage.mediaDir)
 	if err != nil {
 		storeRemoveMediaFile(storage, path)
 

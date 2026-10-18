@@ -705,29 +705,18 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 	); err == nil {
 		t.Fatal("renamed media over directory")
 	}
-	source, err := os.CreateTemp(t.TempDir(), "commit-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := source.Close(); err != nil {
-		t.Fatal(err)
-	}
 	target := filepath.Join(t.TempDir(), "target.png")
 	store.mediaDir = filepath.Join(t.TempDir(), "missing")
-	if runtime.GOOS != "windows" {
-		if _, err := storeCommitMedia(
-			store,
-			source.Name(),
-			target,
-		); !errors.Is(
-			err,
-			os.ErrNotExist,
-		) {
-			t.Fatal(err)
-		}
-		if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("failed commit retained media")
-		}
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncMediaDirectory(store, target, func(string) error {
+		return io.ErrUnexpectedEOF
+	}); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed commit retained media")
 	}
 	store.mediaDir = t.TempDir()
 	stale := filepath.Join(store.mediaDir, strings.Repeat("a", 32)+".png")
@@ -1104,13 +1093,20 @@ func TestMigrationBackupFailuresPreserveCauses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = schemaMigrationFinishBackup(migration, file, filepath.Dir(missing))
-	if runtime.GOOS == "windows" {
-		if err != nil {
-			t.Fatal(err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	err = schemaMigrationFinishBackup(migration, file, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = syncMigrationBackupDirectory(filepath.Dir(missing), func(string) error {
+		return os.ErrNotExist
+	})
+	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("backup directory sync: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := syncDirectory(filepath.Dir(missing)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing directory sync: %v", err)
+		}
 	}
 	if err := store.update(func(transaction *bolt.Tx) error {
 		return transaction.Bucket([]byte(metaBucket)).Put([]byte(schemaKey), []byte(schemaV4))
