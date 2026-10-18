@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	cardapi "raven/api/cards"
 	"raven/api/content"
 	reviewapi "raven/api/reviews"
 )
@@ -153,5 +154,49 @@ func TestDraftNormalization(t *testing.T) {
 	value = "wrong"
 	if err := content.NormalizeDrafts(&value); err == nil {
 		t.Fatal("invalid drafts accepted")
+	}
+}
+
+func TestJSONContentPreservesLargeIntegerRecords(t *testing.T) {
+	for _, values := range []struct {
+		signed   int64
+		unsigned uint64
+	}{
+		{signed: math.MaxInt64, unsigned: 9007199254740993},
+		{signed: math.MinInt64, unsigned: math.MaxUint64},
+	} {
+		original := content.Item{
+			LastNotifiedDue: values.signed,
+			Schedule:        reviewapi.Schedule{Reps: values.unsigned, Lapses: values.unsigned},
+			Reviews:         []content.Review{{Log: reviewapi.Log{ScheduledDays: values.unsigned}}},
+		}
+		encoded, err := json.Marshal(cardapi.Card{Items: []content.Item{original}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		card, err := content.Decode[cardapi.Card](json.RawMessage(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cardapi.Normalize(&card); err != nil {
+			t.Fatal(err)
+		}
+		decoded := content.Items(card.Items)[0]
+		if !reflect.DeepEqual(decoded, original) {
+			t.Fatalf("integer content changed: %#v != %#v", decoded, original)
+		}
+	}
+}
+
+func TestJSONDecoderRejectsTrailingDocumentsAndMalformedInput(t *testing.T) {
+	for _, invalid := range []string{"", "{", `{} {}`, `{} true`, `{} trailing`} {
+		var target any
+		if err := content.DecodeJSON([]byte(invalid), &target); err == nil {
+			t.Fatalf("accepted invalid JSON document: %q", invalid)
+		}
+	}
+	var target map[string]any
+	if err := content.DecodeJSON([]byte("{} \n\t"), &target); err != nil {
+		t.Fatal("rejected trailing JSON whitespace", err)
 	}
 }

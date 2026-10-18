@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	autostart "raven/internal/features/autostart/application"
@@ -330,5 +331,45 @@ func nativeConfigurationFixture() *Configuration {
 	return &Configuration{
 		ApplicationID: "raven.tests", WidgetSize: layout.WidgetSize,
 		ReviewWidth: layout.ReviewWidth, ReviewHeight: layout.ReviewHeight,
+	}
+}
+
+type windowSubscriptions struct {
+	kinds   []events.WindowEventType
+	stopped int
+}
+
+func (source *windowSubscriptions) OnWindowEvent(
+	kind events.WindowEventType,
+	_ func(*application.WindowEvent),
+) func() {
+	source.kinds = append(source.kinds, kind)
+	return func() { source.stopped++ }
+}
+
+type applicationSubscriptions struct {
+	kinds   []events.ApplicationEventType
+	stopped int
+}
+
+func (source *applicationSubscriptions) OnApplicationEvent(
+	kind events.ApplicationEventType,
+	_ func(*application.ApplicationEvent),
+) func() {
+	source.kinds = append(source.kinds, kind)
+	return func() { source.stopped++ }
+}
+
+func TestNativeEventPortsReleaseEveryOwnedSubscription(t *testing.T) {
+	state := &Dependencies{}
+	windows, applications := &windowSubscriptions{}, &applicationSubscriptions{}
+	configureWidgetEvents(state, windows)
+	configureLifecycleEvents(state, applications, windows)
+	if len(windows.kinds) != 4 || len(applications.kinds) != 4 || len(state.subscriptions) != 8 {
+		t.Fatal("native subscriptions did not cross the supplied event ports")
+	}
+	Dispose(state)
+	if windows.stopped != 4 || applications.stopped != 4 || state.subscriptions != nil {
+		t.Fatal("disposing native events retained subscriptions")
 	}
 }

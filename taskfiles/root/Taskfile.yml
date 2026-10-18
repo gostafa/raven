@@ -2,8 +2,8 @@
 version: '3.5'
 
 vars:
-  APP_NAME: "raven"
-  BIN_DIR: "bin"
+  APP_NAME: raven
+  BIN_DIR: bin
   PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
   # Target OS for build/package/run. Defaults to the host OS, and is overridden
@@ -17,8 +17,10 @@ includes:
     vars:
       GO_JUNIT_REPORT_IN: '{{.GO_JUNIT_REPORT_IN | default "test-result.txt"}}'
       GO_JUNIT_REPORT_OUT: '{{.GO_JUNIT_REPORT_OUT | default "junit.xml"}}'
-      ESLINT_TARGETS: 'frontend/src frontend/tests frontend/tooling frontend/test.config.mjs scripts eslint.config.mjs'
-      YAMLFIX_EXTRA_ARGS: '{{.YAMLFIX_EXTRA_ARGS | default `--exclude "taskotter/**/*"`}}'
+      ESLINT_TARGETS: frontend/src frontend/tests frontend/tooling frontend/test.config.mjs scripts eslint.config.mjs
+      YAMLFIX_EXTRA_ARGS: |-
+        {{.YAMLFIX_EXTRA_ARGS | default
+        `--exclude "taskotter/**/*"`}} --exclude ".golangci.yml"
     dir: .
   common:
     taskfile: ./taskfiles/common/Taskfile.yml
@@ -43,48 +45,39 @@ tasks:
   build:
     summary: Builds the application
     cmds:
-      - task: "{{.GOOS}}:build"
-
+      - task: '{{.GOOS}}:build'
   package:
     summary: Packages a production build of the application
     cmds:
-      - task: "{{.GOOS}}:package"
-
+      - task: '{{.GOOS}}:package'
   run:
     summary: Runs the application
     cmds:
-      - task: "{{.GOOS}}:run"
-
+      - task: '{{.GOOS}}:run'
   dev:
     summary: Runs the application in development mode
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
-
   install:msix:tools:
     summary: Installs tools required for Windows MSIX packaging
     cmds:
       - task: windows:install:msix:tools
-
   setup:docker:
     summary: Builds Docker image for cross-compilation (~800MB download)
     cmds:
       - task: common:setup:docker
-
   build:server:
     summary: Builds the application in server mode (no GUI, HTTP server only)
     cmds:
       - task: common:build:server
-
   run:server:
     summary: Runs the application in server mode
     cmds:
       - task: common:run:server
-
   build:docker:
     summary: Builds a Docker image for server mode deployment
     cmds:
       - task: common:build:docker
-
   run:docker:
     summary: Builds and runs the Docker image
     cmds:

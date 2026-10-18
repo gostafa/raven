@@ -4,7 +4,13 @@
 package wails
 
 import (
+	"github.com/wailsapp/wails/v3/pkg/application"
+
 	"raven/internal/features/desktop/ports"
 )
 
-var _ ports.Events = (*EventPublisher)(nil)
+var (
+	_ ports.Events           = (*EventPublisher)(nil)
+	_ windowEventSource      = (*application.WebviewWindow)(nil)
+	_ applicationEventSource = (*application.EventManager)(nil)
+)

@@ -11,9 +11,19 @@ import (
 	"net/http"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 type (
+	windowEventSource interface {
+		OnWindowEvent(kind events.WindowEventType, callback func(*application.WindowEvent)) func()
+	}
+	applicationEventSource interface {
+		OnApplicationEvent(
+			kind events.ApplicationEventType,
+			callback func(*application.ApplicationEvent),
+		) func()
+	}
 	// Configuration supplies native geometry and application identity.
 	Configuration struct {
 		// ApplicationID identifies the single native application instance.

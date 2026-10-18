@@ -151,13 +151,93 @@ func encodeFixture(t *testing.T, value any) []byte {
 func decodeCardResponse(t *testing.T, input string) cardapi.Card {
 	t.Helper()
 	var card cardapi.Card
-	if err := json.Unmarshal([]byte(input), &card); err != nil {
+	if err := contentapi.DecodeJSON([]byte(input), &card); err != nil {
 		t.Fatal(err)
 	}
 	if err := cardapi.Normalize(&card); err != nil {
 		t.Fatal(err)
 	}
 	return card
+}
+
+func TestRepositoryPreservesLargeIntegerContentAcrossReopen(t *testing.T) {
+	storage := openTestStore(t)
+	folder, err := storeCreateFolder(storage, &folderapi.CreateInput{Title: "Exact integers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := storeCreateCard(
+		storage,
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Keep counters")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := &contentapi.Items(card.Items)[0]
+	schedule := contentapi.Schedule(item.Schedule)
+	schedule.Reps, schedule.Lapses = math.MaxUint64, 9007199254740993
+	item.Schedule, item.LastNotifiedDue = schedule, int64(math.MaxInt64)
+	history := contentapi.Reviews(item.Reviews)
+	log := contentapi.Log(history[0].Log)
+	log.ScheduledDays = math.MaxUint64
+	history[0].Log = log
+	if err := storage.update(
+		func(transaction *bolt.Tx) error { return putItems(transaction, &card) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeClose(storage); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(storage.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = storeClose(reopened) })
+	repository := &Store{state: reopened}
+	encoded, err := repository.ListCards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []json.RawMessage
+	if err := json.Unmarshal([]byte(encoded), &records); err != nil {
+		t.Fatal(err)
+	}
+	decoded := decodeCardResponse(t, string(records[0]))
+	if !reflect.DeepEqual(contentapi.Items(decoded.Items), contentapi.Items(card.Items)) {
+		t.Fatalf("persisted integer content changed: %#v != %#v", decoded.Items, card.Items)
+	}
+}
+
+func TestRepositoryJSONDecodersPreserveIntegerSchemaAndDocumentBoundaries(t *testing.T) {
+	data := []byte(
+		`{"schedule":{"reps":18446744073709551615},"reviews":[],"last_notified_due":9223372036854775807,"side":"prompt"}`,
+	)
+	item, err := decodeJSON[contentapi.Item](data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := contentapi.NormalizeItem(&item); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := decodeLegacyRecord(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, decoded := range []contentapi.Item{item, legacyContent(legacy.Item)} {
+		if decoded.LastNotifiedDue != math.MaxInt64 ||
+			contentapi.Schedule(decoded.Schedule).Reps != math.MaxUint64 {
+			t.Fatalf("stored JSON changed exact integer state: %#v", decoded)
+		}
+	}
+	for _, invalid := range []string{"", `{} {}`, `{} trailing`} {
+		if _, err := decodeJSON[contentapi.Item]([]byte(invalid)); err == nil {
+			t.Fatalf("accepted a malformed request document: %q", invalid)
+		}
+		if err := decodeRecord([]byte(invalid), new(contentapi.Item)); err == nil {
+			t.Fatalf("accepted a malformed stored document: %q", invalid)
+		}
+	}
 }
 
 func TestJSONRepositoryRejectsMalformedRecordsWithoutWrites(t *testing.T) {

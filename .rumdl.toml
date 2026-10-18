@@ -53,7 +53,7 @@ flavor = "mkdocs"
 style = "atx"  # Heading style (atx, atx_closed, setext)
 
 [MD004]
-style = "asterisk"  # Unordered list style (asterisk, plus, dash, consistent)
+style = "consistent"  # Keep each document consistent while allowing Prettier's dash style.
 
 [MD007]
 indent = 4  # Unordered list indentation

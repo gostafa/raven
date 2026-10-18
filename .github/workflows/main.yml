@@ -24,17 +24,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
       - name: Update repository tooling with TaskOtter
-        uses: $/.github/actions/taskotter
+        uses: ./.github/actions/taskotter
         with:
           github-token: ${{ github.token }}
-
   ci:
     name: CI (${{ matrix.os }})
     needs: taskotter
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write

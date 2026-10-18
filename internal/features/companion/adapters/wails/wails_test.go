@@ -69,27 +69,16 @@ type windowFixture struct {
 func testWindows() (*windowFixture, *testWindow, *testWindow, *testWindow) {
 	main, widget, review := new(testWindow), new(testWindow), new(testWindow)
 	state := &windowState{
-		showMain:          main.Show,
-		hideMain:          main.Hide,
-		restoreMain:       main.Restore,
-		focusMain:         main.Focus,
-		showWidget:        widget.Show,
-		widgetPosition:    widget.Position,
-		setWidgetPosition: widget.SetPosition,
-		getWidgetScreen:   widget.GetScreen,
-		showReview:        review.Show,
-		hideReview:        review.Hide,
-		focusReview:       review.Focus,
-		reviewVisible:     review.IsVisible,
-		dispatchReview:    review.DispatchWailsEvent,
-		setReviewSize:     review.SetSize,
-		setReviewPosition: review.SetPosition,
-		invoke:            func(operation func()) { operation() },
-		primaryScreen:     func() *application.Screen { return nil },
-		quit:              func() {},
-		configure:         func() error { return nil },
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		invoke:        func(operation func()) { operation() },
+		primaryScreen: func() *application.Screen { return nil },
+		quit:          func() {},
+		configure:     func() error { return nil },
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
+	bindMainWindow(state, main)
+	bindWidgetWindow(state, widget)
+	bindReviewSurface(state, review)
+	bindReviewFrame(state, review)
 	bindWindowSettings(state, windowSettingsFixture())
 	return &windowFixture{newWindowOperations(state), state}, main, widget, review
 }

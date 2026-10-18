@@ -1,14 +1,14 @@
-# Raven agent instructions
+# Raven Agent Instructions
 
-## JavaScript and TypeScript tooling
+## JavaScript and TypeScript Tooling
 
 Always use Bun for JavaScript/TypeScript dependency management and package scripts. Use `bun install`, `bun add`, `bun remove`, `bun run`, and `bunx` instead of npm, pnpm, yarn, or npx. Run the existing test script with `bun run test`.
 
-## TaskOtter files
+## TaskOtter Files
 
 Treat `taskotter/**` as read-only generated tooling. Never create, edit, delete, rename, format, regenerate, or update files under it, including through automated commands. Put project-specific tasks in `taskfiles/NAME/Taskfile.yml`, and call TaskOtter tasks without changing their implementation. Keep the root `Taskfile.yml` as a symlink to `taskfiles/root/Taskfile.yml` so existing Task and Wails commands work from the repository root.
 
-## Preserve the colors
+## Preserve the Colors
 
 Keep Raven's monochrome palette and dark sidebar during future design, content, refactoring, or feature work. New components must reuse this palette. Neutral grayscale shades are allowed for borders, dividers, muted text, focus indicators, and interaction states; do not introduce colored accents or themes.
 
@@ -25,7 +25,7 @@ Keep Raven's monochrome palette and dark sidebar during future design, content, 
 - Every outbound adapter must explicitly implement a specific, named port owned by its consumer. Declare Go conformance with compile-time interface assertions in `vars.go`; use `implements`, `satisfies`, or a port-typed factory/function in TypeScript. Keep ports independent of concrete adapters and third-party types. Helpers inside an adapter share its port; Svelte UI adapters use typed props and callbacks as their contracts.
 - Keep Raven's Wails services as the public facade. Put implementation details in `internal/` and expose only the contracts frontend consumers need.
 
-## Backend dependency injection and lifecycle
+## Backend Dependency Injection and Lifecycle
 
 - Use `go.uber.org/fx` at the executable and feature `composition/` boundaries. Each feature composition package exposes a `Module`; the executable assembles one graph. Keep Fx imports, parameter/result objects, and registration in these boundaries.
 - Inject runtime dependencies through constructors and consumer-owned ports. Constructors allocate stable objects; use Fx lifecycle hooks to acquire resources and start workers. Keep construction out of facade methods and avoid mutable service dependency installation or service locators.

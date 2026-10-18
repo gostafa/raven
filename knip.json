@@ -6,8 +6,8 @@
       "project": ["scripts/*.mjs"]
     },
     "frontend": {
-      "entry": ["tests/*.test.mjs"],
-      "project": ["src/**/*.{ts,svelte}", "tooling/**/*.mjs", "tests/*.mjs"]
+      "entry": ["src/features/*/index.ts!", "tests/*.test.mjs"],
+      "project": ["src/**/*.{ts,svelte}!", "tooling/**/*.mjs", "tests/*.mjs"]
     }
   },
   "ignoreBinaries": ["task"]

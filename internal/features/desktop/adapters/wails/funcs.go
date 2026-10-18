@@ -117,9 +117,9 @@ func (desktop *Desktop) Dispose() { desktop.operations["dispose"](context.Backgr
 
 // Configure registers native interaction handlers before running Wails.
 func Configure(desktop *Dependencies) {
-	configureWidgetEvents(desktop)
+	configureWidgetEvents(desktop, desktop.Widget)
 	configureClosingHooks(desktop)
-	configureLifecycleEvents(desktop)
+	configureLifecycleEvents(desktop, desktop.App.Event, desktop.Main)
 	configureMenus(desktop)
 	desktop.OnReview(func() { showReviews(desktop) })
 }
@@ -298,17 +298,17 @@ func reviewWindowOptions(configuration *Configuration) application.WebviewWindow
 	return options
 }
 
-func configureWidgetEvents(desktop *Dependencies) {
+func configureWidgetEvents(desktop *Dependencies, source windowEventSource) {
 	service := desktop
-	track(desktop, service.Widget.OnWindowEvent(
+	track(desktop, source.OnWindowEvent(
 		events.Common.WindowShow,
 		windowHandler(service, widgetShown),
 	))
-	track(desktop, service.Widget.OnWindowEvent(
+	track(desktop, source.OnWindowEvent(
 		events.Common.WindowDidMove,
 		windowHandler(service, widgetMoved),
 	))
-	track(desktop, service.Widget.OnWindowEvent(
+	track(desktop, source.OnWindowEvent(
 		events.Common.WindowDidResize,
 		windowHandler(service, widgetShown),
 	))
@@ -330,32 +330,39 @@ func configureClosingHooks(desktop *Dependencies) {
 	))
 }
 
-func configureLifecycleEvents(desktop *Dependencies) {
-	app := desktop.App
+func configureLifecycleEvents(
+	desktop *Dependencies,
+	applications applicationEventSource,
+	windows windowEventSource,
+) {
 	track(
 		desktop,
-		app.Event.OnApplicationEvent(
+		applications.OnApplicationEvent(
 			events.Common.ApplicationStarted,
 			applicationHandler(desktop, applicationStarted),
 		),
 	)
-	track(desktop, app.Event.OnApplicationEvent(
+	track(desktop, applications.OnApplicationEvent(
 		events.Common.SystemDidWake,
 		applicationHandler(desktop, systemWoke),
 	))
-	track(desktop, app.Event.OnApplicationEvent(
+	track(desktop, applications.OnApplicationEvent(
 		events.Mac.ApplicationShouldHandleReopen,
 		applicationHandler(desktop, reopened),
 	))
-	configureFocusEvents(desktop)
+	configureFocusEvents(desktop, applications, windows)
 }
 
-func configureFocusEvents(desktop *Dependencies) {
-	track(desktop, desktop.App.Event.OnApplicationEvent(
+func configureFocusEvents(
+	desktop *Dependencies,
+	applications applicationEventSource,
+	windows windowEventSource,
+) {
+	track(desktop, applications.OnApplicationEvent(
 		events.Mac.ApplicationDidBecomeActive,
 		applicationHandler(desktop, becameActive),
 	))
-	track(desktop, desktop.Main.OnWindowEvent(
+	track(desktop, windows.OnWindowEvent(
 		events.Common.WindowFocus,
 		windowHandler(desktop, mainFocused),
 	))

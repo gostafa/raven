@@ -4,7 +4,9 @@
 package content
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	reviewapi "raven/api/reviews"
@@ -23,12 +25,29 @@ func Decode[Value any](value any) (Value, error) {
 		return decoded, fmt.Errorf("encode JSON value: %w", err)
 	}
 
-	err = json.Unmarshal(data, &decoded)
+	err = DecodeJSON(data, &decoded)
 	if err != nil {
 		return decoded, fmt.Errorf("decode JSON value: %w", err)
 	}
 
 	return decoded, nil
+}
+
+// DecodeJSON preserves integer values in nested records and rejects trailing JSON.
+func DecodeJSON(data []byte, target any) error {
+	if !json.Valid(data) {
+		return errors.Join(json.Unmarshal(data, target))
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+
+	err := decoder.Decode(target)
+	if err != nil {
+		return fmt.Errorf("decode JSON record: %w", err)
+	}
+
+	return nil
 }
 
 // Items reads the ordered items of an already validated card record.

@@ -23,8 +23,8 @@ func New(deps *Dependencies, settings *Settings) *Windows {
 func newWindowState(deps *Dependencies, settings *Settings) *windowState {
 	var state windowState
 
-	bindMainWindow(&state, deps)
-	bindWidgetWindow(&state, deps)
+	bindMainWindow(&state, deps.Main)
+	bindWidgetWindow(&state, deps.Widget)
 	bindWindowRuntime(&state, deps)
 	bindWindowSettings(&state, settings)
 	bindReview(&state, deps.Review)
@@ -32,14 +32,14 @@ func newWindowState(deps *Dependencies, settings *Settings) *windowState {
 	return &state
 }
 
-func bindMainWindow(state *windowState, deps *Dependencies) {
-	state.showMain, state.hideMain = deps.Main.Show, deps.Main.Hide
-	state.restoreMain, state.focusMain = deps.Main.Restore, deps.Main.Focus
+func bindMainWindow(state *windowState, window mainWindow) {
+	state.showMain, state.hideMain = window.Show, window.Hide
+	state.restoreMain, state.focusMain = window.Restore, window.Focus
 }
 
-func bindWidgetWindow(state *windowState, deps *Dependencies) {
-	state.showWidget, state.widgetPosition = deps.Widget.Show, deps.Widget.Position
-	state.setWidgetPosition, state.getWidgetScreen = deps.Widget.SetPosition, deps.Widget.GetScreen
+func bindWidgetWindow(state *windowState, window widgetSurface) {
+	state.showWidget, state.widgetPosition = window.Show, window.Position
+	state.setWidgetPosition, state.getWidgetScreen = window.SetPosition, window.GetScreen
 }
 
 func bindWindowRuntime(state *windowState, deps *Dependencies) {
@@ -71,10 +71,18 @@ func bindReview(state *windowState, review *application.WebviewWindow) {
 		return
 	}
 
-	state.showReview, state.hideReview = review.Show, review.Hide
-	state.focusReview, state.reviewVisible = review.Focus, review.IsVisible
-	state.dispatchReview = review.DispatchWailsEvent
-	state.setReviewSize, state.setReviewPosition = review.SetSize, review.SetPosition
+	bindReviewSurface(state, review)
+	bindReviewFrame(state, review)
+}
+
+func bindReviewSurface(state *windowState, window reviewSurface) {
+	state.showReview, state.hideReview = window.Show, window.Hide
+	state.focusReview, state.reviewVisible = window.Focus, window.IsVisible
+	state.dispatchReview = window.DispatchWailsEvent
+}
+
+func bindReviewFrame(state *windowState, window reviewFrame) {
+	state.setReviewSize, state.setReviewPosition = window.SetSize, window.SetPosition
 }
 
 // ConfigureWidget applies platform-specific widget behavior.

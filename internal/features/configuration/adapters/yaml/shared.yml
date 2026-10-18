@@ -8,6 +8,7 @@ schedules_changed: raven:schedules-changed
 show_reviews: raven:show-reviews
 open_floating_review: raven:open-floating-review
 close_floating_review: raven:close-floating-review
+
 library:
   text_kind: text
   minimum_rating: 1

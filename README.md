@@ -31,7 +31,7 @@ Ensure your Go bin directory is on `PATH`. The launcher uses project-local Wails
 
 The logo and review card are independent windows in the same process, not separately launched background processes. They remain available when the main window closes, until you explicitly quit Raven.
 
-### Start at login
+### Start at Login
 
 On its first production launch, Raven enables **Start at login** for the current user on macOS, Windows, and Linux. Launch a production build once from its permanent installation location (for example, `/Applications/raven.app` on macOS). macOS may require approval in **System Settings → General → Login Items**. Development/debug builds never register startup or record the first-launch attempt; their startup menu items are disabled.
 
@@ -41,7 +41,7 @@ Registration uses Wails' native per-user startup support: SMAppService for bundl
 
 For native startup verification on each OS, launch the installed production app, confirm both menu checkboxes agree, and log out and back in. Expect one widget, working reminders, and a hidden main window; opening Raven normally should reveal that same instance. Disable startup and repeat the login check, then explicitly re-enable it. On macOS, test the packaged app through a real login as well as the `--autostart` argument: the argument alone does not exercise SMAppService's native Apple event. OS startup controls and permissions can override a registration.
 
-### Local storage
+### Local Storage
 
 The database is stored at `os.UserConfigDir()/raven/raven.db`: `~/Library/Application Support/raven/raven.db` on macOS, `%AppData%\raven\raven.db` on Windows, and `$XDG_CONFIG_HOME/raven/raven.db` (or `~/.config/raven/raven.db`) on Linux. New database directories use permissions `0700` and files use `0600` on Unix. Raven owns one database connection until explicit quit; hiding the window keeps it open. Single-instance handling runs before storage opens: normal second launches open the running Raven window, while automatic second launches leave its visibility unchanged. If another process holds the database lock, opening it still times out after one second. Startup errors include the database path, and an unreadable database is never silently replaced. A separate `settings` bucket records the one-time login startup initialization attempt without changing the schema version.
 

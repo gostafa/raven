@@ -58,9 +58,12 @@ type (
 
 	// Settings supplies content rules, media routes, and log field names.
 	Settings struct {
-		Rules            any
+		// Rules contains the validated content policy record.
+		Rules any
+		// MediaRoutePrefix identifies saved media routes.
 		MediaRoutePrefix string
-		LogErrorKey      string
+		// LogErrorKey names the structured cleanup failure field.
+		LogErrorKey string
 	}
 
 	// Store owns atomic database and media persistence.

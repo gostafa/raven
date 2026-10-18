@@ -11,6 +11,29 @@ import (
 )
 
 type (
+	mainWindow interface {
+		Show() application.Window
+		Hide() application.Window
+		Restore()
+		Focus()
+	}
+	widgetSurface interface {
+		Show() application.Window
+		Position() (int, int)
+		SetPosition(horizontal, vertical int)
+		GetScreen() (*application.Screen, error)
+	}
+	reviewSurface interface {
+		Show() application.Window
+		Hide() application.Window
+		Focus()
+		IsVisible() bool
+		DispatchWailsEvent(event *application.CustomEvent)
+	}
+	reviewFrame interface {
+		SetSize(width, height int) application.Window
+		SetPosition(horizontal, vertical int)
+	}
 	// Dependencies supplies native handles and widget styling.
 	Dependencies struct {
 		// App owns the native application lifetime.

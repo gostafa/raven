@@ -7,12 +7,10 @@ import (
 	_ "embed"
 
 	"raven/internal/features/configuration/domain"
-	"raven/internal/features/configuration/ports"
 )
 
 var (
-	_ ports.Loader[*Settings] = Load
-	_ domain.Settings         = (*Settings)(nil)
+	_ domain.Settings = (*Settings)(nil)
 	//go:embed app.yml
 	appDefaults string
 	//go:embed shared.yml

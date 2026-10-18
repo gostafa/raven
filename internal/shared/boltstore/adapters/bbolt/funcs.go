@@ -1674,13 +1674,16 @@ func storeLookupMedia(storage *persistence,
 
 	for index := range contentapi.Items(card.Items) {
 		item := &contentapi.Items(card.Items)[index]
-		if item.ID == parts[two] &&
-			item.Kind != rulesValue(settingsValue(storage.settings).Rules).TextKind {
+		if mediaItemMatches(settingsValue(storage.settings), item, parts[two]) {
 			return *item, nil
 		}
 	}
 
 	return contentapi.Item{}, errMediaNotFound
+}
+
+func mediaItemMatches(settings *Settings, item *contentapi.Item, identifier string) bool {
+	return item.ID == identifier && item.Kind != rulesValue(settings.Rules).TextKind
 }
 
 // DefaultPath returns the application database path in the user configuration directory.
@@ -2745,14 +2748,9 @@ func cardWriteLoadPrevious(storage *persistence, write *cardWrite, transaction *
 	case "":
 		err = validateDestinationFolder(transaction, write.folderID)
 	default:
-		(*cardRecord(&write.previous)), err = storeLoadCard(
-			storage,
-			transaction,
-			&[two]string{
-				write.folderID,
-				write.cardID,
-			},
-		)
+		identity := &[two]string{write.folderID, write.cardID}
+
+		*cardRecord(&write.previous), err = storeLoadCard(storage, transaction, identity)
 	}
 
 	if err != nil {
@@ -2991,11 +2989,14 @@ func cardWriteRemoveObsoleteMedia(storage *persistence, write *cardWrite) {
 
 	for index := range contentapi.Items(cardRecord(&write.previous).Items) {
 		item := &contentapi.Items(cardRecord(&write.previous).Items)[index]
-		if item.Kind != rulesValue(settingsValue(storage.settings).Rules).TextKind &&
-			!kept[item.ID] {
+		if obsoleteMediaItem(settingsValue(storage.settings), item, kept) {
 			storeRemoveMediaFile(storage, storeMediaPath(storage, item.RelativePath))
 		}
 	}
+}
+
+func obsoleteMediaItem(settings *Settings, item *contentapi.Item, kept map[string]bool) bool {
+	return item.Kind != rulesValue(settings.Rules).TextKind && !kept[item.ID]
 }
 
 // ReviewItem records a user rating for an owned content item.
@@ -3159,7 +3160,7 @@ func cardRatingRateItem(storage *persistence, review *cardRating, item *contenta
 }
 
 func decodeJSON[Value any](data []byte) (value Value, failure error) {
-	failure = json.Unmarshal(data, &value)
+	failure = contentapi.DecodeJSON(data, &value)
 	if failure != nil {
 		return value, fmt.Errorf("decode json value: %w", failure)
 	}
@@ -3188,7 +3189,7 @@ func decodeRecord(data []byte, target any) error {
 		return fmt.Errorf("normalize stored record: %w", err)
 	}
 
-	err = json.Unmarshal(normalized, target)
+	err = contentapi.DecodeJSON(normalized, target)
 	if err != nil {
 		return fmt.Errorf("decode stored record: %w", err)
 	}

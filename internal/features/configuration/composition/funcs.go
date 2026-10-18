@@ -10,12 +10,11 @@ import (
 
 	"raven/internal/features/configuration/adapters/yaml"
 	"raven/internal/features/configuration/application"
-	"raven/internal/features/configuration/ports"
 )
 
-func newLoader() ports.Loader[*yaml.Settings] { return yaml.Load }
+func newLoader() func() (*yaml.Settings, error) { return yaml.Load }
 
-func load(loader ports.Loader[*yaml.Settings]) (settingsResult, error) {
+func load(loader func() (*yaml.Settings, error)) (settingsResult, error) {
 	snapshot, err := application.Load(loader)
 	if err != nil {
 		return settingsResult{}, fmt.Errorf("provide configuration: %w", err)

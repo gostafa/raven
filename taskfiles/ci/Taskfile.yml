@@ -7,19 +7,44 @@ includes:
     internal: true
 
 tasks:
+  install:tooling:
+    desc: Install locked project tooling with Bun
+    cmds:
+      - task: bun:install
+      - task: _install:tooling:unix
+      - task: _install:tooling:windows
+  _install:tooling:unix:
+    internal: true
+    platforms:
+      - linux
+      - darwin
+    cmds:
+      - task: bun:_run:unix
+        vars:
+          ARGS: install --frozen-lockfile --ignore-scripts --no-save
+  _install:tooling:windows:
+    internal: true
+    platforms:
+      - windows
+    cmds:
+      - >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+        "{{.WINGET_LOAD}}; \$ErrorActionPreference = 'Stop';
+        \$bun = if (Get-Command bun -ErrorAction SilentlyContinue) { 'bun' }
+        else { \"\$env:USERPROFILE\.bun\bin\bun.exe\" };
+        & \$bun install --frozen-lockfile --ignore-scripts --no-save;
+        exit \$LASTEXITCODE"
   check:
     desc: Build embedded frontend assets and run TaskOtter CI checks
     cmds:
       - task: prepare
       - task: :taskotter:ci
       - task: :conventions:check
-
   fix:
     desc: Build embedded frontend assets and run TaskOtter CI fixes
     cmds:
       - task: prepare
       - task: :taskotter:ci:fix
-
   prepare:
     desc: Build frontend assets required by Go package loading
     run: once
@@ -27,7 +52,6 @@ tasks:
       - task: bun:install
       - task: _prepare:unix
       - task: _prepare:windows
-
   _prepare:unix:
     internal: true
     platforms:
@@ -40,7 +64,6 @@ tasks:
       - task: bun:_run:unix
         vars:
           ARGS: run --bun --cwd frontend build
-
   _prepare:windows:
     internal: true
     platforms:

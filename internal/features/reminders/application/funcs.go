@@ -75,7 +75,7 @@ func itemSnapshot(
 func DecodeCards(data string) ([]cardapi.Card, error) {
 	var cards []cardapi.Card
 
-	err := json.Unmarshal([]byte(data), &cards)
+	err := contentapi.DecodeJSON([]byte(data), &cards)
 	if err != nil {
 		return nil, fmt.Errorf("decode reminder cards: %w", err)
 	}

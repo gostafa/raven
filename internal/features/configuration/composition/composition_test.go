@@ -9,7 +9,6 @@ import (
 
 	"raven/internal/features/configuration/adapters/yaml"
 	"raven/internal/features/configuration/domain"
-	"raven/internal/features/configuration/ports"
 )
 
 type testLoader struct {
@@ -29,7 +28,7 @@ func TestGraphLoadsOnceAndSharesSnapshot(t *testing.T) {
 	loader := &testLoader{}
 	var first, second domain.Settings
 	graph := fxtest.New(t, Module,
-		fx.Replace(ports.Loader[*yaml.Settings](loader.Load)),
+		fx.Replace(loader.Load),
 		fx.Invoke(func(settings domain.Settings) { first = settings }),
 		fx.Invoke(func(settings domain.Settings) { second = settings }),
 	)

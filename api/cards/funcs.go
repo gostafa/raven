@@ -31,7 +31,7 @@ func Normalize(card *Card) error {
 func setContent(card *Card, items []contentapi.Item) {
 	card.Items = nil
 
-	if len(items) == 0 {
+	if len(items) == zero {
 		return
 	}
 

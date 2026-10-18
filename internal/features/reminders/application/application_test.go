@@ -3,10 +3,12 @@ package application
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
 	cardapi "raven/api/cards"
+	contentapi "raven/api/content"
 	reviewapi "raven/api/reviews"
 )
 
@@ -349,5 +351,22 @@ func TestUnknownWorkerOperationLeavesReadinessUnchanged(t *testing.T) {
 	updateWorker(state, "unknown")
 	if state.enabled || state.stopped || state.wake != nil || state.stop != nil {
 		t.Fatal("unknown operation changed worker state")
+	}
+}
+
+func TestReminderJSONKeepsExactNestedIntegerState(t *testing.T) {
+	cards, err := DecodeCards(
+		`[{"items":[{"last_notified_due":9223372036854775807,"schedule":{"reps":18446744073709551615},"reviews":[]}]}]`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := contentapi.Items(cards[0].Items)[0]
+	if item.LastNotifiedDue != math.MaxInt64 ||
+		contentapi.Schedule(item.Schedule).Reps != math.MaxUint64 {
+		t.Fatalf("reminder decoding changed exact integer state: %#v", item)
+	}
+	if _, err := DecodeCards(`[] {}`); err == nil {
+		t.Fatal("accepted a second JSON document after reminder cards")
 	}
 }

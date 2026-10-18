@@ -4,4 +4,5 @@ layout:
   review_width: 420
   review_height: 520
   review_gap: 12
+
 preferences_storage_key: raven.preferences.v1

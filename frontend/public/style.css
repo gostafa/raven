@@ -17,11 +17,37 @@
   --selected: #ffffff14;
   --focus: #d4d4d4;
 }
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 0; }
-html:has(.widget), body:has(.widget) { background: transparent; overflow: hidden; color-scheme: light; }
-button, a { -webkit-tap-highlight-color: transparent; }
-button { cursor: pointer; font: inherit; }
-button:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-img { user-select: none; -webkit-user-drag: none; }
-::selection { background: #666; color: #fff; }
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 0;
+}
+html:has(.widget),
+body:has(.widget) {
+  background: transparent;
+  overflow: hidden;
+  color-scheme: light;
+}
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+button {
+  cursor: pointer;
+  font: inherit;
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+img {
+  user-select: none;
+  -webkit-user-drag: none;
+}
+::selection {
+  background: #666;
+  color: #fff;
+}
