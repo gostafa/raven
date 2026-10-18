@@ -56,7 +56,7 @@ runs:
     - name: Print test and coverage output
       if: always()
       shell: bash
-      run: |
+      run: |-
         for file in test-result.txt coverage.out; do
           echo "--- ${file} ---"
           if [[ -f "${file}" ]]; then
