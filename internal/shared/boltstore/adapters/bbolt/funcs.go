@@ -1766,13 +1766,9 @@ func storePrepareOpenedDatabase(storage *persistence) error {
 }
 
 func openDatabase(path string) (*bolt.DB, error) {
-	err := os.MkdirAll(filepath.Dir(path), privateDirectoryMode)
+	err := prepareDatabasePath(path)
 	if err != nil {
-		return nil, fmt.Errorf("create database directory: %w", err)
-	}
-	err = validateExistingDatabase(path)
-	if err != nil {
-		return nil, fmt.Errorf("validate existing database: %w", err)
+		return nil, fmt.Errorf("prepare database path: %w", err)
 	}
 
 	var options bolt.Options
@@ -1787,24 +1783,64 @@ func openDatabase(path string) (*bolt.DB, error) {
 	return db, nil
 }
 
-func validateExistingDatabase(path string) error {
-	info, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) || (err == nil && info.Size() == zero) {
-		return nil
-	}
+func prepareDatabasePath(path string) error {
+	err := os.MkdirAll(filepath.Dir(path), privateDirectoryMode)
 	if err != nil {
-		return fmt.Errorf("inspect database file: %w", err)
+		return fmt.Errorf("create database directory: %w", err)
 	}
 
-	database, err := bolt.Open(path, privateFileMode, &bolt.Options{
-		ReadOnly: true,
-		Timeout:  time.Second,
-	})
+	err = validateExistingDatabase(path)
+	if err != nil {
+		return fmt.Errorf("validate existing database: %w", err)
+	}
+
+	return nil
+}
+
+func validateExistingDatabase(path string) error {
+	exists, err := existingDatabaseFile(path)
+	if err != nil {
+		return fmt.Errorf("inspect existing database: %w", err)
+	}
+
+	if !exists {
+		return nil
+	}
+
+	err = validateDatabaseReadOnly(path)
+	if err != nil {
+		return fmt.Errorf("validate database read-only: %w", err)
+	}
+
+	return nil
+}
+
+func existingDatabaseFile(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("inspect database file: %w", err)
+	}
+
+	return info.Size() > zero, nil
+}
+
+func validateDatabaseReadOnly(path string) error {
+	var options bolt.Options
+
+	options.ReadOnly = true
+	options.Timeout = time.Second
+
+	database, err := bolt.Open(path, privateFileMode, &options)
 	if err != nil {
 		return fmt.Errorf("open database read-only: %w", err)
 	}
 
-	if err := database.Close(); err != nil {
+	err = database.Close()
+	if err != nil {
 		return fmt.Errorf("close read-only database: %w", err)
 	}
 
