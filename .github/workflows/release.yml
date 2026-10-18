@@ -77,8 +77,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not determine Wails version' }
           go install "github.com/wailsapp/wails/v3/cmd/wails3@$wails"
           if ($LASTEXITCODE -ne 0) { throw 'Wails installation failed' }
-          choco install innosetup --version=6.4.3 --yes --no-progress --allow-downgrade
+          choco install innosetup --version=6.4.0 --yes --no-progress --allow-downgrade
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+          if (!(Test-Path 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe')) {
+            throw 'Inno Setup compiler was not installed at the expected path'
+          }
       - name: Apply release version
         shell: pwsh
         run: |

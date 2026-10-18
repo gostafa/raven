@@ -152,7 +152,7 @@ bootstrapper; installing the runtime requires internet access when it is missing
 Uninstalling preserves Raven's user data.
 
 To package locally on Windows, install the repository's Go, Bun, Wails, and Task
-versions plus Inno Setup 6.4.3, then run from the repository root:
+versions plus Inno Setup 6.4.0, then run from the repository root:
 
 ```sh
 task windows:create:inno:installer ARCH=amd64 VERSION=0.1.0
