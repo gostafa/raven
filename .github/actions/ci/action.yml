@@ -53,3 +53,15 @@ runs:
         env_vars: RUNNER_OS
         fail_ci_if_error: true
         verbose: true
+    - name: Print test and coverage output
+      if: always()
+      shell: bash
+      run: |
+        for file in test-result.txt coverage.out; do
+          echo "--- ${file} ---"
+          if [[ -f "${file}" ]]; then
+            cat "${file}"
+          else
+            echo "${file} was not generated"
+          fi
+        done
