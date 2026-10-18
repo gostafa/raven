@@ -151,8 +151,12 @@ shortcut, and offers an optional desktop shortcut. It bundles the WebView2
 bootstrapper; installing the runtime requires internet access when it is missing.
 Uninstalling preserves Raven's user data.
 
+Release builds use the Inno Setup 6 compiler preinstalled on GitHub's Windows
+runner, without downloading or downgrading it through Chocolatey. The workflow
+checks that the compiler exists and logs its version before building.
+
 To package locally on Windows, install the repository's Go, Bun, Wails, and Task
-versions plus Inno Setup 6.4.0, then run from the repository root:
+versions plus Inno Setup 6, then run from the repository root:
 
 ```sh
 task windows:create:inno:installer ARCH=amd64 VERSION=0.1.0

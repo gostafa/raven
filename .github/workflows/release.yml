@@ -69,7 +69,7 @@ jobs:
           no-cache: true
       - name: Set up Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
-      - name: Install Wails and Inno Setup
+      - name: Install Wails
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -77,11 +77,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not determine Wails version' }
           go install "github.com/wailsapp/wails/v3/cmd/wails3@$wails"
           if ($LASTEXITCODE -ne 0) { throw 'Wails installation failed' }
-          choco install innosetup --version=6.4.0 --yes --no-progress --allow-downgrade
-          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
-          if (!(Test-Path 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe')) {
-            throw 'Inno Setup compiler was not installed at the expected path'
+      - name: Verify preinstalled Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compiler = 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
+          if (!(Test-Path -LiteralPath $compiler -PathType Leaf)) {
+            throw "The Windows runner is missing the preinstalled Inno Setup compiler: $compiler"
           }
+          Write-Host "Using Inno Setup $((Get-Item -LiteralPath $compiler).VersionInfo.ProductVersion) at $compiler"
       - name: Apply release version
         shell: pwsh
         run: |
