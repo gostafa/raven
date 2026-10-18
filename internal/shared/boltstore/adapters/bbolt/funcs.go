@@ -1735,7 +1735,7 @@ func storeOpenPersistence(storage *persistence) error {
 		return errStoreAlreadyStarted
 	}
 
-	db, err := openDatabase(storage.path)
+	db, err := openDatabase(storage.path, bolt.Open)
 	if err != nil {
 		return fmt.Errorf("open library persistence %q: %w", storage.path, err)
 	}
@@ -1765,7 +1765,10 @@ func storePrepareOpenedDatabase(storage *persistence) error {
 	return nil
 }
 
-func openDatabase(path string) (*bolt.DB, error) {
+func openDatabase(
+	path string,
+	open func(string, os.FileMode, *bolt.Options) (*bolt.DB, error),
+) (*bolt.DB, error) {
 	err := prepareDatabasePath(path)
 	if err != nil {
 		return nil, fmt.Errorf("prepare database path: %w", err)
@@ -1775,7 +1778,7 @@ func openDatabase(path string) (*bolt.DB, error) {
 
 	options.Timeout = time.Second
 
-	db, err := bolt.Open(path, privateFileMode, &options)
+	db, err := open(path, privateFileMode, &options)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -1791,7 +1794,7 @@ func prepareDatabasePath(path string) error {
 
 	err = validateExistingDatabase(path)
 	if err != nil {
-		return fmt.Errorf("validate existing database: %w", err)
+		return fmt.Errorf("database read-only validation: %w", err)
 	}
 
 	return nil
@@ -1807,9 +1810,9 @@ func validateExistingDatabase(path string) error {
 		return nil
 	}
 
-	err = validateDatabaseReadOnly(path)
+	err = validateDatabaseReadOnly(path, openReadOnlyDatabase)
 	if err != nil {
-		return fmt.Errorf("validate database read-only: %w", err)
+		return fmt.Errorf("validate existing database: %w", err)
 	}
 
 	return nil
@@ -1828,23 +1831,39 @@ func existingDatabaseFile(path string) (bool, error) {
 	return info.Size() > zero, nil
 }
 
-func validateDatabaseReadOnly(path string) error {
+func validateDatabaseReadOnly(
+	path string,
+	open func(string, os.FileMode, *bolt.Options) (func() error, error),
+) error {
 	var options bolt.Options
 
 	options.ReadOnly = true
 	options.Timeout = time.Second
 
-	database, err := bolt.Open(path, privateFileMode, &options)
+	closeDatabase, err := open(path, privateFileMode, &options)
 	if err != nil {
-		return fmt.Errorf("open database read-only: %w", err)
+		return fmt.Errorf("validate read-only database: %w", err)
 	}
 
-	err = database.Close()
+	err = closeDatabase()
 	if err != nil {
 		return fmt.Errorf("close read-only database: %w", err)
 	}
 
 	return nil
+}
+
+func openReadOnlyDatabase(
+	path string,
+	mode os.FileMode,
+	options *bolt.Options,
+) (func() error, error) {
+	database, err := bolt.Open(path, mode, options)
+	if err != nil {
+		return nil, fmt.Errorf("open database read-only: %w", err)
+	}
+
+	return database.Close, nil
 }
 
 func newStore(db database, path string, deps *Dependencies) *persistence {

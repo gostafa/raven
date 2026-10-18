@@ -668,7 +668,7 @@ func TestFailedImportsAndCleanupPreserveFilesystemErrors(t *testing.T) {
 	if item.RelativePath != "" || item.MIMEType != "" || item.ByteSize != 0 {
 		t.Fatal("failed media import mutated caller metadata", item)
 	}
-	if _, err := openDatabase(filepath.Join(path, "child", "raven.db")); err == nil {
+	if _, err := openDatabase(filepath.Join(path, "child", "raven.db"), bolt.Open); err == nil {
 		t.Fatal("accepted file as database parent")
 	}
 	temp, err := os.CreateTemp(t.TempDir(), "staging-*")
@@ -2679,6 +2679,51 @@ func TestEmptyDatabaseAndPermissions(t *testing.T) {
 				t.Errorf("permissions for %s: got %o, want %o", name, info.Mode().Perm(), want)
 			}
 		}
+	}
+}
+
+func TestDatabasePathInspectionErrors(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink loops are not consistently available on Windows")
+	}
+
+	path := filepath.Join(t.TempDir(), "raven.db")
+	if err := os.Symlink(path, path); err != nil {
+		t.Skipf("create symlink loop: %v", err)
+	}
+
+	if _, err := existingDatabaseFile(path); err == nil {
+		t.Fatal("expected inspecting a symlink loop to fail")
+	}
+	if err := validateExistingDatabase(
+		path,
+	); err == nil ||
+		!strings.Contains(err.Error(), "inspect existing database") {
+		t.Fatalf("expected wrapped inspection error, got %v", err)
+	}
+}
+
+func TestOpenDatabaseReportsOpenFailure(t *testing.T) {
+	want := errors.New("open failed")
+	path := filepath.Join(t.TempDir(), "raven.db")
+	_, err := openDatabase(path, func(string, os.FileMode, *bolt.Options) (*bolt.DB, error) {
+		return nil, want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("expected wrapped open error, got %v", err)
+	}
+}
+
+func TestReadOnlyDatabaseReportsCloseFailure(t *testing.T) {
+	want := errors.New("close failed")
+	err := validateDatabaseReadOnly(
+		"unused.db",
+		func(string, os.FileMode, *bolt.Options) (func() error, error) {
+			return func() error { return want }, nil
+		},
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("expected wrapped close error, got %v", err)
 	}
 }
 
