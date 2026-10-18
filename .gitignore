@@ -17,3 +17,8 @@ coverage.out
 custom-golangci-lint
 test-result.txt
 junit.xml
+.cache
+.rumdl_cache
+frontend/bun.lock
+bun.lock
+package-lock.json
