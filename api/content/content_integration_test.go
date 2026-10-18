@@ -209,3 +209,34 @@ func TestJSONDecoderRejectsTrailingDocumentsAndMalformedInput(t *testing.T) {
 		t.Fatal("rejected trailing JSON whitespace", err)
 	}
 }
+
+func TestContentHelpersDecodeJSONValues(t *testing.T) {
+	const largeInteger = uint64(9007199254740993)
+	var generic map[string]any
+	if err := content.DecodeJSON([]byte(`{"count":9007199254740993}`), &generic); err != nil {
+		t.Fatal("decoded generic JSON value", err)
+	}
+	if number, ok := generic["count"].(json.Number); !ok || number.String() != "9007199254740993" {
+		t.Fatalf("generic JSON integer lost precision: %#v", generic["count"])
+	}
+
+	schedule := content.Schedule(map[string]any{"reps": largeInteger, "lapses": largeInteger})
+	if schedule.Reps != largeInteger || schedule.Lapses != largeInteger {
+		t.Fatalf("schedule integer changed: %#v", schedule)
+	}
+	log := content.Log(map[string]any{"scheduled_days": largeInteger, "rating": 4})
+	if log.ScheduledDays != largeInteger || log.Rating != 4 {
+		t.Fatalf("review log changed: %#v", log)
+	}
+
+	reviews := []content.Review{{Log: reviewapi.Log{Rating: 4}}}
+	if got := content.Reviews(reviews); !reflect.DeepEqual(got, reviews) {
+		t.Fatalf("validated reviews changed: %#v", got)
+	}
+	if content.Reviews("invalid") != nil {
+		t.Fatal("accepted unvalidated review history")
+	}
+	if content.Items("invalid") != nil {
+		t.Fatal("accepted unvalidated item list")
+	}
+}
