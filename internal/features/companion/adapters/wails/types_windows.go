@@ -8,5 +8,13 @@ import (
 
 type (
 	// Widget configures the native floating window.
-	Widget struct{ window *application.WebviewWindow }
+	Widget struct {
+		window            *application.WebviewWindow
+		setWindowRegion   widgetProcedure
+		setWindowPosition widgetProcedure
+	}
+
+	widgetProcedure interface {
+		Call(...uintptr) (uintptr, uintptr, error)
+	}
 )

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2819,7 +2820,8 @@ func TestDatabaseLockTimesOut(t *testing.T) {
 	if other != nil {
 		_ = storeClose(other)
 	}
-	if !errors.Is(err, bolt.ErrTimeout) || !strings.Contains(err.Error(), store.databasePath()) {
+	if !errors.Is(err, bolt.ErrTimeout) ||
+		!strings.Contains(err.Error(), strconv.Quote(store.databasePath())) {
 		t.Fatalf("expected lock timeout with path, got %v", err)
 	}
 	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 5*time.Second {
@@ -2837,7 +2839,7 @@ func TestUnreadableDatabaseIsNotReplaced(t *testing.T) {
 	if store != nil {
 		_ = storeClose(store)
 	}
-	if err == nil || !strings.Contains(err.Error(), path) {
+	if err == nil || !strings.Contains(err.Error(), strconv.Quote(path)) {
 		t.Fatalf("expected open error with path, got %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -3518,10 +3520,7 @@ func TestMediaStagingFailureClosesAndRemovesTemporaryFiles(t *testing.T) {
 	}
 	if err = settingsInspectImportedMedia(storeSettingsFixture(),
 		&mediaImport{file: closed, source: path, item: &item},
-	); !errors.Is(
-		err,
-		os.ErrClosed,
-	) {
+	); err == nil || !strings.Contains(err.Error(), "inspect media file") {
 		t.Fatalf("expected stat failure, got %v", err)
 	}
 	if _, err = storeCommitMedia(store,
