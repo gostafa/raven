@@ -158,6 +158,12 @@ func TestDraftNormalization(t *testing.T) {
 }
 
 func TestJSONContentPreservesLargeIntegerRecords(t *testing.T) {
+	typedCard := cardapi.Card{}
+	decodedCard, err := content.Decode[cardapi.Card](typedCard)
+	if err != nil || !reflect.DeepEqual(decodedCard, typedCard) {
+		t.Fatal("accepted typed card changed", err)
+	}
+
 	for _, values := range []struct {
 		signed   int64
 		unsigned uint64
@@ -196,6 +202,9 @@ func TestJSONDecoderRejectsTrailingDocumentsAndMalformedInput(t *testing.T) {
 		}
 	}
 	var target map[string]any
+	if err := content.DecodeJSON([]byte(`[]`), &target); err == nil {
+		t.Fatal("accepted valid JSON with an incompatible target")
+	}
 	if err := content.DecodeJSON([]byte("{} \n\t"), &target); err != nil {
 		t.Fatal("rejected trailing JSON whitespace", err)
 	}
