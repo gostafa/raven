@@ -1,0 +1,161 @@
+---
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate stable release tag
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo '::error::Expected a stable vMAJOR.MINOR.PATCH tag.'
+            exit 1
+          fi
+          IFS=. read -r major minor patch <<< "${RELEASE_TAG#v}"
+          for part in "$major" "$minor" "$patch"; do
+            if (( ${#part} > 5 )) || (( 10#$part > 65535 )); then
+              echo '::error::Windows version components must be between 0 and 65535.'
+              exit 1
+            fi
+          done
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+  # ci:
+    # needs: validate
+    # permissions:
+    #   contents: write
+    #   pull-requests: write
+    #   id-token: write
+    # uses: ./.github/workflows/main.yml
+  windows:
+    name: Windows x64 installer
+    needs:
+      - validate
+    #   - ci
+    runs-on: windows-latest
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+        with:
+          bun-version-file: package.json
+          no-cache: true
+      - name: Set up Task
+        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
+      - name: Install Wails and Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wails = go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3
+          if ($LASTEXITCODE -ne 0) { throw 'Could not determine Wails version' }
+          go install "github.com/wailsapp/wails/v3/cmd/wails3@$wails"
+          if ($LASTEXITCODE -ne 0) { throw 'Wails installation failed' }
+          choco install innosetup --version=6.4.3 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+      - name: Apply release version
+        shell: pwsh
+        run: |
+          $path = 'build/windows/info.json'
+          $info = Get-Content $path -Raw | ConvertFrom-Json
+          $info.fixed.file_version = $env:RELEASE_VERSION
+          $info.info.'0000'.ProductVersion = $env:RELEASE_VERSION
+          $info | ConvertTo-Json -Depth 10 | Set-Content $path -Encoding utf8NoBOM
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          task windows:create:inno:installer ARCH=amd64 "VERSION=$env:RELEASE_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows packaging failed' }
+      - name: Verify silent installation and uninstallation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Resolve-Path "bin/raven-$env:RELEASE_VERSION-windows-amd64-setup.exe"
+          $destination = Join-Path $env:RUNNER_TEMP 'RavenInstallTest'
+          $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$destination`"")
+          $process = Start-Process $installer -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Install failed: $($process.ExitCode)" }
+          $exe = Join-Path $destination 'raven.exe'
+          if (!(Test-Path $exe)) { throw 'Installed executable is missing' }
+          $version = (Get-Item $exe).VersionInfo.ProductVersion
+          if ($version -ne $env:RELEASE_VERSION) { throw "Unexpected version: $version" }
+          $uninstaller = Join-Path $destination 'unins000.exe'
+          $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+          $process = Start-Process $uninstaller -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Uninstall failed: $($process.ExitCode)" }
+          if (Test-Path $exe) { throw 'Uninstall left the executable behind' }
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $name = "raven-$env:RELEASE_VERSION-windows-amd64-setup.exe"
+          $hash = (Get-FileHash "bin/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content "bin/$name.sha256" -Encoding ascii
+      - name: Upload installer and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: raven-${{ env.RELEASE_VERSION }}-windows-amd64
+          path: |
+            bin/*-setup.exe
+            bin/*-setup.exe.sha256
+          if-no-files-found: error
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - validate
+      - windows
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download installer and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ARTIFACT_NAME: raven-${{ needs.validate.outputs.version }}-windows-amd64
+        shell: pwsh
+        run: |
+          gh run download $env:RUN_ID --name $env:ARTIFACT_NAME --dir dist
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed' }
+      - name: Publish installer and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: pwsh
+        run: |-
+          $assets = @(Get-ChildItem dist -File | ForEach-Object FullName)
+          gh release view $env:RELEASE_TAG --json tagName
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG @assets --clobber
+          } else {
+            gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes --title "Raven $env:RELEASE_TAG"
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }

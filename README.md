@@ -136,3 +136,30 @@ bun run lint
 bun run unused
 go vet ./...
 ```
+
+## Windows Releases
+
+Push a stable version tag such as `v0.1.0` to run **Release**. It runs the full
+CI matrix before building a Windows x64 Inno Setup installer, checking silent
+installation and uninstallation, and publishing the installer and SHA-256 checksum
+on a GitHub Release with generated release notes. Version components must fit
+Windows metadata (0–65535). Prerelease tags are rejected. Rerunning publication
+replaces assets for the same tag.
+
+The unsigned installer installs Raven for the current user, adds a Start Menu
+shortcut, and offers an optional desktop shortcut. It bundles the WebView2
+bootstrapper; installing the runtime requires internet access when it is missing.
+Uninstalling preserves Raven's user data.
+
+To package locally on Windows, install the repository's Go, Bun, Wails, and Task
+versions plus Inno Setup 6.4.3, then run from the repository root:
+
+```sh
+task windows:create:inno:installer ARCH=amd64 VERSION=0.1.0
+```
+
+The installer is written to `bin/raven-0.1.0-windows-amd64-setup.exe`. Override
+`ISCC` if the compiler is outside `C:/Program Files (x86)/Inno Setup 6/ISCC.exe`.
+For local packaging, use the version already in `build/windows/info.json`; the
+release workflow applies its tag version to executable metadata automatically.
+Existing NSIS and MSIX packaging commands remain available.

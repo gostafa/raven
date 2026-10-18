@@ -54,9 +54,9 @@ tasks:
       - task: generate:syso
         vars:
           ARCH: '{{.ARCH}}'
-      - |-
-        {{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o
-        }}/{{.APP_NAME}}.exe"
+      - >-
+        {{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}}
+        {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}.exe"
       - cmd: powershell Remove-item *.syso
         platforms:
           - windows
@@ -65,11 +65,12 @@ tasks:
           - linux
           - darwin
     vars:
-      BUILD_FLAGS: |-
-        {{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags
-        }}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false
-        else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{
-        end}} -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui"{{end}}
+      PRODUCTION_TAG: '{{if ne .DEV "true"}}production{{end}}'
+      OBFUSCATION_TAG: '{{if eq .OBFUSCATED "true"}}wails_obfuscated{{end}}'
+      BUILD_TAGS: '{{list .PRODUCTION_TAG .OBFUSCATION_TAG .EXTRA_TAGS | compact | join ","}}'
+      BUILD_FLAGS: >-
+        {{if .BUILD_TAGS}}-tags {{.BUILD_TAGS}}{{end}} -buildvcs=false
+        {{if ne .DEV "true"}}-trimpath -ldflags="-w -s -H windowsgui"{{end}}
     env:
       GOOS: windows
       CGO_ENABLED: '{{.CGO_ENABLED | default "0"}}'
@@ -128,6 +129,25 @@ tasks:
         .ARCH}}.syso
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
+  create:inno:installer:
+    summary: Creates a Windows x64 Inno Setup installer
+    deps:
+      - task: build
+        vars:
+          ARCH: amd64
+    preconditions:
+      - sh: '[ "{{.ARCH | default "amd64"}}" = "amd64" ]'
+        msg: Inno Setup packaging currently supports amd64 only
+    cmds:
+      - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/bin"
+      - >-
+        "{{.ISCC}}" /DAppVersion={{.VERSION}}
+        /DBinaryDir="{{.ROOT_DIR}}/bin"
+        /O"{{.ROOT_DIR}}/bin"
+        "{{.ROOT_DIR}}/build/windows/inno/setup.iss"
+    vars:
+      ISCC: '{{.ISCC | default "C:/Program Files (x86)/Inno Setup 6/ISCC.exe"}}'
+      VERSION: '{{.VERSION | default "0.1.0"}}'
   create:nsis:installer:
     summary: Creates an NSIS installer
     dir: build/windows/nsis
