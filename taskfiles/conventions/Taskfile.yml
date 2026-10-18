@@ -6,6 +6,6 @@ tasks:
     desc: Check Raven source conventions and feature behavior
     cmds:
       - go test ./internal/tooling/conventions
-      - npm --prefix frontend run check
-      - npm --prefix frontend test
-      - npm --prefix frontend run build
+      - bun run --cwd frontend check
+      - bun run --cwd frontend test
+      - bun run --cwd frontend build

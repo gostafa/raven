@@ -2,7 +2,7 @@
 
 ## JavaScript and TypeScript Tooling
 
-Always use Bun for JavaScript/TypeScript dependency management and package scripts. Use `bun install`, `bun add`, `bun remove`, `bun run`, and `bunx` instead of npm, pnpm, yarn, or npx. Run the existing test script with `bun run test`.
+Always use Bun for JavaScript/TypeScript dependency management and package scripts. Use Bun's install, add, remove, run, and package execution commands. Run the existing test script with `bun run test`.
 
 ## TaskOtter Files
 

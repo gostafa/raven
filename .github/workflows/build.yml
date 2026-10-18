@@ -27,11 +27,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version-file: .node-version
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          bun-version-file: .bun-version
       - name: Linux native dependencies
         if: runner.os == 'Linux'
         run: |
@@ -40,19 +38,19 @@ jobs:
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29
       - name: Install UI dependencies
-        run: npm ci --prefix frontend
+        run: bun install --cwd frontend --frozen-lockfile
       - name: Generate bindings
         run: wails3 generate bindings -ts -i -clean
       - name: Check UI
-        run: npm run check
+        run: bun run check
       - name: Build desktop application
-        run: npm run build
+        run: bun run build
       - name: Check Go
         run: go vet ./...
       - name: Package macOS application
         if: runner.os == 'macOS'
         run: |
-          npm run package
+          bun run package
           tar -czf bin/Raven-macOS.tar.gz -C bin raven.app
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:

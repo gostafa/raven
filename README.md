@@ -4,14 +4,14 @@ A Wails 3 + Svelte desktop app for remembering what you learn, on macOS, Windows
 
 ## Run
 
-Install Go **1.27.2**, Node **26.12.0** (includes npm **11.20.0**), and the platform prerequisites below. Then, from this folder:
+Install Go **1.27.2**, Bun **1.4.2**, and the platform prerequisites below. Then, from this folder:
 
 ```sh
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29
-npm start
+bun run start
 ```
 
-Ensure your Go bin directory is on `PATH`. The launcher uses project-local Wails and Node installations in `.tools/` when present; these tools are already prepared on this Mac and are excluded from version control. Development installs frontend dependencies and generates the Go bindings automatically.
+Ensure your Go bin directory is on `PATH`. The launcher uses the project-local Wails installation in `.tools/` when present; it is already prepared on this Mac and excluded from version control. Development installs frontend dependencies with Bun and generates the Go bindings automatically.
 
 ## Use
 
@@ -56,8 +56,8 @@ Images support JPEG, PNG, GIF, WebP, and AVIF; audio supports MP3, WAV, M4A, Ogg
 ## Build
 
 ```sh
-npm run build
-npm run package
+bun run build
+bun run package
 ```
 
 Native output is in `bin/`. macOS packaging creates `bin/raven.app`; Windows and Linux have their own packaging tasks in `build/`. Build on each target OS for the simplest setup. A GitHub Actions workflow builds on macOS, Windows, and Ubuntu when this folder is pushed to GitHub.
@@ -67,7 +67,7 @@ macOS builds enable Wails' `private_mac_apis` tag for transparent WKWebView back
 Windows can also be cross-compiled from macOS or Linux without Docker:
 
 ```sh
-npm run build -- GOOS=windows GOARCH=amd64
+bun run build -- GOOS=windows GOARCH=amd64
 ```
 
 Platform prerequisites:
@@ -88,12 +88,12 @@ The widget uses native clipping on macOS and Windows, and transparent GTK stylin
 
 ## Versions
 
-Verified against live registries on **15 October 2026**. Direct dependencies are pinned; root and frontend npm lockfiles and `go.sum` are included.
+Verified against live registries on **15 October 2026**. Direct dependencies are pinned; Bun lockfiles and `go.sum` are included.
 
 | Tool / package       | Version           |
 | -------------------- | ----------------- |
 | Go                   | 1.27.2            |
-| Node / npm           | 26.12.0 / 11.20.0 |
+| Bun                  | 1.4.2             |
 | Wails / JS runtime   | 3.0.0-beta.29     |
 | bbolt                | 1.5.0             |
 | go-fsrs              | 4.0.0             |
@@ -120,7 +120,7 @@ Wails 3 is currently beta. TypeScript 7.0.2 is the latest release, but svelte-ch
 
 Backend dependencies are constructed through one Fx graph using `go.uber.org/fx` v1.24.0. The Wails shell establishes single-instance ownership before its lifecycle bridge starts storage and optional notifications. Reminder reconciliation starts after the native application readiness event. Wails keeps the native event loop on the main goroutine; Fx releases workers, notifications, and persistence in dependency order. Background work uses a runtime context independent of startup deadlines. Notification initialization failures leave the widget and review reconciliation available.
 
-Install development tooling with `npm ci` and UI dependencies with `npm --prefix frontend ci`. After editing Go services, regenerate bindings with the pinned Wails CLI. Build frontend assets once before loading Go packages on a fresh checkout.
+Install development tooling with `bun install` and UI dependencies with `bun install --cwd frontend`. After editing Go services, regenerate bindings with the pinned Wails CLI. Build frontend assets once before loading Go packages on a fresh checkout.
 
 After changes, run the required checks in order:
 
@@ -128,11 +128,11 @@ After changes, run the required checks in order:
 wails3 generate bindings -ts -i -clean
 task taskotter:ci:fix
 task taskotter:ci
-npm --prefix frontend run check
-npm --prefix frontend test
-npm --prefix frontend run build
+bun run --cwd frontend check
+bun run --cwd frontend test
+bun run --cwd frontend build
 go test -race ./...
-npm run lint
-npm run unused
+bun run lint
+bun run unused
 go vet ./...
 ```
