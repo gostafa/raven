@@ -17,7 +17,7 @@ runs:
       shell: bash
       run: YAMLFIX_EXTRA_ARGS='--exclude ".github/workflows/**/*" --exclude "taskotter/**/*"' task ci:fix
     - name: Create fix PR
-      uses: ./.github/actions/auto-fix
+      uses: $/.github/actions/auto-fix
       with:
         token: ${{ inputs.github-token }}
         branch: automation/auto-fix-${{ runner.os }}
