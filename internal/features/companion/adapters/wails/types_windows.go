@@ -2,19 +2,16 @@
 
 package wails
 
-import (
-	"github.com/wailsapp/wails/v3/pkg/application"
-)
-
 type (
 	// Widget configures the native floating window.
-	Widget struct {
-		window            *application.WebviewWindow
-		setWindowRegion   widgetProcedure
-		setWindowPosition widgetProcedure
+	Widget struct{ configure func() error }
+
+	widgetProcedureCall struct {
+		err    error
+		result uintptr
 	}
 
 	widgetProcedure interface {
-		Call(...uintptr) (uintptr, uintptr, error)
+		Call(arguments ...uintptr) (uintptr, uintptr, error)
 	}
 )

@@ -44,12 +44,13 @@ func TestEmbeddedDefaultsPreserveExistingContracts(t *testing.T) {
 }
 
 func TestStrictYAMLAndRequiredValues(t *testing.T) {
+	appDefaultsWithUnixLineEndings := strings.ReplaceAll(appDefaults, "\r\n", "\n")
 	for name, app := range map[string]string{
 		"malformed":  "layout: [",
 		"duplicate":  appDefaults + "\npreferences_storage_key: duplicate\n",
 		"unknown":    appDefaults + "\nunrecognized: value\n",
 		"wrong type": strings.Replace(appDefaults, "widget_size: 48", "widget_size: []", 1),
-		"missing geometry": strings.ReplaceAll(appDefaults,
+		"missing geometry": strings.ReplaceAll(appDefaultsWithUnixLineEndings,
 			"  widget_size: 48\n  review_width: 420\n  review_height: 520\n  review_gap: 12\n", ""),
 		"missing key": strings.Replace(appDefaults, "preferences_storage_key: raven.preferences.v1", "", 1),
 	} {

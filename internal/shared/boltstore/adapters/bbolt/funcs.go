@@ -1770,6 +1770,10 @@ func openDatabase(path string) (*bolt.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
+	err = validateExistingDatabase(path)
+	if err != nil {
+		return nil, fmt.Errorf("validate existing database: %w", err)
+	}
 
 	var options bolt.Options
 
@@ -1781,6 +1785,30 @@ func openDatabase(path string) (*bolt.DB, error) {
 	}
 
 	return db, nil
+}
+
+func validateExistingDatabase(path string) error {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && info.Size() == zero) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect database file: %w", err)
+	}
+
+	database, err := bolt.Open(path, privateFileMode, &bolt.Options{
+		ReadOnly: true,
+		Timeout:  time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("open database read-only: %w", err)
+	}
+
+	if err := database.Close(); err != nil {
+		return fmt.Errorf("close read-only database: %w", err)
+	}
+
+	return nil
 }
 
 func newStore(db database, path string, deps *Dependencies) *persistence {
