@@ -17,9 +17,11 @@ runs:
       shell: bash
       run: |
         if [[ "${RUNNER_OS}" == "Windows" ]]; then
-          YAMLFIX_EXTRA_ARGS='--exclude=node_modules/**/* --exclude=.github/workflows/**/* --exclude=taskotter/**/*' task ci:fix
+          fix_args='--exclude=node_modules/**/* --exclude=.github/workflows/**/* --exclude=taskotter/**/*'
+          YAMLFIX_EXTRA_ARGS="$fix_args" task ci:fix
         else
-          YAMLFIX_EXTRA_ARGS='--exclude "node_modules/**/*" --exclude ".github/workflows/**/*" --exclude "taskotter/**/*"' task ci:fix
+          fix_args='--exclude "node_modules/**/*" --exclude ".github/workflows/**/*" --exclude "taskotter/**/*"'
+          YAMLFIX_EXTRA_ARGS="$fix_args" task ci:fix
         fi
     - name: Create fix PR
       uses: $/.github/actions/auto-fix
