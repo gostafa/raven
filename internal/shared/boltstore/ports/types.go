@@ -31,6 +31,7 @@ type (
 	Folders interface {
 		ListFolders() (string, error)
 		CreateFolder(input string) (string, error)
+		UpdateFolder(input string) (string, error)
 		DeleteFolder(folderID string) error
 	}
 

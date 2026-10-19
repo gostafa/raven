@@ -117,7 +117,7 @@
     padding: 0;
     border: 2px solid white;
     border-radius: 50%;
-    background: #000;
+    background: #dc2626;
     color: #fff;
     font-size: 11px;
     line-height: 1;

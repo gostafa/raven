@@ -135,3 +135,10 @@ export function ToggleFloatingReview(): $CancellablePromise<void> {
 export function UpdateCard(input: string): $CancellablePromise<string> {
     return $Call.ByID(3646724196, input);
 }
+
+/**
+ * UpdateFolder updates a folder's JSON metadata and returns its JSON record.
+ */
+export function UpdateFolder(input: string): $CancellablePromise<string> {
+    return $Call.ByID(2241606470, input);
+}

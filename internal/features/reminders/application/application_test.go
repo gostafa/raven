@@ -37,6 +37,7 @@ type testNotifier struct {
 	allowed                         bool
 	checkErr, sendErr, authorizeErr error
 	sent, requested                 int
+	deliveries                      []int
 }
 
 func (notifier *testNotifier) CheckNotificationAuthorization() (bool, error) {
@@ -44,8 +45,27 @@ func (notifier *testNotifier) CheckNotificationAuthorization() (bool, error) {
 }
 
 func (notifier *testNotifier) Send(count int) error {
+	notifier.deliveries = append(notifier.deliveries, count)
 	notifier.sent += count
 	return notifier.sendErr
+}
+
+func TestDeliveryNotifiesOncePerCard(t *testing.T) {
+	source := new(testSource)
+	notifier := &testNotifier{allowed: true}
+	pending := []reviewapi.DueOccurrence{
+		{FolderID: "folder", CardID: "first", ItemID: "one", Due: 1},
+		{FolderID: "folder", CardID: "second", ItemID: "two", Due: 1},
+		{FolderID: "folder", CardID: "first", ItemID: "three", Due: 1},
+		{FolderID: "other", CardID: "first", ItemID: "four", Due: 1},
+	}
+	if err := Deliver(source, notifier, pending); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.deliveries) != 3 || notifier.deliveries[0] != 2 ||
+		notifier.deliveries[1] != 1 || notifier.deliveries[2] != 1 || source.marked != 3 {
+		t.Fatalf("deliveries=%v acknowledgments=%d", notifier.deliveries, source.marked)
+	}
 }
 
 func (notifier *testNotifier) RequestAuthorization() (bool, error) {

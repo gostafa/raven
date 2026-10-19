@@ -75,11 +75,25 @@
 
 <div class="review-session" class:floating bind:this={root}>
   <header>
-    <span class="eyebrow">A LITTLE PRACTICE</span><button
-      class="close-button"
-      aria-label="Close review"
-      disabled={saving || disabled}
-      onclick={close}>✕</button
+    <span class="review-folder">
+      {#if card}
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+        </svg>
+        <span>{folders.find((folder) => folder.id === card.folderId)?.title ?? 'Folder'}</span>
+      {:else}Review complete{/if}
+    </span><button class="close-button" aria-label="Close review" disabled={saving || disabled} onclick={close}
+      >✕</button
     >
   </header>
   {#if card && entry}
@@ -94,11 +108,9 @@
       <span style={`width: ${(index / entries.length) * 100}%`}></span>
     </div>
     <div class="review-meta">
-      <span>{folders.find((folder) => folder.id === card.folderId)?.title ?? 'Folder'}</span><span
-        >{index + 1} / {entries.length}</span
-      >
+      <span>RECALL</span><span>{index + 1} / {entries.length}</span>
     </div>
-    <div class="review-scroll">
+    <div class="review-content">
       <p class="eyebrow" id="review-title">WHAT YOU WANT TO REMEMBER</p>
       {#key `${card.folderId}/${card.id}/${entry.item.id}`}<CardContent {card} {mediaURL} />{/key}
     </div>
@@ -139,6 +151,8 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    height: 100%;
+    gap: 16px;
   }
   .floating {
     height: 100%;
@@ -148,11 +162,21 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 15px;
     flex-shrink: 0;
   }
-  header .eyebrow {
-    margin: 0;
+  .review-folder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .review-folder svg {
+    flex-shrink: 0;
+  }
+  .review-folder > span {
+    overflow-wrap: anywhere;
   }
   .close-button {
     display: grid;
@@ -162,7 +186,7 @@
     flex-shrink: 0;
     padding: 0;
     border: 0;
-    border-radius: 6px;
+    border-radius: 50%;
     background: transparent;
     color: var(--muted);
   }
@@ -176,14 +200,14 @@
     font-weight: 600;
     letter-spacing: 1.5px;
     line-height: 1.7;
+    color: var(--muted);
   }
   .review-progress {
     flex-shrink: 0;
-    height: 3px;
+    height: 2px;
     width: 100%;
     border-radius: 5px;
     background: var(--line);
-    margin-bottom: 18px;
     overflow: hidden;
   }
   .review-progress span {
@@ -197,7 +221,8 @@
     justify-content: space-between;
     gap: 12px;
     font-size: 10px;
-    margin-bottom: 24px;
+    color: var(--muted);
+    letter-spacing: 1px;
     flex-shrink: 0;
   }
   .review-meta > span:first-child {
@@ -207,35 +232,51 @@
   .review-meta > span:last-child {
     flex-shrink: 0;
   }
-  .review-scroll {
-    min-height: 0;
-    overflow: auto;
-    max-height: calc(100svh - 300px);
-    padding: 3px;
-  }
-  .floating .review-scroll {
+  .review-content {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
     flex: 1;
-    max-height: none;
+    padding: 24px 0;
+    min-height: 180px;
+    overflow-wrap: anywhere;
+  }
+  .review-content :global(.card-content) {
+    width: 100%;
+  }
+  .review-content :global(.content-item > p) {
+    font-size: 18px;
+    line-height: 1.8;
+  }
+  .review-content :global(img),
+  .review-content :global(video) {
+    height: auto;
+    max-height: 360px;
+    object-fit: contain;
   }
   footer {
     flex-shrink: 0;
+    border-top: 1px solid var(--line);
+    padding-top: 20px;
   }
   .review-question {
     text-align: center;
     font-size: 11px;
-    margin: 24px 0 15px;
+    margin: 0 0 16px;
+    color: var(--muted);
   }
   .rating-actions {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
+    gap: 6px;
   }
   .primary-button,
   .secondary-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 11px 10px;
+    min-height: 44px;
+    padding: 11px 6px;
     border: 1px solid var(--line);
     border-radius: 6px;
     font-size: 11px;
@@ -263,6 +304,10 @@
   button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  button:focus-visible {
+    outline: 2px solid var(--muted);
+    outline-offset: 3px;
   }
   .error {
     padding: 10px;

@@ -12,6 +12,10 @@ import (
 )
 
 type (
+
+	// SoundPlayer plays one complete reminder sound.
+	SoundPlayer struct{ play func() error }
+
 	// Notifier translates reminder delivery to native notifications.
 	Notifier struct {
 		operations map[string]func(context.Context, int, func()) notificationResult

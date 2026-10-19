@@ -51,6 +51,9 @@ func libraryOperations(
 				libraryports.Repository.ListCards,
 			)
 		},
+		"UpdateFolder": func(input, _ string) serviceResult[string] {
+			return editLibrary(repository, input, libraryports.Repository.UpdateFolder)
+		},
 		"CreateFolder": func(input, _ string) serviceResult[string] { return createFolder(repository, input) },
 	}
 }
@@ -449,4 +452,11 @@ func configurationSnapshot(settings configuration.Settings) configurationapi.Set
 		OpenFloatingReview:    settings.OpenFloatingReview(),
 		CloseFloatingReview:   settings.CloseFloatingReview(),
 	}
+}
+
+// UpdateFolder updates a folder's JSON metadata and returns its JSON record.
+func (service *RavenService) UpdateFolder(input string) (string, error) {
+	result := service.operations["UpdateFolder"](input, "")
+
+	return result.value, result.failure
 }

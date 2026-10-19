@@ -74,6 +74,29 @@ func TestJSONRepositoryRoundTripAndLifecycle(t *testing.T) {
 	if cards, err := repository.ListCards(); err != nil || !strings.Contains(cards, `"schedule"`) {
 		t.Fatalf("card response: %s %v", cards, err)
 	}
+	updatedFolder, err := repository.UpdateFolder(string(encodeFixture(t, &folderapi.UpdateInput{
+		CreateInput: folderapi.CreateInput{
+			Title:       " Updated library ",
+			Description: " Context ",
+			Tags:        []string{"edited"},
+		},
+		ID: folder.ID,
+	})))
+	if err != nil || !strings.Contains(updatedFolder, `"title":"Updated library"`) {
+		t.Fatalf("update folder: %s %v", updatedFolder, err)
+	}
+	if unchanged, failure := repository.ListCards(); failure != nil ||
+		unchanged != "["+cardJSON+"]" {
+		t.Fatalf("folder edit changed cards: %s %v", unchanged, failure)
+	}
+	if _, failure := repository.UpdateFolder(`{"id":"missing","title":"Valid"}`); failure == nil {
+		t.Fatal("updated a missing folder")
+	}
+	if _, failure := repository.UpdateFolder(
+		string(encodeFixture(t, &folderapi.UpdateInput{ID: folder.ID})),
+	); failure == nil {
+		t.Fatal("accepted an empty folder title")
+	}
 	items := contentapi.Items(card.Items)
 	updatedJSON, err := repository.UpdateCard(string(encodeFixture(t, &cardapi.UpdateInput{
 		FolderID: folder.ID,

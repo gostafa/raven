@@ -3,6 +3,11 @@
 
 package wails
 
+import (
+	"time"
+)
+
 const (
-	zero = 0
+	zero            = 0
+	playbackTimeout = 5 * time.Second
 )

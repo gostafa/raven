@@ -15,6 +15,7 @@ import (
 //
 //nolint:gochecknoglobals // Fx modules are immutable dependency registration declarations.
 var Module = fx.Module("reminders", fx.Provide(
+	fx.Annotate(newSound, fx.As(new(ports.Sound))),
 	fx.Annotate(newNative, fx.As(new(reminderwails.NativeRuntime))),
 	fx.Annotate(newNotifications, fx.As(new(reminders.Notifications)), fx.As(fx.Self())),
 	fx.Annotate(newWorker, fx.As(new(ports.Control))),

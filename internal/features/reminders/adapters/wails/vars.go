@@ -11,6 +11,8 @@ import (
 )
 
 var (
+	_ reminderports.Sound = (*SoundPlayer)(nil)
+
 	_ NativeRuntime           = (*notifications.NotificationService)(nil)
 	_ reminders.Notifications = (*Runtime)(nil)
 	_ reminderports.Notifier  = (*Notifier)(nil)

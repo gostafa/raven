@@ -5,21 +5,33 @@ package wails
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
-	"log/slog"
+	"os"
 	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+
+	"raven/internal/features/reminders/ports"
 )
 
 // NewRuntime constructs an optional notification runtime without starting it.
-func NewRuntime(native NativeRuntime, logger *slog.Logger, logErrorKey string) *Runtime {
+func NewRuntime(
+	native NativeRuntime,
+	sound ports.Sound,
+	warn func(context.Context, error),
+) *Runtime {
 	available := new(atomic.Bool)
-	operations := New(native).operations
+	operations := New(native, sound).operations
 
 	operations["start"] = func(ctx context.Context, _ int, _ func()) notificationResult {
-		startNativeNotifications(ctx, native, notificationWarning(logger, logErrorKey, available))
+		startNativeNotifications(
+			ctx,
+			native,
+			notificationWarning(warn, available),
+		)
 
 		return notificationResult{allowed: available.Load(), failure: nil}
 	}
@@ -29,8 +41,7 @@ func NewRuntime(native NativeRuntime, logger *slog.Logger, logErrorKey string) *
 }
 
 func notificationWarning(
-	logger *slog.Logger,
-	key string,
+	warn func(context.Context, error),
 	available *atomic.Bool,
 ) func(context.Context, error) {
 	return func(ctx context.Context, err error) {
@@ -40,9 +51,7 @@ func notificationWarning(
 			return
 		}
 
-		logger.WarnContext(ctx, "desktop notifications unavailable",
-			//nolint:sloglint // Log field names come from validated embedded configuration.
-			slog.Any(key, err))
+		warn(ctx, err)
 	}
 }
 
@@ -144,12 +153,12 @@ func (runtime *Runtime) Send(count int) error {
 }
 
 // New constructs the adapter with its required runtime dependencies.
-func New(native NativeNotifications) Notifier {
+func New(native NativeNotifications, sound ports.Sound) Notifier {
 	return Notifier{operations: map[string]func(context.Context, int, func()) notificationResult{
 		"check":   func(context.Context, int, func()) notificationResult { return checkAuthorization(native) },
 		"request": func(context.Context, int, func()) notificationResult { return requestAuthorization(native) },
 		"send": func(_ context.Context, count int, _ func()) notificationResult {
-			return notificationResult{allowed: false, failure: sendReminder(native, count)}
+			return notificationResult{allowed: false, failure: sendReminder(native, sound, count)}
 		},
 	}}
 }
@@ -197,8 +206,13 @@ func requestAuthorization(native NativeNotifications) notificationResult {
 	return notificationResult{allowed: allowed, failure: nil}
 }
 
-func sendReminder(native NativeNotifications, count int) error {
-	err := native.SendNotification(reminderOptions(count))
+func sendReminder(native NativeNotifications, sound ports.Sound, count int) error {
+	err := sound.Play()
+	if err != nil {
+		return fmt.Errorf("play reminder sound: %w", err)
+	}
+
+	err = native.SendNotification(reminderOptions(count))
 	if err != nil {
 		return fmt.Errorf("send reminder: %w", err)
 	}
@@ -210,10 +224,18 @@ func reminderOptions(count int) notifications.NotificationOptions {
 	var options notifications.NotificationOptions
 
 	options.Sound = reminderSound()
-	options.ID = "raven-due"
+	options.ID = "raven-due-" + rand.Text()
 	options.Title = "Time to review"
 	options.Body = fmt.Sprintf("%d items are ready to review in Raven.", count)
 	options.ThreadID = "raven-reviews"
 
 	return options
 }
+
+// NewSound constructs a player bound to the cancellable application runtime.
+func NewSound(ctx context.Context) SoundPlayer {
+	return SoundPlayer{play: func() error { return playReminder(ctx, os.Executable) }}
+}
+
+// Play waits for one playback to finish so simultaneous cards do not overlap.
+func (player SoundPlayer) Play() error { return errors.Join(player.play()) }

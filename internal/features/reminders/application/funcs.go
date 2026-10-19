@@ -114,6 +114,42 @@ func deliverAuthorized(
 	notifier ports.Notifier,
 	pending []reviewapi.DueOccurrence,
 ) error {
+	groups := reminderCards(pending)
+	for index := range groups {
+		err := deliverCard(store, notifier, groups[index])
+		if err != nil {
+			return fmt.Errorf("deliver card reminder: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func reminderCards(pending []reviewapi.DueOccurrence) [][]reviewapi.DueOccurrence {
+	groups := [][]reviewapi.DueOccurrence{}
+	indexes := map[string]int{}
+
+	for position := range pending {
+		key := fmt.Sprintf("%q/%q", pending[position].FolderID, pending[position].CardID)
+		index, exists := indexes[key]
+
+		if !exists {
+			indexes[key], index = len(groups), len(groups)
+
+			groups = append(groups, nil)
+		}
+
+		groups[index] = append(groups[index], pending[position])
+	}
+
+	return groups
+}
+
+func deliverCard(
+	store ports.Store,
+	notifier ports.Notifier,
+	pending []reviewapi.DueOccurrence,
+) error {
 	err := notifier.Send(len(pending))
 	if err != nil {
 		return fmt.Errorf("send review reminder: %w", err)

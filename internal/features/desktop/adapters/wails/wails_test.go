@@ -107,8 +107,8 @@ func TestDesktopLifecycleAndNativeRegistrations(t *testing.T) {
 		WakeReminders:              reminders.Wake,
 		OnReview: reminderwails.NewRuntime(
 			notifications.New(),
-			logger,
-			"error",
+			nil,
+			func(context.Context, error) {},
 		).OnReview,
 		ShowReviews: "reviews",
 		LogErrorKey: "error",

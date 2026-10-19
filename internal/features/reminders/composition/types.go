@@ -12,6 +12,7 @@ import (
 	desktopports "raven/internal/features/desktop/ports"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
 	reminders "raven/internal/features/reminders/application"
+	"raven/internal/features/reminders/ports"
 	"raven/internal/shared/lifetime"
 )
 
@@ -22,6 +23,7 @@ type (
 		Lifecycle fx.Lifecycle
 		Source    reminders.Source
 		Native    reminderwails.NativeRuntime
+		Sound     ports.Sound
 		Logger    *slog.Logger
 		Runtime   *lifetime.Runtime
 	}

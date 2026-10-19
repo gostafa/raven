@@ -5,6 +5,10 @@
 package ports
 
 type (
+	// Sound plays one complete reminder sound before returning.
+	Sound interface {
+		Play() error
+	}
 	// Control starts reconciliation on desktop readiness and wakes or stops its worker.
 	Control interface {
 		Start()

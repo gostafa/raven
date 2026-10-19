@@ -94,9 +94,7 @@
       />{/key}
   {:else if status !== 'closed'}
     <header>
-      <span>A LITTLE PRACTICE</span><button aria-label="Close review" disabled={closing} onclick={() => close()}
-        >✕</button
-      >
+      <span>REVIEW</span><button aria-label="Close review" disabled={closing} onclick={() => close()}>✕</button>
     </header>
     <div class="status" role="status">
       {#if status === 'loading'}<p>Loading your reviews…</p>
@@ -115,8 +113,8 @@
     display: flex;
     flex-direction: column;
     height: 100svh;
-    overflow: hidden;
-    padding: 20px;
+    overflow: auto;
+    padding: 24px;
     border: 1px solid var(--line);
     border-radius: 14px;
     background: #000;

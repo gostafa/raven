@@ -25,6 +25,7 @@
     reconcileFolders,
     savePreferences,
     type Workspace,
+    type Folder,
   } from '../../folders';
 
   let { backend }: { backend: AppPorts } = $props();
@@ -67,6 +68,7 @@
   let deleteError = $state('');
   let reviewDialog = $state<HTMLDialogElement>();
   let titleInput = $state<HTMLInputElement>();
+  let editingFolder = $state<Folder | null>(null);
   let title = $state('');
   let description = $state('');
   let tags = $state('');
@@ -221,6 +223,7 @@
   function openFolder(event: MouseEvent) {
     if (status !== 'ready' || saving) return;
     rememberOpener(event);
+    editingFolder = null;
     title = '';
     description = '';
     tags = '';
@@ -228,7 +231,18 @@
     titleInput?.focus();
   }
 
-  async function createFolder(event: SubmitEvent) {
+  function editFolder(opener: HTMLElement, folder: Folder) {
+    if (saving) return;
+    rememberOpener(opener);
+    editingFolder = folder;
+    title = folder.title;
+    description = folder.description;
+    tags = folder.tags.join(', ');
+    folderDialog?.showModal();
+    titleInput?.focus();
+  }
+
+  async function saveFolder(event: SubmitEvent) {
     event.preventDefault();
     if (saving) return;
     if (!title.trim()) {
@@ -239,8 +253,16 @@
     saving = true;
     formError = '';
     try {
-      const folder = await backend.CreateFolder({ title, description, tags: parseTags(tags) });
-      workspace = reconcileFolders({ ...workspace, selectedFolderId: folder.id }, [...workspace.folders, folder]);
+      const input = { title, description, tags: parseTags(tags) };
+      const folder = editingFolder
+        ? await backend.UpdateFolder({ ...input, id: editingFolder.id })
+        : await backend.CreateFolder(input);
+      workspace = reconcileFolders(
+        editingFolder ? workspace : { ...workspace, selectedFolderId: folder.id },
+        editingFolder
+          ? workspace.folders.map((saved) => (saved.id === folder.id ? folder : saved))
+          : [...workspace.folders, folder],
+      );
       search = '';
       persistPreferences();
       folderDialog?.close();
@@ -498,14 +520,6 @@
   </aside>
   <section class="content" aria-label={selectedFolder?.title ?? 'Folders'}>
     <div class="page-container">
-      {#if selectedFolder}<header class="topbar">
-          <div class="breadcrumb">
-            Your space <span>/</span><span class="current-page">{selectedFolder?.title ?? 'Folders'}</span>
-          </div>
-          <div class="topbar-date">
-            {new Date(now).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-          </div>
-        </header>{/if}
       {#if error || preferencesError}<p class="error" role="alert">{error || preferencesError}</p>{/if}
       {#if status === 'loading'}<div class="loading-state" role="status">
           <span class="loading-mark">✳</span>
@@ -563,7 +577,10 @@
                   ><ActionMenu
                     label={`Options for folder ${folder.title}`}
                     disabled={saving}
-                    actions={[{ label: 'Delete folder', onselect: (opener) => confirmDelete(opener, folder.id) }]}
+                    actions={[
+                      { label: 'Edit folder', onselect: (opener) => editFolder(opener, folder) },
+                      { label: 'Delete folder', onselect: (opener) => confirmDelete(opener, folder.id) },
+                    ]}
                   /></span
                 >
               </li>
@@ -597,7 +614,10 @@
               >{#if selectedFolder}{@const folder = selectedFolder}<ActionMenu
                   label={`Options for folder ${folder.title}`}
                   disabled={saving}
-                  actions={[{ label: 'Delete folder', onselect: (opener) => confirmDelete(opener, folder.id) }]}
+                  actions={[
+                    { label: 'Edit folder', onselect: (opener) => editFolder(opener, folder) },
+                    { label: 'Delete folder', onselect: (opener) => confirmDelete(opener, folder.id) },
+                  ]}
                 />{/if}
             </div>
           </section>
@@ -659,7 +679,6 @@
                 >{/if}
             </div>{/if}
         {/if}
-        <footer class="page-footer"><span>✳</span> A little practice today. A little more remembered tomorrow.</footer>
       {/if}
     </div>
   </section>
@@ -673,18 +692,18 @@
     if (saving) event.preventDefault();
   }}
 >
-  <form onsubmit={createFolder} aria-busy={saving} novalidate>
+  <form onsubmit={saveFolder} aria-busy={saving} novalidate>
     <div class="dialog-top">
       <span class="empty-icon">{@render icon('folder', 24)}</span><button
         type="button"
         class="icon-button"
-        aria-label="Close new folder"
+        aria-label={editingFolder ? 'Close edit folder' : 'Close new folder'}
         disabled={saving}
         onclick={() => folderDialog?.close()}>{@render icon('close')}</button
       >
     </div>
-    <p class="eyebrow">MAKE ROOM FOR A CURIOSITY</p>
-    <h2 id="folder-dialog-title">A home for related memories.</h2>
+    <p class="eyebrow">{editingFolder ? 'YOUR COLLECTION' : 'MAKE ROOM FOR A CURIOSITY'}</p>
+    <h2 id="folder-dialog-title">{editingFolder ? 'Edit folder info.' : 'A home for related memories.'}</h2>
     <p class="dialog-description">Keep cards about the same topic together.</p>
     <label for="folder-title">Folder name <span>Required</span></label><input
       id="folder-title"
@@ -714,7 +733,7 @@
       <button type="button" class="secondary-button" disabled={saving} onclick={() => folderDialog?.close()}
         >Cancel</button
       ><button type="submit" class="primary-button" disabled={saving}
-        >{saving ? 'Saving…' : 'Create folder'} {@render icon('arrow', 16)}</button
+        >{saving ? 'Saving…' : editingFolder ? 'Save changes' : 'Create folder'} {@render icon('arrow', 16)}</button
       >
     </div>
   </form>
@@ -1104,36 +1123,6 @@
     min-height: 100%;
     margin: auto;
   }
-  .topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 20px;
-    min-height: 64px;
-    border-bottom: 1px solid var(--line);
-    font-size: 10px;
-  }
-  .breadcrumb {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--ink);
-    min-width: 0;
-  }
-  .breadcrumb > span:first-child {
-    color: var(--ink);
-  }
-  .current-page {
-    color: var(--ink);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .topbar-date {
-    flex-shrink: 0;
-    color: var(--ink);
-    font-size: 10px;
-  }
   .eyebrow {
     margin: 0 0 13px;
     color: var(--ink);
@@ -1423,22 +1412,6 @@
     background: var(--paper);
     color: var(--ink);
   }
-  .page-footer {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    margin-top: auto;
-    padding: 30px 0 22px;
-    color: var(--ink);
-    font-size: 8px;
-    text-align: center;
-    line-height: 1.7;
-  }
-  .page-footer span {
-    font-size: 16px;
-    color: var(--ink);
-  }
   .library-heading {
     display: flex;
     align-items: flex-start;
@@ -1692,8 +1665,11 @@
     flex-shrink: 0;
   }
   .review-dialog {
-    width: min(580px, calc(100vw - 36px));
-    padding: 28px 35px 32px;
+    box-sizing: border-box;
+    width: min(360px, calc((100svh - 36px) / 2), calc(100vw - 36px));
+    height: min(720px, calc(100svh - 36px), calc((100vw - 36px) * 2));
+    aspect-ratio: 1 / 2;
+    padding: 24px;
   }
   @media (min-width: 1250px) {
     .content {
@@ -1745,17 +1721,6 @@
       margin-left: 64px;
       padding: 0 18px;
     }
-    .topbar {
-      min-height: 65px;
-      gap: 10px;
-      font-size: 9px;
-    }
-    .topbar-date {
-      font-size: 8px;
-    }
-    .breadcrumb {
-      gap: 6px;
-    }
     h1 {
       font-size: 34px;
     }
@@ -1767,10 +1732,6 @@
     }
     .text-button {
       font-size: 9px;
-    }
-    .page-footer {
-      font-size: 7px;
-      gap: 6px;
     }
     .library-heading {
       flex-direction: column;

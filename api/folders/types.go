@@ -26,4 +26,9 @@ type (
 		// Tags contains the normalized folder tags.
 		Tags []string `json:"tags"`
 	}
+	// UpdateInput identifies a folder and its replacement metadata.
+	UpdateInput struct {
+		ID string `json:"id"`
+		CreateInput
+	}
 )

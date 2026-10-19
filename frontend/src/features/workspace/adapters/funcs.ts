@@ -31,6 +31,10 @@ export function createRuntime(configuration: RuntimeConfiguration): AppPorts {
       call(async () =>
         folderFromTransport(parseTransport(await RavenService.CreateFolder(JSON.stringify(input))) as TransportFolder),
       ),
+    UpdateFolder: (input) =>
+      call(async () =>
+        folderFromTransport(parseTransport(await RavenService.UpdateFolder(JSON.stringify(input))) as TransportFolder),
+      ),
     DeleteFolder: (id) => call(() => RavenService.DeleteFolder(id)),
     ListCards: () =>
       call(async () =>

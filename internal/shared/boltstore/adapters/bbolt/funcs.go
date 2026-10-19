@@ -3504,3 +3504,38 @@ func settingsLegacyCollector(settings *Settings,
 		return nil
 	}
 }
+
+// UpdateFolder replaces folder metadata while preserving its content.
+func (storage *Store) UpdateFolder(input string) (string, error) {
+	value, err := changeRecord(storage.state, input, storeUpdateFolder)
+
+	return value, errors.Join(err)
+}
+
+func storeUpdateFolder(
+	storage *persistence,
+	input *folderapi.UpdateInput,
+) (folderapi.Folder, error) {
+	folder, err := library.NormalizeFolder(&input.CreateInput)
+	if err != nil {
+		return folderapi.Folder{}, fmt.Errorf("update folder: %w", err)
+	}
+
+	folder.ID = input.ID
+
+	err = storage.update(func(transaction *bolt.Tx) error {
+		failure := validateDestinationFolder(transaction, folder.ID)
+		if failure != nil {
+			return failure
+		}
+
+		bucket := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID))
+
+		return writeFolderMetadata(bucket, &folder)
+	})
+	if err != nil {
+		return folderapi.Folder{}, fmt.Errorf("update folder: %w", err)
+	}
+
+	return folder, nil
+}

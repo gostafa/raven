@@ -3,8 +3,6 @@ package wails
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"strings"
 	"testing"
 
@@ -17,6 +15,36 @@ type fakeRuntime struct {
 	callback func(notifications.NotificationResult)
 	started  context.Context
 	stops    int
+}
+
+type fakeSound struct {
+	plays   int
+	failure error
+}
+
+func (sound *fakeSound) Play() error {
+	sound.plays++
+	return sound.failure
+}
+
+func TestReminderPlaysRavenAudioOncePerDelivery(t *testing.T) {
+	native := &fakeNotifications{}
+	sound := &fakeSound{}
+	notifier := New(native, sound)
+	if err := notifier.Send(3); err != nil {
+		t.Fatal(err)
+	}
+	firstID := native.options.ID
+	if err := notifier.Send(1); err != nil {
+		t.Fatal(err)
+	}
+	if sound.plays != 2 || native.options.ID == firstID {
+		t.Fatal("lost or replaced card sound")
+	}
+	sound.failure = errors.New("audio unavailable")
+	if err := notifier.Send(1); !errors.Is(err, sound.failure) {
+		t.Fatalf("playback failure hidden: %v", err)
+	}
 }
 
 func (native *fakeRuntime) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
@@ -40,7 +68,7 @@ func TestOptionalNotificationLifecycleAndReviewActions(t *testing.T) {
 		if failStart {
 			native.failure = failure
 		}
-		runtime := NewRuntime(native, slog.New(slog.NewTextHandler(io.Discard, nil)), "error")
+		runtime := NewRuntime(native, &fakeSound{}, func(context.Context, error) {})
 		opened := 0
 		runtime.OnReview(func() { opened++ })
 		var response notifications.NotificationResult
@@ -71,7 +99,7 @@ func TestOptionalNotificationLifecycleAndReviewActions(t *testing.T) {
 		}
 	}
 	native := &fakeRuntime{}
-	runtime := NewRuntime(native, slog.Default(), "error")
+	runtime := NewRuntime(native, &fakeSound{}, func(context.Context, error) {})
 	runtime.Start(t.Context())
 	failure := errors.New("shutdown failure")
 	native.failure = failure
@@ -106,14 +134,15 @@ func (native *fakeNotifications) RequestNotificationAuthorization() (bool, error
 
 func TestNotifierTranslatesReminderAndPreservesFailures(t *testing.T) {
 	native := &fakeNotifications{requestAllowed: true}
-	notifier := New(native)
+	notifier := New(native, &fakeSound{})
 	if allowed, err := notifier.CheckNotificationAuthorization(); err != nil || !allowed {
 		t.Fatalf("authorization=%v error=%v", allowed, err)
 	}
 	if err := notifier.Send(7); err != nil {
 		t.Fatal(err)
 	}
-	if native.options.ID != "raven-due" || native.options.ThreadID != "raven-reviews" ||
+	if !strings.HasPrefix(native.options.ID, "raven-due-") ||
+		native.options.ThreadID != "raven-reviews" ||
 		!strings.Contains(native.options.Body, "7 items") {
 		t.Fatalf("lost reminder options: %+v", native.options)
 	}
@@ -136,7 +165,7 @@ func TestNotifierTranslatesReminderAndPreservesFailures(t *testing.T) {
 
 func TestAuthorizationDenialIsReturnedWithoutAnError(t *testing.T) {
 	native := &fakeNotifications{}
-	allowed, err := New(native).RequestAuthorization()
+	allowed, err := New(native, &fakeSound{}).RequestAuthorization()
 	if err != nil || allowed || !native.requested {
 		t.Fatalf(
 			"denied permission: allowed=%v requested=%v error=%v",
@@ -149,7 +178,7 @@ func TestAuthorizationDenialIsReturnedWithoutAnError(t *testing.T) {
 
 func TestRuntimeSharesNotificationCapabilities(t *testing.T) {
 	native := &fakeRuntime{}
-	runtime := NewRuntime(native, slog.New(slog.NewTextHandler(io.Discard, nil)), "error")
+	runtime := NewRuntime(native, &fakeSound{}, func(context.Context, error) {})
 	if allowed, err := runtime.CheckNotificationAuthorization(); err != nil || allowed {
 		t.Fatalf("authorization=%v error=%v", allowed, err)
 	}
@@ -158,5 +187,13 @@ func TestRuntimeSharesNotificationCapabilities(t *testing.T) {
 	}
 	if err := runtime.Send(3); err != nil || !strings.Contains(native.options.Body, "3 items") {
 		t.Fatalf("notification=%+v error=%v", native.options, err)
+	}
+}
+
+func TestPlayerReportsPlaybackResult(t *testing.T) {
+	failure := errors.New("playback failed")
+	player := SoundPlayer{play: func() error { return failure }}
+	if err := player.Play(); !errors.Is(err, failure) {
+		t.Fatal(err)
 	}
 }

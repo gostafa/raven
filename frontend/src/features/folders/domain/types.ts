@@ -18,5 +18,6 @@ export interface PreferencesStorage {
 export interface FolderPort {
   ListFolders(): Promise<Folder[]>;
   CreateFolder(input: { title: string; description: string; tags: string[] }): Promise<Folder>;
+  UpdateFolder(input: { id: string; title: string; description: string; tags: string[] }): Promise<Folder>;
   DeleteFolder(folderId: string): Promise<void>;
 }

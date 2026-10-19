@@ -29,6 +29,7 @@ const hooks = registerHooks({
         },
         async ListFolders() { return transport('ListFolders'); },
         async CreateFolder(input) { return transport('CreateFolder', [input]); },
+        async UpdateFolder(input) { return transport('UpdateFolder', [input]); },
         async ListCards() { return transport('ListCards'); },
         async CreateCard(input) { return transport('CreateCard', [input]); },
         async UpdateCard(input) { return transport('UpdateCard', [input]); },
@@ -52,6 +53,7 @@ test('runtime JSON transport preserves requests, records, nullable lists, and pa
     responses: {
       ListFolders: JSON.stringify([folder]),
       CreateFolder: JSON.stringify(folder),
+      UpdateFolder: JSON.stringify(folder),
       ListCards: JSON.stringify([card]),
       CreateCard: JSON.stringify(card),
       UpdateCard: JSON.stringify(card),
@@ -68,6 +70,12 @@ test('runtime JSON transport preserves requests, records, nullable lists, and pa
   const runtime = createRuntime({ mediaRoutePrefix: '/media/', textKind: 'plain' });
   assert.deepEqual(await runtime.ListFolders(), [folder]);
   assert.deepEqual(await runtime.CreateFolder({ title: 'Ideas', description: '', tags: [] }), folder);
+  const folderEdit = { ...folder, title: 'Updated ideas', description: 'Context', tags: ['edited'] };
+  await runtime.UpdateFolder(folderEdit);
+  assert.deepEqual(
+    JSON.parse(globalThis.ravenRuntime.calls.find((call) => call.name === 'UpdateFolder').args[0]),
+    folderEdit,
+  );
   assert.equal((await runtime.ListCards())[0].folderId, 'folder');
   const input = { folderId: 'folder', items: [{ kind: 'text', text: 'Remember' }] };
   assert.equal((await runtime.CreateCard(input)).id, 'card');

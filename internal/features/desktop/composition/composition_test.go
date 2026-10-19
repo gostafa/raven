@@ -57,8 +57,8 @@ func TestNativeDesktopProvidersAndLifecycle(t *testing.T) {
 		),
 		Notifications: reminderwails.NewRuntime(
 			notifications.New(),
-			logger,
-			settings.LogErrorKey(),
+			nil,
+			func(context.Context, error) {},
 		),
 	}, settings)
 	configureDesktop(desktop)
