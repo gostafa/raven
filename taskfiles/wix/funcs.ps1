@@ -1,6 +1,20 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-PackagingHash {
+    param([string]$Path)
+    # Avoid depending on Get-FileHash module discovery in nested PowerShell hosts.
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    $stream = $null
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        $algorithm.Dispose()
+    }
+}
+
 function Assert-PackagingInput {
     param([string]$Version, [string]$Arch, [string]$Dev)
     if ($Arch -cnotin @('amd64', 'arm64')) { throw 'ARCH must be amd64 or arm64.' }
@@ -125,8 +139,8 @@ function Assert-VerificationProof {
     param([string]$ProofPath, [string]$MsiPath, [string]$PayloadPath, [string]$Version, [string]$Arch)
     $proof = Get-Content -LiteralPath $ProofPath -Raw | ConvertFrom-Json
     if ($proof.Version -cne $Version -or $proof.Arch -cne $Arch -or
-        $proof.MsiHash -cne (Get-FileHash -LiteralPath $MsiPath -Algorithm SHA256).Hash -or
-        $proof.PayloadHash -cne (Get-FileHash -LiteralPath $PayloadPath -Algorithm SHA256).Hash) {
+        $proof.MsiHash -cne (Get-PackagingHash $MsiPath) -or
+        $proof.PayloadHash -cne (Get-PackagingHash $PayloadPath)) {
         throw 'Package or payload changed after verification; run task wix:verify again.'
     }
 }

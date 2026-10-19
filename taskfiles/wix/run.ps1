@@ -59,13 +59,13 @@ try {
             @{
                 Version = $version
                 Arch = $arch
-                MsiHash = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash
-                PayloadHash = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash
+                MsiHash = Get-PackagingHash $msi
+                PayloadHash = Get-PackagingHash $payload
             } | ConvertTo-Json | Set-Content -LiteralPath $proofPath -Encoding ascii
         }
         promote {
             Assert-VerificationProof $proofPath $msi $payload $version $arch
-            $hash = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToLowerInvariant()
+            $hash = (Get-PackagingHash $msi).ToLowerInvariant()
             "$hash  $name" | Set-Content -LiteralPath "$stage/$name.sha256" -Encoding ascii
             Move-Item -LiteralPath $msi -Destination "$root/bin/$name" -Force
             Move-Item -LiteralPath "$stage/$name.sha256" -Destination "$root/bin/$name.sha256" -Force

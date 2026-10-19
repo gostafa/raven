@@ -29,14 +29,18 @@ try {
     $proof = Join-Path $temporary 'verified.json'
     [IO.File]::WriteAllBytes($payload, [byte[]](0, 1, 2, 3))
     [IO.File]::WriteAllBytes($msi, [byte[]](4, 5, 6, 7))
+    if ((Get-PackagingHash $payload) -cne '054EDEC1D0211F624FED0CBCA9D4F9400B0E491C43742AF2C5B0ABEBF0C990D8') {
+        throw 'Unexpected SHA-256 digest.'
+    }
+    Assert-Throws { Get-PackagingHash "$temporary/missing.exe" } 'missing hash input'
     Assert-Throws { Assert-Payload $payload '1.2.3' 'amd64' } 'invalid executable'
     Assert-Throws { Assert-Payload "$temporary/missing.exe" '1.2.3' 'amd64' } 'missing payload'
     Assert-Throws { Assert-VerificationProof $proof $msi $payload '1.2.3' 'amd64' } 'unverified package'
     @{
         Version = '1.2.3'
         Arch = 'amd64'
-        MsiHash = (Get-FileHash $msi -Algorithm SHA256).Hash
-        PayloadHash = (Get-FileHash $payload -Algorithm SHA256).Hash
+        MsiHash = Get-PackagingHash $msi
+        PayloadHash = Get-PackagingHash $payload
     } | ConvertTo-Json | Set-Content -LiteralPath $proof -Encoding ascii
     Assert-VerificationProof $proof $msi $payload '1.2.3' 'amd64'
     Assert-Throws { Assert-VerificationProof $proof $msi $payload '1.2.4' 'amd64' } 'changed version'

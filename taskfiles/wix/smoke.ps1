@@ -85,7 +85,7 @@ function New-WebViewTestTransform {
 if (Test-Path -LiteralPath $application) { throw 'Run MSI tests only on a disposable machine without Raven installed.' }
 Assert-Msi $candidate $Version $Arch
 $checksum = (Get-Content -LiteralPath "$candidate.sha256" -Raw).Trim()
-$hash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+$hash = (Get-PackagingHash $candidate).ToLowerInvariant()
 if ($checksum -cne "$hash  $([IO.Path]::GetFileName($candidate))") { throw 'Candidate checksum mismatch.' }
 New-Item -ItemType Directory -Path (Split-Path $sentinel) -Force | Out-Null
 Set-Content -LiteralPath $sentinel -Value 'preserve Raven data' -Encoding ascii
