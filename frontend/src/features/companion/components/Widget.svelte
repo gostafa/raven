@@ -71,12 +71,16 @@
 
 <style>
   .widget {
-    position: relative;
-    width: min(100vw, 100svh);
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    width: min(100dvw, 100dvh);
+    height: min(100dvw, 100dvh);
     aspect-ratio: 1;
     background: #fff;
     border-radius: 50%;
-    overflow: visible;
+    clip-path: circle(50% at 50% 50%);
+    overflow: hidden;
     cursor: grab;
     user-select: none;
     --wails-draggable: drag;
@@ -95,6 +99,7 @@
     padding: 2px;
     border: 0;
     border-radius: 50%;
+    overflow: hidden;
     background: transparent;
     box-shadow: none;
     cursor: inherit;
@@ -102,8 +107,8 @@
   }
   .widget-due {
     position: absolute;
-    top: 0;
-    right: 0;
+    top: 10%;
+    right: 10%;
     display: grid;
     place-items: center;
     width: 23px;
@@ -132,7 +137,7 @@
     opacity: 0.8;
   }
   .widget-logo:focus-visible {
-    outline-offset: 1px;
+    outline-offset: -3px;
     outline: 2px solid var(--focus);
   }
   .sr-only {
