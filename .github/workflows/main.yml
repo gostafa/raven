@@ -2,11 +2,11 @@
 name: CI
 
 on:
-  # push:
-  #   branches:
-  #     - '**'
+  push:
+    branches:
+      - '**'
   workflow_call: null
-  # workflow_dispatch: null
+  workflow_dispatch: null
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
