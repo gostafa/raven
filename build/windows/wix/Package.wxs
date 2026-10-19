@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Raven" Manufacturer="Raven" Version="$(var.Version)"
+           UpgradeCode="74CE072D-0DA0-40A3-8700-7AE3A65B9769" Scope="perUser"
+           Language="1033" InstallerVersion="500" Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Raven is already installed."
+                  Schedule="afterInstallInitialize" />
+    <Upgrade Id="74CE072D-0DA0-40A3-8700-7AE3A65B9769">
+      <UpgradeVersion Minimum="$(var.Version)" Maximum="$(var.Version)"
+                      IncludeMinimum="yes" IncludeMaximum="yes" OnlyDetect="yes"
+                      Property="RAVEN_SAME_VERSION" />
+    </Upgrade>
+    <Launch Condition="Installed OR NOT RAVEN_SAME_VERSION"
+            Message="This version of Raven is already installed. Use the installed package for repair, or uninstall it before installing a replacement package." />
+    <Property Id="RAVEN_WINDOWS_BUILD">
+      <RegistrySearch Id="WindowsBuild" Root="HKLM" Bitness="always64"
+                      Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion"
+                      Name="CurrentBuildNumber" Type="raw" />
+    </Property>
+    <Launch Condition="REMOVE = &quot;ALL&quot; OR (VersionNT64 AND RAVEN_WINDOWS_BUILD &gt;= 10240)"
+            Message="Raven requires Windows 10 or later." />
+    <Property Id="RAVEN_WEBVIEW_USER">
+      <RegistrySearch Id="WebViewUser" Root="HKCU" Bitness="always32"
+                      Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                      Name="pv" Type="raw" />
+    </Property>
+    <Property Id="RAVEN_WEBVIEW_MACHINE">
+      <RegistrySearch Id="WebViewMachine" Root="HKLM" Bitness="always32"
+                      Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+                      Name="pv" Type="raw" />
+    </Property>
+    <Launch Condition="REMOVE = &quot;ALL&quot; OR (RAVEN_WEBVIEW_USER AND RAVEN_WEBVIEW_USER &lt;&gt; &quot;0.0.0.0&quot;) OR (RAVEN_WEBVIEW_MACHINE AND RAVEN_WEBVIEW_MACHINE &lt;&gt; &quot;0.0.0.0&quot;)"
+            Message="Install the Microsoft Edge WebView2 Evergreen Runtime, then run this MSI again: https://developer.microsoft.com/microsoft-edge/webview2/" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Icon Id="RavenIcon" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="RavenIcon" />
+    <Property Id="LIMITUI" Value="1" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="DisableShutdown" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="UserPrograms" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Raven">
+          <!-- Keep this component GUID stable across versions and architectures. -->
+          <Component Id="RavenApplication" Guid="D5AF25F5-834E-496A-8A48-FA745FB7B49B" Bitness="always64">
+            <File Id="RavenExe" Source="$(var.BinaryPath)" Name="raven.exe" />
+            <RegistryValue Root="HKCU" Key="Software\Raven\Installer" Name="Application"
+                           Type="integer" Value="1" KeyPath="yes" />
+            <Shortcut Id="RavenShortcut" Directory="RavenMenu" Name="Raven"
+                      Target="[#RavenExe]" WorkingDirectory="INSTALLFOLDER"
+                      Icon="RavenIcon" Advertise="no" />
+            <RemoveFolder Id="RemoveRavenMenu" Directory="RavenMenu" On="uninstall" />
+            <RemoveFolder Id="RemoveRavenApplication" On="uninstall" />
+            <RemoveFolder Id="RemoveUserPrograms" Directory="UserPrograms" On="uninstall" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="RavenMenu" Name="Raven" />
+    </StandardDirectory>
+    <Feature Id="Raven" Title="Raven" Level="1">
+      <ComponentRef Id="RavenApplication" />
+    </Feature>
+  </Package>
+</Wix>

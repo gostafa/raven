@@ -1,0 +1,60 @@
+---
+version: '3.5'
+
+env:
+  RAVEN_WIX_VERSION: '{{.VERSION | default ""}}'
+  RAVEN_WIX_ARCH: '{{.ARCH | default "amd64"}}'
+  RAVEN_WIX_DEV: '{{.DEV | default "false"}}'
+
+tasks:
+  validate:
+    desc: Validate Windows MSI packaging inputs before building
+    preconditions: &windows
+      - sh: '{{if eq OS "windows"}}true{{else}}false{{end}}'
+        msg: WiX MSI packaging requires Windows and the .NET 10 SDK
+    cmds:
+      - >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" validate
+  restore:
+    desc: Restore repository-pinned WiX Toolset 5.0.2
+    preconditions: *windows
+    cmds:
+      - >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" restore
+  prepare:
+    internal: true
+    preconditions: *windows
+    cmds:
+      - >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" prepare
+  build:
+    desc: Compile a staged Windows executable into an MSI
+    preconditions: *windows
+    cmds:
+      - >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" build
+  verify:
+    desc: Validate the staged MSI with ICEs and inspect its contracts
+    preconditions: *windows
+    cmds:
+      - >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" verify
+  promote:
+    internal: true
+    preconditions: *windows
+    cmds:
+      - >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" promote
+  test:
+    desc: Test packaging validation and failure handling on Windows
+    preconditions: *windows
+    cmds:
+      - >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
+        -File "{{.ROOT_DIR}}/taskfiles/wix/test.ps1"

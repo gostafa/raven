@@ -4,3 +4,5 @@
 taskotter/**
 frontend/bindings/**
 frontend/dist/**
+# Prettier treats .wxs as JavaScript; WiX authoring is XML.
+build/windows/wix/**/*.wxs

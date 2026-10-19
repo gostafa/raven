@@ -43,7 +43,62 @@ bun run build
 bun run package
 ```
 
-Output is written to `bin/`. Windows installer packaging also requires Inno Setup 6.
+Output is written to `bin/`.
+
+### Windows MSI Packaging
+
+Package on Windows with the **.NET 10 SDK** installed. WiX Toolset **5.0.2** is
+restored from the repository-local tool manifest; no global WiX installation is used.
+From the repository root, build each architecture separately:
+
+```sh
+task windows:package ARCH=amd64 VERSION=0.1.0
+task windows:package ARCH=arm64 VERSION=0.1.0
+```
+
+`task package GOOS=windows ARCH=amd64 VERSION=0.1.0` uses the same flow.
+`VERSION` is required, must be `MAJOR.MINOR.PATCH`, and cannot exceed
+`255.255.65535`. Development builds are rejected. Do not run packaging commands
+concurrently in the same checkout.
+
+Packaging validates inputs, restores pinned tooling, builds a versioned executable
+in an architecture-specific staging directory, compiles the MSI, runs ICE and
+package checks, and promotes only the verified MSI and its SHA-256 checksum to
+`bin/`. Outputs are `raven-VERSION-windows-amd64.msi` and
+`raven-VERSION-windows-arm64.msi`, each with an accompanying `.sha256` file.
+The executable is an internal payload; Windows installers are distributed only as MSI files.
+
+The MSI installs for the current user under `%LocalAppData%\Programs\Raven`
+without administrator rights and adds a Start menu shortcut. Windows 10 or later
+and the [Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+are required. Install the runtime separately before installing or repairing Raven;
+the MSI does not download or install prerequisites. Uninstall remains available
+without WebView2. Quit Raven before installing, upgrading, repairing, or uninstalling.
+
+For example, in PowerShell, these commands install, repair, and uninstall silently
+with verbose logs (replace the filename with your version and architecture):
+
+```powershell
+msiexec /i "raven-0.1.0-windows-amd64.msi" /qn /norestart /L*v install.log
+msiexec /fa "raven-0.1.0-windows-amd64.msi" /qn /norestart /L*v repair.log
+msiexec /x "raven-0.1.0-windows-amd64.msi" /qn /norestart /L*v uninstall.log
+```
+
+Newer versions upgrade the existing per-user installation, including a switch
+from x64 to ARM64 on ARM64 Windows. Downgrades and replacement packages with the
+same version are blocked; use the original MSI for maintenance. Upgrade and
+uninstall preserve `%AppData%\raven`. Releases are unsigned; verify the published
+SHA-256 checksum before installing.
+
+`task wix:test` checks packaging validation and failure handling on Windows.
+The release workflow requires repository checks, MSI validation, and native x64
+and ARM64 installation tests before publishing both MSIs and their checksums.
+The installation tests cover isolated prerequisite searches, repair, upgrades,
+downgrades, replacement blocking, and data preservation. They require disposable
+Windows runners with WebView2 already installed and must not run on a personal machine.
+Run the Release workflow manually with a version to execute its checks without
+publishing; publication runs only for stable version tags. Existing releases are
+not overwritten.
 
 ## Checks
 
