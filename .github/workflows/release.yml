@@ -92,6 +92,8 @@ jobs:
           $path = 'build/windows/info.json'
           $info = Get-Content $path -Raw | ConvertFrom-Json
           $info.fixed.file_version = $env:RELEASE_VERSION
+          $info.fixed.product_version = $env:RELEASE_VERSION
+          $info.info.'0409'.FileVersion = $env:RELEASE_VERSION
           $info.info.'0409'.ProductVersion = $env:RELEASE_VERSION
           $info | ConvertTo-Json -Depth 10 | Set-Content $path -Encoding utf8NoBOM
       - name: Build Windows installer
@@ -110,8 +112,12 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Install failed: $($process.ExitCode)" }
           $exe = Join-Path $destination 'raven.exe'
           if (!(Test-Path $exe)) { throw 'Installed executable is missing' }
-          $version = (Get-Item $exe).VersionInfo.ProductVersion
-          if ($version -ne $env:RELEASE_VERSION) { throw "Unexpected version: $version" }
+          $version = (Get-Item $exe).VersionInfo
+          if ($version.FileVersion -ne $env:RELEASE_VERSION -or $version.ProductVersion -ne $env:RELEASE_VERSION) {
+            $message = "Unexpected version: FileVersion='$($version.FileVersion)', " +
+              "ProductVersion='$($version.ProductVersion)' (expected '$env:RELEASE_VERSION')"
+            throw $message
+          }
           $uninstaller = Join-Path $destination 'unins000.exe'
           $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
           $process = Start-Process $uninstaller -ArgumentList $arguments -Wait -PassThru
