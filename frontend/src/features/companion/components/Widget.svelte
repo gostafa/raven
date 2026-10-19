@@ -74,8 +74,9 @@
     position: fixed;
     inset: 0;
     margin: auto;
-    width: min(100dvw, 100dvh);
-    height: min(100dvw, 100dvh);
+    /* Wails' macOS content view is one point smaller than its webview. */
+    width: calc(min(100dvw, 100dvh) - 2px);
+    height: calc(min(100dvw, 100dvh) - 2px);
     aspect-ratio: 1;
     background: #fff;
     border-radius: 50%;
