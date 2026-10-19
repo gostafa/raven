@@ -57,8 +57,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev dbus
           pkg-config --exists glib-2.0 gobject-2.0 gtk4 webkitgtk-6.0 gio-unix-2.0 libsoup-3.0
+      - name: Start Linux D-Bus session for native tests
+        if: runner.os == 'Linux'
+        run: echo "DBUS_SESSION_BUS_ADDRESS=$(dbus-daemon --session --fork --print-address=1)" >> "$GITHUB_ENV"
       - name: Set up Task
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
       - name: Apply automated fixes and run CI checks

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"testing"
 	"testing/fstest"
@@ -28,9 +27,9 @@ import (
 func TestNativeDesktopProvidersAndLifecycle(t *testing.T) {
 	settings := nativeTestConfiguration{
 		Settings: configurationFixture(),
-		id:       "raven.composition.tests." + rand.Text(),
+		id:       "raven.composition.tests.test_" + rand.Text(),
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.NewTextHandler(t.Output(), nil))
 	requests := autostart.NewRequests()
 	runtime := lifetime.New()
 	t.Cleanup(runtime.Cancel)
