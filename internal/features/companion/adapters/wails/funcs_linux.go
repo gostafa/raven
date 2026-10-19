@@ -20,7 +20,11 @@ import (
 	       const char *css = "#raven-widget { background-color: transparent; "
 	           "background-image: none; border-radius: 0; box-shadow: none; }";
 	   #if GTK_MAJOR_VERSION >= 4
+	   #if GTK_CHECK_VERSION(4, 12, 0)
+	       gtk_css_provider_load_from_string(provider, css);
+	   #else
 	       gtk_css_provider_load_from_data(provider, css, -1);
+	   #endif
 	       gtk_style_context_add_provider_for_display(gtk_widget_get_display(window),
 	           GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
 	   #else

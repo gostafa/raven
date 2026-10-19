@@ -234,7 +234,7 @@ func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 		main.Width != 960 ||
 		main.Height != 680 ||
 		main.MinWidth != 620 ||
-		main.MinHeight != 520 {
+		main.MinHeight != nativeConfigurationFixture().ReviewHeight {
 		t.Fatalf("main window changed: %+v", main)
 	}
 	if main.Mac.Appearance != application.NSAppearanceNameDarkAqua ||

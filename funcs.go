@@ -27,6 +27,7 @@ func newService(deps serviceParams, settings configuration.Settings) *RavenServi
 	operations := libraryOperations(deps.Repository)
 	changed := func() { schedulesChanged(deps, settings) }
 	bindCardOperations(operations, deps.Repository, changed)
+	bindFolderMutations(operations, deps.Repository)
 	bindWindowOperations(operations, deps)
 	bindAuxiliaryOperations(operations, deps, settings)
 
@@ -51,11 +52,17 @@ func libraryOperations(
 				libraryports.Repository.ListCards,
 			)
 		},
-		"UpdateFolder": func(input, _ string) serviceResult[string] {
-			return editLibrary(repository, input, libraryports.Repository.UpdateFolder)
-		},
-		"CreateFolder": func(input, _ string) serviceResult[string] { return createFolder(repository, input) },
 	}
+}
+
+func bindFolderMutations(
+	operations map[string]func(string, string) serviceResult[string],
+	repository libraryports.Repository,
+) {
+	operations["UpdateFolder"] = func(input, _ string) serviceResult[string] {
+		return editLibrary(repository, input, libraryports.Repository.UpdateFolder)
+	}
+	operations["CreateFolder"] = func(input, _ string) serviceResult[string] { return createFolder(repository, input) }
 }
 
 func createFolder(repository libraryports.Repository, input string) serviceResult[string] {

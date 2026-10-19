@@ -75,12 +75,10 @@ func TestJSONRepositoryRoundTripAndLifecycle(t *testing.T) {
 		t.Fatalf("card response: %s %v", cards, err)
 	}
 	updatedFolder, err := repository.UpdateFolder(string(encodeFixture(t, &folderapi.UpdateInput{
-		CreateInput: folderapi.CreateInput{
-			Title:       " Updated library ",
-			Description: " Context ",
-			Tags:        []string{"edited"},
-		},
-		ID: folder.ID,
+		Title:       " Updated library ",
+		Description: " Context ",
+		Tags:        []string{"edited"},
+		ID:          folder.ID,
 	})))
 	if err != nil || !strings.Contains(updatedFolder, `"title":"Updated library"`) {
 		t.Fatalf("update folder: %s %v", updatedFolder, err)
@@ -1195,21 +1193,22 @@ func TestReadOnlyFolderAndCardWritesPreserveTransactionFailures(t *testing.T) {
 			time.Time{},
 		)
 		for name, operation := range map[string]func() error{
-			"migration metadata":    func() error { return schemaMigrationApply(migration, transaction) },
-			"migration root":        func() error { return schemaMigrationMigrateRoot(migration, transaction) },
-			"folder sequence":       func() error { return assignFolderID(root, &folderapi.Folder{}) },
-			"new folder":            func() error { return persistNewFolder(transaction, &folderapi.Folder{Title: "New"}) },
-			"folder metadata":       func() error { return writeFolderMetadata(bucket, &folder) },
-			"folder initialization": func() error { return initializeFolder(bucket, &folder) },
-			"card deletion":         func() error { return deleteOwnedCard(bucket, card.ID) },
-			"card record deletion":  func() error { return storeDeleteCardRecords(store, transaction, &[two]string{folder.ID, card.ID}) },
-			"item replacement":      func() error { _, err := replaceItemBucket(items, card.ID); return err },
-			"item allocation":       func() error { _, err := replaceItemBucket(items, "new"); return err },
-			"card metadata":         func() error { return putCard(metadata, &card) },
-			"card content":          func() error { return putItems(transaction, &card) },
-			"card buckets":          func() error { return writeCardBuckets(metadata, items, &card) },
-			"card records":          func() error { return writeCardRecords(transaction, metadata, &card) },
-			"card allocation":       func() error { _, err := allocateCard(metadata, folder.ID); return err },
+			"migration metadata":     func() error { return schemaMigrationApply(migration, transaction) },
+			"migration root":         func() error { return schemaMigrationMigrateRoot(migration, transaction) },
+			"folder sequence":        func() error { return assignFolderID(root, &folderapi.Folder{}) },
+			"new folder":             func() error { return persistNewFolder(transaction, &folderapi.Folder{Title: "New"}) },
+			"folder metadata":        func() error { return writeFolderMetadata(bucket, &folder) },
+			"folder metadata update": func() error { return updateFolderMetadata(transaction, &folder) },
+			"folder initialization":  func() error { return initializeFolder(bucket, &folder) },
+			"card deletion":          func() error { return deleteOwnedCard(bucket, card.ID) },
+			"card record deletion":   func() error { return storeDeleteCardRecords(store, transaction, &[two]string{folder.ID, card.ID}) },
+			"item replacement":       func() error { _, err := replaceItemBucket(items, card.ID); return err },
+			"item allocation":        func() error { _, err := replaceItemBucket(items, "new"); return err },
+			"card metadata":          func() error { return putCard(metadata, &card) },
+			"card content":           func() error { return putItems(transaction, &card) },
+			"card buckets":           func() error { return writeCardBuckets(metadata, items, &card) },
+			"card records":           func() error { return writeCardRecords(transaction, metadata, &card) },
+			"card allocation":        func() error { _, err := allocateCard(metadata, folder.ID); return err },
 			"migration persistence": func() error {
 				return schemaMigrationPersistCard(migration, &migrationFolder{parent: bucket, items: items}, &card)
 			},
@@ -1224,6 +1223,28 @@ func TestReadOnlyFolderAndCardWritesPreserveTransactionFailures(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFolderUpdatePreservesWriteFailureAndMetadata(t *testing.T) {
+	store := openTestStore(t)
+	folder, err := storeCreateFolder(store, &folderapi.CreateInput{Title: "Original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := store.update
+	store.update = store.view
+	t.Cleanup(func() { store.update = update })
+	_, err = storeUpdateFolder(store, &folderapi.UpdateInput{
+		Title: "Replacement",
+		ID:    folder.ID,
+	})
+	if !errors.Is(err, bolt.ErrTxNotWritable) {
+		t.Fatalf("lost metadata write failure: %v", err)
+	}
+	folders, err := storeListFolders(store)
+	if err != nil || !reflect.DeepEqual(folders, []folderapi.Folder{folder}) {
+		t.Fatalf("failed folder update changed metadata: %+v %v", folders, err)
 	}
 }
 

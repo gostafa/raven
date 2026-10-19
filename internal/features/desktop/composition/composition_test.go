@@ -2,6 +2,7 @@ package composition
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -25,7 +26,10 @@ import (
 )
 
 func TestNativeDesktopProvidersAndLifecycle(t *testing.T) {
-	settings := configurationFixture()
+	settings := nativeTestConfiguration{
+		Settings: configurationFixture(),
+		id:       "raven.composition.tests." + rand.Text(),
+	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	requests := autostart.NewRequests()
 	runtime := lifetime.New()
@@ -65,6 +69,13 @@ func TestNativeDesktopProvidersAndLifecycle(t *testing.T) {
 	lifecycle.RequireStart()
 	lifecycle.RequireStop()
 }
+
+type nativeTestConfiguration struct {
+	configuration.Settings
+	id string
+}
+
+func (settings nativeTestConfiguration) ApplicationID() string { return settings.id }
 
 func TestBridgeLifetimeDeadlinesAndRepeatedShutdown(t *testing.T) {
 	runtime := lifetime.New()

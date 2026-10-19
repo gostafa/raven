@@ -564,3 +564,36 @@ func TestJSONEncodingFailureUsesPublicErrorContract(t *testing.T) {
 		t.Fatalf("invalid transport error: %v", result.failure)
 	}
 }
+
+type folderUpdateRepository struct {
+	ports.Repository
+	input   string
+	failure error
+}
+
+func (repository *folderUpdateRepository) UpdateFolder(input string) (string, error) {
+	repository.input = input
+	return `{"id":"folder","title":"Updated","description":"","tags":[]}`, repository.failure
+}
+
+func TestFacadeUpdatesFolderAndTranslatesErrors(t *testing.T) {
+	repository := &folderUpdateRepository{}
+	service := newService(serviceParams{Repository: repository}, configurationFixture())
+	input := `{"id":"folder","title":"Updated"}`
+	folder, err := decodeFacade[folderapi.Folder](service.UpdateFolder(input))
+	if err != nil || folder.ID != "folder" || folder.Title != "Updated" ||
+		repository.input != input {
+		t.Fatalf("folder update: %+v %v input=%s", folder, err, repository.input)
+	}
+	cause := fmt.Errorf("update failed: %w", bolt.ErrDatabaseNotOpen)
+	repository.failure = cause
+	_, err = service.UpdateFolder(input)
+	var public *ServiceError
+	if !errors.As(err, &public) || public.Message != cause.Error() || errors.Unwrap(err) != nil {
+		t.Fatalf("folder update leaked implementation error: %v", err)
+	}
+	service = newService(serviceParams{}, configurationFixture())
+	if _, err := service.UpdateFolder(input); err == nil {
+		t.Fatal("updated folder without storage")
+	}
+}

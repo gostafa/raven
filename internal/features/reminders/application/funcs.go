@@ -67,12 +67,20 @@ func itemSnapshot(
 		return nil, pollInterval
 	}
 
+	return dueOccurrence(card, item, dueMillis), pollInterval
+}
+
+func dueOccurrence(
+	card *cardapi.Card,
+	item *contentapi.Item,
+	dueMillis int64,
+) *reviewapi.DueOccurrence {
 	return &reviewapi.DueOccurrence{
 		FolderID: card.FolderID,
 		CardID:   card.ID,
 		ItemID:   item.ID,
 		Due:      dueMillis,
-	}, pollInterval
+	}
 }
 
 // DecodeCards validates serialized persisted cards before schedule reconciliation.

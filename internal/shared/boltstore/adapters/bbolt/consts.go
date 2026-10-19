@@ -35,6 +35,7 @@ const (
 	claimAutostartInitializationErrorFormat = "claim autostart initialization: %w"
 	cleanupMediaErrorFormat                 = "cleanup media: %w"
 	createFolderErrorFormat                 = "create folder: %w"
+	updateFolderErrorFormat                 = "update folder: %w"
 	deleteCardErrorFormat                   = "delete card: %w"
 	errorFormat                             = "%w %q"
 	four                                    = 4

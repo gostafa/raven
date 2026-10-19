@@ -3516,26 +3516,40 @@ func storeUpdateFolder(
 	storage *persistence,
 	input *folderapi.UpdateInput,
 ) (folderapi.Folder, error) {
-	folder, err := library.NormalizeFolder(&input.CreateInput)
+	metadata := folderUpdateInput(input)
+
+	folder, err := library.NormalizeFolder(&metadata)
 	if err != nil {
-		return folderapi.Folder{}, fmt.Errorf("update folder: %w", err)
+		return folderapi.Folder{}, fmt.Errorf(updateFolderErrorFormat, err)
 	}
 
 	folder.ID = input.ID
 
-	err = storage.update(func(transaction *bolt.Tx) error {
-		failure := validateDestinationFolder(transaction, folder.ID)
-		if failure != nil {
-			return failure
-		}
-
-		bucket := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID))
-
-		return writeFolderMetadata(bucket, &folder)
-	})
+	err = storage.update(
+		func(transaction *bolt.Tx) error { return updateFolderMetadata(transaction, &folder) },
+	)
 	if err != nil {
-		return folderapi.Folder{}, fmt.Errorf("update folder: %w", err)
+		return folderapi.Folder{}, fmt.Errorf(updateFolderErrorFormat, err)
 	}
 
 	return folder, nil
+}
+
+func updateFolderMetadata(transaction *bolt.Tx, folder *folderapi.Folder) error {
+	err := validateDestinationFolder(transaction, folder.ID)
+	if err != nil {
+		return fmt.Errorf("validate folder update destination: %w", err)
+	}
+
+	bucket := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(folder.ID))
+
+	return errors.Join(writeFolderMetadata(bucket, folder))
+}
+
+func folderUpdateInput(input *folderapi.UpdateInput) folderapi.CreateInput {
+	return folderapi.CreateInput{
+		Title:       input.Title,
+		Description: input.Description,
+		Tags:        input.Tags,
+	}
 }
