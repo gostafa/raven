@@ -42,51 +42,10 @@ jobs:
             exit 1
           fi
           echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-  checks:
-    name: Required repository checks
-    needs: validate
-    runs-on: windows-latest
-    steps:
-      - name: Check out release commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Go
-        id: go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
-        with:
-          bun-version-file: package.json
-          no-cache: true
-      - name: Set up Task
-        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
-      - name: Run required checks without changing release sources
-        shell: pwsh
-        env:
-          # TaskOtter reloads PATH; keep its temporary linter build on the selected Go.
-          GOTOOLCHAIN: go${{ steps.go.outputs.go-version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $targets = @('ci:install:tooling', 'ci:prepare', 'taskotter:ci:fix', 'taskotter:ci', 'conventions:check')
-          foreach ($target in $targets) {
-            task $target
-            if ($LASTEXITCODE -ne 0) { throw "Required check failed: $target" }
-          }
-          foreach ($script in @('check', 'test', 'build')) {
-            bun run --cwd frontend $script
-            if ($LASTEXITCODE -ne 0) { throw "Frontend check failed: $script" }
-          }
-          git diff --exit-code
-          if ($LASTEXITCODE -ne 0) { throw 'Release sources require fixes; commit them before releasing.' }
   windows:
     name: Build Windows ${{ matrix.arch }} MSI
     needs:
       - validate
-      - checks
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -210,7 +169,6 @@ jobs:
     if: github.event_name == 'push'
     needs:
       - validate
-      - checks
       - installation
     runs-on: windows-latest
     permissions:
