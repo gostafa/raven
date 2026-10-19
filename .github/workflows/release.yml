@@ -52,6 +52,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
+        id: go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
         with:
           go-version-file: go.mod
@@ -65,6 +66,9 @@ jobs:
         uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
       - name: Run required checks without changing release sources
         shell: pwsh
+        env:
+          # TaskOtter reloads PATH; keep its temporary linter build on the selected Go.
+          GOTOOLCHAIN: go${{ steps.go.outputs.go-version }}
         run: |
           $ErrorActionPreference = 'Stop'
           $targets = @('ci:install:tooling', 'ci:prepare', 'taskotter:ci:fix', 'taskotter:ci', 'conventions:check')
