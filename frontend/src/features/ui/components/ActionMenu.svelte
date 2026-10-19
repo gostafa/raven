@@ -190,8 +190,7 @@
     background: var(--selected);
   }
   .menu-trigger:focus-visible {
-    outline: 2px solid var(--focus);
-    outline-offset: 2px;
+    outline: none;
   }
   @media (pointer: coarse) {
     .menu-trigger {

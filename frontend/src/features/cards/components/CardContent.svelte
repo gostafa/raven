@@ -176,8 +176,7 @@
     min-height: 32px;
   }
   .compact .content-item:focus-visible {
-    outline: 1px solid var(--focus);
-    outline-offset: -1px;
+    outline: none;
   }
   .review-time {
     position: absolute;

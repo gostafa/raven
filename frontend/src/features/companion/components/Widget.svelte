@@ -138,8 +138,7 @@
     opacity: 0.8;
   }
   .widget-logo:focus-visible {
-    outline-offset: -3px;
-    outline: 2px solid var(--focus);
+    outline: none;
   }
   .sr-only {
     position: absolute;

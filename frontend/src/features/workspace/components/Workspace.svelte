@@ -213,7 +213,7 @@
       : dialogFallback?.isConnected
         ? dialogFallback
         : document.querySelector<HTMLElement>(
-            '.folder-grid button, .memory-grid button, .library-heading .primary-button, .first-folder button',
+            '.folder-grid button, .memory-grid button, .library-heading .primary-button',
           );
     (target ?? sidebarToggle)?.focus();
   }
@@ -498,14 +498,14 @@
   </aside>
   <section class="content" aria-label={selectedFolder?.title ?? 'Folders'}>
     <div class="page-container">
-      <header class="topbar">
-        <div class="breadcrumb">
-          Your space <span>/</span><span class="current-page">{selectedFolder?.title ?? 'Folders'}</span>
-        </div>
-        <div class="topbar-date">
-          {new Date(now).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-        </div>
-      </header>
+      {#if selectedFolder}<header class="topbar">
+          <div class="breadcrumb">
+            Your space <span>/</span><span class="current-page">{selectedFolder?.title ?? 'Folders'}</span>
+          </div>
+          <div class="topbar-date">
+            {new Date(now).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+          </div>
+        </header>{/if}
       {#if error || preferencesError}<p class="error" role="alert">{error || preferencesError}</p>{/if}
       {#if status === 'loading'}<div class="loading-state" role="status">
           <span class="loading-mark">✳</span>
@@ -540,56 +540,41 @@
             </div>
             <button class="primary-button" onclick={openFolder}>{@render icon('plus', 17)} New folder</button>
           </section>
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">KEEP YOUR CURIOSITIES TOGETHER</p>
-              <h2>Your folders <span class="count">{workspace.folders.length}</span></h2>
-            </div>
-            <button class="text-button" onclick={openFolder}>{@render icon('plus', 15)} New folder</button>
-          </div>
-          {#if workspace.folders.length}<ul class="folder-grid" aria-label="Your folders">
-              {#each workspace.folders as folder (folder.id)}
-                <li class="folder-tile">
-                  <button class="folder-card" onclick={() => navigate(folder.id)}>
-                    <h3>{folder.title}</h3>
-                    <p>{folder.description || 'A collection of things worth remembering.'}</p>
-                    <span class="folder-card-bottom">
-                      {#if folder.tags.length}<span class="folder-tags"
-                          >{#each folder.tags as tag (tag)}<span class="folder-tag">{tag}</span>{/each}</span
-                        >{/if}
-                      <span
-                        >{cardsInFolder(folder.id).length}
-                        {cardsInFolder(folder.id).length === 1 ? 'card' : 'cards'}</span
-                      >
-                      {#if cardsInFolder(folder.id).some((card) => card.dueAt <= now)}<span class="due-dot"
-                          >Ready to review</span
-                        >{/if}
-                    </span>
-                  </button>
-                  <span class="tile-actions"
-                    ><ActionMenu
-                      label={`Options for folder ${folder.title}`}
-                      disabled={saving}
-                      actions={[{ label: 'Delete folder', onselect: (opener) => confirmDelete(opener, folder.id) }]}
-                    /></span
-                  >
-                </li>
-              {/each}
-              <li class="new-folder-tile">
-                <button class="new-folder-card" onclick={openFolder}
-                  ><span>{@render icon('plus', 22)}</span><strong>A new curiosity?</strong><span>Give it a folder.</span
-                  ></button
+          <ul class="folder-grid" aria-label="Your folders">
+            {#each workspace.folders as folder (folder.id)}
+              <li class="folder-tile">
+                <button class="folder-card" onclick={() => navigate(folder.id)}>
+                  <h3>{folder.title}</h3>
+                  <p>{folder.description || 'A collection of things worth remembering.'}</p>
+                  <span class="folder-card-bottom">
+                    {#if folder.tags.length}<span class="folder-tags"
+                        >{#each folder.tags as tag (tag)}<span class="folder-tag">{tag}</span>{/each}</span
+                      >{/if}
+                    <span
+                      >{cardsInFolder(folder.id).length}
+                      {cardsInFolder(folder.id).length === 1 ? 'card' : 'cards'}</span
+                    >
+                    {#if cardsInFolder(folder.id).some((card) => card.dueAt <= now)}<span class="due-dot"
+                        >Ready to review</span
+                      >{/if}
+                  </span>
+                </button>
+                <span class="tile-actions"
+                  ><ActionMenu
+                    label={`Options for folder ${folder.title}`}
+                    disabled={saving}
+                    actions={[{ label: 'Delete folder', onselect: (opener) => confirmDelete(opener, folder.id) }]}
+                  /></span
                 >
               </li>
-            </ul>
-          {:else}<div class="first-folder">
-              <div class="empty-icon">{@render icon('folder', 25)}</div>
-              <div>
-                <h3>Start with something you’re curious about.</h3>
-                <p>A language, a book, a big idea. Folders keep related cards together.</p>
-              </div>
-              <button class="text-button" onclick={openFolder}>Create a folder {@render icon('arrow', 16)}</button>
-            </div>{/if}
+            {/each}
+            <li class="new-folder-tile">
+              <button class="new-folder-card" onclick={openFolder}
+                ><span>{@render icon('plus', 22)}</span><strong>A new curiosity?</strong><span>Give it a folder.</span
+                ></button
+              >
+            </li>
+          </ul>
         {:else}
           <section class="library-heading">
             <div>
@@ -921,11 +906,12 @@
     height: 30px;
     border-radius: 7px;
     overflow: hidden;
-    background: white;
+    background: transparent;
   }
   .brand-icon img {
     width: 100%;
     height: 100%;
+    filter: invert(1);
   }
   .brand-dot {
     color: var(--accent);
@@ -948,8 +934,7 @@
     color: var(--muted);
   }
   .sidebar-search:focus-within {
-    outline: 2px solid var(--focus);
-    outline-offset: 2px;
+    outline: none;
   }
   .sidebar-search input {
     width: 100%;
@@ -1212,10 +1197,6 @@
     gap: 16px;
     margin: 0 0 17px;
   }
-  .section-heading .eyebrow {
-    margin-bottom: 6px;
-    font-size: 7px;
-  }
   .section-heading h2 {
     display: flex;
     align-items: center;
@@ -1269,6 +1250,7 @@
     row-gap: 22px;
   }
   .folder-tile,
+  .new-folder-tile,
   .memory-tile {
     position: relative;
   }
@@ -1276,7 +1258,8 @@
   .new-folder-tile {
     padding-top: 15px;
   }
-  .folder-tile::before {
+  .folder-tile::before,
+  .new-folder-tile::before {
     content: '';
     position: absolute;
     top: 0;
@@ -1289,6 +1272,11 @@
     background: var(--paper);
     transition: border-color 0.18s;
   }
+  .new-folder-tile::before {
+    border-style: dashed;
+  }
+  .new-folder-tile:hover::before,
+  .new-folder-tile:focus-within::before,
   .folder-tile:hover::before,
   .folder-tile:focus-within::before {
     border-color: var(--line-strong);
@@ -1313,14 +1301,16 @@
     color: var(--ink);
     text-align: left;
   }
-  .folder-card {
+  .folder-card,
+  .new-folder-card {
     position: relative;
     display: flex;
     flex-direction: column;
     min-height: 190px;
     border-top-left-radius: 0;
   }
-  .folder-card::before {
+  .folder-card::before,
+  .new-folder-card::before {
     content: '';
     position: absolute;
     top: -1px;
@@ -1401,6 +1391,7 @@
     text-align: center;
     color: var(--ink);
   }
+  .new-folder-card:focus-visible,
   .new-folder-card:hover {
     background: var(--paper);
     border-color: var(--line-strong);
@@ -1421,31 +1412,6 @@
   }
   .new-folder-card > span:last-child {
     font-size: 9px;
-  }
-  .first-folder {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 21px;
-    border: 1px dashed var(--line);
-    border-radius: 9px;
-  }
-  .first-folder h3 {
-    font:
-      16px/1.4 Georgia,
-      serif;
-    margin: 0 0 5px;
-    color: var(--ink);
-  }
-  .first-folder p {
-    margin: 0;
-    font-size: 10px;
-    color: var(--ink);
-    line-height: 1.7;
-  }
-  .first-folder .text-button {
-    flex-shrink: 0;
-    margin-left: auto;
   }
   .empty-icon {
     display: inline-grid;
@@ -1698,8 +1664,7 @@
   }
   input:focus-visible,
   textarea:focus-visible {
-    outline: 2px solid var(--focus);
-    outline-offset: 2px;
+    outline: none;
   }
   [aria-invalid='true'] {
     border-color: #a3a3a3;
@@ -1750,16 +1715,6 @@
     h1 {
       font-size: 36px;
     }
-    .first-folder {
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-    .first-folder > div:nth-child(2) {
-      flex: 1;
-    }
-    .first-folder .text-button {
-      margin-left: 55px;
-    }
   }
   @media (max-width: 600px) {
     aside {
@@ -1807,27 +1762,11 @@
     .section-heading {
       gap: 8px;
     }
-    .section-heading .eyebrow {
-      font-size: 6px;
-      letter-spacing: 0.8px;
-    }
     .section-heading h2 {
       font-size: 14px;
     }
     .text-button {
       font-size: 9px;
-    }
-    .first-folder {
-      padding: 17px;
-    }
-    .first-folder h3 {
-      font-size: 15px;
-    }
-    .first-folder p {
-      font-size: 9px;
-    }
-    .first-folder .text-button {
-      margin-left: 0;
     }
     .page-footer {
       font-size: 7px;

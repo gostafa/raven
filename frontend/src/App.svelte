@@ -9,3 +9,9 @@
 {#if view === 'widget'}<Widget {backend} />{:else if view === 'review'}<FloatingReview {backend} />{:else}<Workspace
     {backend}
   />{/if}
+
+<style>
+  :global(*) {
+    outline: none;
+  }
+</style>
