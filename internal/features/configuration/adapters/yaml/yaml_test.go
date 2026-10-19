@@ -29,7 +29,7 @@ func TestEmbeddedDefaultsPreserveExistingContracts(t *testing.T) {
 		Layout: companion.Layout{
 			WidgetSize:   48,
 			ReviewWidth:  360,
-			ReviewHeight: 720,
+			ReviewHeight: 612,
 			ReviewGap:    12,
 		},
 		Library: library.Rules{
@@ -51,7 +51,7 @@ func TestStrictYAMLAndRequiredValues(t *testing.T) {
 		"unknown":    appDefaults + "\nunrecognized: value\n",
 		"wrong type": strings.Replace(appDefaults, "widget_size: 48", "widget_size: []", 1),
 		"missing geometry": strings.ReplaceAll(appDefaultsWithUnixLineEndings,
-			"  widget_size: 48\n  review_width: 360\n  review_height: 720\n  review_gap: 12\n", ""),
+			"  widget_size: 48\n  review_width: 360\n  review_height: 612\n  review_gap: 12\n", ""),
 		"missing key": strings.Replace(appDefaults, "preferences_storage_key: raven.preferences.v1", "", 1),
 	} {
 		t.Run(name, func(t *testing.T) {

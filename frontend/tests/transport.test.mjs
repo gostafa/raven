@@ -42,6 +42,7 @@ test('snake_case card transport preserves frontend review and media contracts', 
           folder_id: 'folder',
           card_id: 'card',
           kind: 'image',
+          hint: true,
           position: 0,
           original_name: 'image.png',
           relative_path: 'media/item.png',
@@ -86,11 +87,13 @@ test('snake_case card transport preserves frontend review and media contracts', 
     },
   ]);
   assert.equal(result.items[0].relativePath, 'media/item.png');
+  assert.equal(result.items[0].hint, true);
   assert.equal(result.items[0].lastNotifiedDue, 20);
   assert.equal('folder_id' in result, false);
 });
 
 test('drafts and file selections translate across the transport boundary', () => {
+  assert.equal(draftToTransport({ kind: 'text', text: 'A clue', hint: true }, 'text').hint, true);
   assert.deepEqual(draftToTransport({ id: 'item', kind: 'text', text: 'Remember', sourcePath: undefined }, 'text'), {
     id: 'item',
     kind: 'text',

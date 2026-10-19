@@ -21,3 +21,10 @@ export interface FolderPort {
   UpdateFolder(input: { id: string; title: string; description: string; tags: string[] }): Promise<Folder>;
   DeleteFolder(folderId: string): Promise<void>;
 }
+
+export type FolderSort =
+  'default' | 'tags-desc' | 'tags-asc' | 'cards-desc' | 'cards-asc' | 'review-asc' | 'review-desc';
+export interface FolderMetrics {
+  cardCount: number;
+  nextReview: number | null;
+}

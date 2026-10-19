@@ -2,7 +2,7 @@
 layout:
   widget_size: 48
   review_width: 360
-  review_height: 720
+  review_height: 612
   review_gap: 12
 
 preferences_storage_key: raven.preferences.v1

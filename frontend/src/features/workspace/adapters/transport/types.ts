@@ -25,6 +25,7 @@ export interface TransportCard {
 }
 
 export interface TransportItem {
+  hint?: boolean;
   id: string;
   folder_id: string;
   card_id: string;
@@ -64,6 +65,7 @@ export interface TransportReview {
 }
 
 export interface TransportDraft {
+  hint?: boolean;
   id?: string;
   kind: string;
   text?: string;

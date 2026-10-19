@@ -25,6 +25,7 @@ interface ItemReview {
   automatic: boolean;
 }
 export interface ContentItem {
+  hint?: boolean;
   schedule: Schedule;
   reviews: ItemReview[];
   lastNotifiedDue: number;
@@ -48,6 +49,7 @@ export interface Card {
   items: ContentItem[];
 }
 export interface ItemDraft {
+  hint?: boolean;
   id?: string;
   kind: string;
   text?: string;

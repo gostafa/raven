@@ -1,4 +1,4 @@
-import type { Folder, Preferences, PreferencesStorage, Workspace } from './types';
+import type { Folder, FolderMetrics, FolderSort, Preferences, PreferencesStorage, Workspace } from './types';
 
 export function emptyWorkspace(): Workspace {
   return { folders: [], selectedFolderId: null, sidebarOpen: true };
@@ -57,4 +57,36 @@ export function reconcileFolders(workspace: Workspace, folders: Folder[]): Works
       ? workspace.selectedFolderId
       : null,
   };
+}
+
+export function selectFolders(
+  folders: Folder[],
+  tags: string[],
+  sort: FolderSort,
+  metrics: ReadonlyMap<string, FolderMetrics>,
+): Folder[] {
+  const selected = folders.filter((folder) =>
+    tags.every((tag) => folder.tags.some((value) => value.toLowerCase() === tag.toLowerCase())),
+  );
+  if (sort === 'default') return selected;
+  return selected.sort((a, b) => {
+    const left = metrics.get(a.id);
+    const right = metrics.get(b.id);
+    let difference: number;
+    if (sort.startsWith('tags-')) difference = a.tags.length - b.tags.length;
+    else if (sort.startsWith('cards-')) difference = (left?.cardCount ?? 0) - (right?.cardCount ?? 0);
+    else {
+      const leftReview = left?.nextReview ?? null;
+      const rightReview = right?.nextReview ?? null;
+      if (leftReview === null || rightReview === null) {
+        return leftReview === null && rightReview === null
+          ? a.title.localeCompare(b.title)
+          : leftReview === null
+            ? 1
+            : -1;
+      }
+      difference = leftReview - rightReview;
+    }
+    return (sort.endsWith('-desc') ? -difference : difference) || a.title.localeCompare(b.title);
+  });
 }

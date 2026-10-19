@@ -1,2 +1,9 @@
-export type { Folder, Workspace, PreferencesStorage, FolderPort } from './domain/types';
-export { emptyWorkspace, parseTags, loadPreferences, savePreferences, reconcileFolders } from './domain/funcs';
+export type { Folder, FolderMetrics, FolderSort, Workspace, PreferencesStorage, FolderPort } from './domain/types';
+export {
+  selectFolders,
+  emptyWorkspace,
+  parseTags,
+  loadPreferences,
+  savePreferences,
+  reconcileFolders,
+} from './domain/funcs';

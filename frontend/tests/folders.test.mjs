@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  selectFolders,
   emptyWorkspace,
   loadPreferences,
   parseTags,
@@ -134,4 +135,43 @@ test('legacy workspace folders and preferences are ignored and left untouched', 
   savePreferences(storage, workspace, preferencesStorageKey);
   assert.deepEqual(workspace, emptyWorkspace());
   assert.equal(storage.getItem('raven.workspace.v1'), legacy);
+});
+
+test('folder filters match every selected tag without case sensitivity', () => {
+  const folders = [folder, { ...folder, id: 'both', tags: ['personal', 'Work'] }];
+  assert.deepEqual(
+    selectFolders(folders, ['PERSONAL', 'work'], 'default', new Map()).map((item) => item.id),
+    ['both'],
+  );
+  assert.equal(selectFolders(folders, ['missing'], 'default', new Map()).length, 0);
+  assert.equal(folders.length, 2);
+});
+
+test('folder sorting supports counts and review times, keeping unscheduled folders last', () => {
+  const folders = [
+    { ...folder, id: 'a', title: 'A', tags: ['one'] },
+    { ...folder, id: 'b', title: 'B', tags: ['one', 'two'] },
+    { ...folder, id: 'c', title: 'C', tags: [] },
+  ];
+  const metrics = new Map([
+    ['a', { cardCount: 3, nextReview: 200 }],
+    ['b', { cardCount: 1, nextReview: 100 }],
+    ['c', { cardCount: 0, nextReview: null }],
+  ]);
+  for (const [sort, expected] of [
+    ['tags-desc', ['b', 'a', 'c']],
+    ['tags-asc', ['c', 'a', 'b']],
+    ['cards-desc', ['a', 'b', 'c']],
+    ['cards-asc', ['c', 'b', 'a']],
+    ['review-asc', ['b', 'a', 'c']],
+    ['review-desc', ['a', 'b', 'c']],
+  ])
+    assert.deepEqual(
+      selectFolders(folders, [], sort, metrics).map((item) => item.id),
+      expected,
+    );
+  assert.deepEqual(
+    folders.map((item) => item.id),
+    ['a', 'b', 'c'],
+  );
 });

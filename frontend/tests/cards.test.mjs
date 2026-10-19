@@ -150,7 +150,7 @@ test('the editor has one information fieldset and both review views share one it
   assert.equal(fieldsets.length, 1);
   assert.match(editor, /<legend>What you want to remember<\/legend>/);
   assert.doesNotMatch(editor, /Question or prompt|Front of card|Back of card/);
-  assert.equal((review.match(/<CardContent\b/g) ?? []).length, 1);
+  assert.equal((review.match(/<CardContent\b/g) ?? []).length, 2);
   assert.match(source, /<ReviewSession\b/);
   assert.match(floating, /<ReviewSession\b/);
   assert.doesNotMatch(review, /revealed|Reveal answer|side="/);
@@ -173,6 +173,28 @@ test('reviews flatten content into independent schedules with stable due order',
   );
   assert.equal(entries[0].card, scheduled);
   assert.equal(entries[0].dueAt, 1000);
+});
+
+test('hint roles survive editing and saving and are excluded from review queues', () => {
+  const mixed = {
+    ...card,
+    items: card.items.map((item, index) => ({
+      ...item,
+      hint: index > 0,
+      schedule: { Due: new Date(1000).toISOString() },
+      reviews: [],
+    })),
+  };
+  const drafts = editItems(mixed, () => '/media');
+  assert.deepEqual(
+    saveItems(drafts).map((item) => item.hint),
+    [false, true, true, true],
+  );
+  assert.deepEqual(
+    reviewItems([mixed]).map(({ item }) => item.id),
+    ['t1'],
+  );
+  assert.equal(reviewItems([{ ...mixed, items: mixed.items.map((item) => ({ ...item, hint: true })) }]).length, 0);
 });
 
 test('automatic Again initialization does not count as a user review', () => {

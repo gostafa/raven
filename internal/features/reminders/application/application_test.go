@@ -50,6 +50,14 @@ func (notifier *testNotifier) Send(count int) error {
 	return notifier.sendErr
 }
 
+func TestHintsDoNotTriggerReminders(t *testing.T) {
+	item := contentapi.Item{Hint: true}
+	occurrence, delay := itemSnapshot(&cardapi.Card{}, &item, time.Now())
+	if occurrence != nil || delay != pollInterval {
+		t.Fatalf("hint produced occurrence=%v delay=%v", occurrence, delay)
+	}
+}
+
 func TestDeliveryNotifiesOncePerCard(t *testing.T) {
 	source := new(testSource)
 	notifier := &testNotifier{allowed: true}

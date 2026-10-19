@@ -9,6 +9,7 @@ export function editItems(card: Card, urlFor: (item: ContentItem) => string): Ed
     key: item.id,
     id: item.id,
     kind: item.kind,
+    hint: item.hint ?? false,
     ...(item.kind === 'text'
       ? { text: item.text ?? '' }
       : { originalName: item.originalName, previewURL: urlFor(item) }),
@@ -18,7 +19,7 @@ export function editItems(card: Card, urlFor: (item: ContentItem) => string): Ed
 export function saveItems(items: EditorItem[]): ItemDraft[] {
   return items
     .filter((item) => item.kind !== 'text' || (item.text?.trim().length ?? 0) > 0)
-    .map(({ id, kind, text, sourcePath }) => ({ id, kind, text, sourcePath }));
+    .map(({ id, kind, text, sourcePath, hint }) => ({ id, kind, text, sourcePath, hint }));
 }
 
 export function hasContent(items: ItemDraft[]): boolean {

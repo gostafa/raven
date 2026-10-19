@@ -62,6 +62,7 @@ function itemFromTransport(value: TransportItem, textKind: string): Card['items'
     relativePath: value.relative_path,
     byteSize: value.byte_size,
     position: value.position,
+    hint: value.hint ?? false,
     lastNotifiedDue: value.last_notified_due,
     schedule: scheduleFromTransport(value.schedule),
     reviews: (value.reviews ?? []).map((review) => ({
@@ -79,6 +80,7 @@ export function draftToTransport(
     kind: value.kind === 'text' ? textKind : value.kind,
     text: value.text,
     source_path: value.sourcePath,
+    ...(value.hint === undefined ? {} : { hint: value.hint }),
   };
 }
 export function mediaFromTransport(value: TransportMedia) {

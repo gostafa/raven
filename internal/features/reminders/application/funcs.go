@@ -53,6 +53,10 @@ func itemSnapshot(
 	item *contentapi.Item,
 	now time.Time,
 ) (*reviewapi.DueOccurrence, time.Duration) {
+	if item.Hint {
+		return nil, pollInterval
+	}
+
 	due := contentapi.Schedule(item.Schedule).Due
 	if due.After(now) {
 		return nil, due.Sub(now)

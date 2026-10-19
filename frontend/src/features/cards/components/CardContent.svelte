@@ -91,7 +91,8 @@
           onerror={() => (failed = [...failed, item.id])}
         ></video>{#if !compact}<span class="media-name">{item.originalName}</span>{/if}
       {/if}
-      {#if compact}<span class="review-time">{reviewTime(item.schedule.Due)}</span>{/if}
+      {#if compact}<span class="review-time">{item.hint ? 'Hint for other items' : reviewTime(item.schedule.Due)}</span
+        >{/if}
     </div>
   {/each}
 </div>

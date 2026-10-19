@@ -32,6 +32,9 @@
   let index = $state(0);
   let error = $state('');
   let root: HTMLDivElement;
+  let hintDialog = $state<HTMLDialogElement>();
+  let hintsVisible = $state(false);
+  let selectedHint = $state<Card['items'][number]>();
   let ratingButton = $state<HTMLButtonElement>();
   let completionButton = $state<HTMLButtonElement>();
   const entry = $derived(entries.at(index));
@@ -42,6 +45,12 @@
     const timer = window.setTimeout(close, 5000);
     return () => window.clearTimeout(timer);
   });
+
+  async function showHint(hint: Card['items'][number]) {
+    selectedHint = hint;
+    await tick();
+    hintDialog?.showModal();
+  }
 
   function close() {
     if (saving || disabled) return;
@@ -57,6 +66,8 @@
       const updated = await saveReview(review, entry, rating);
       onsaved?.(updated);
       stopMedia(root);
+      hintsVisible = false;
+      selectedHint = undefined;
       index += 1;
     } catch {
       error = 'Your review could not be saved. Try again before moving on.';
@@ -97,22 +108,80 @@
     >
   </header>
   {#if card && entry}
-    <div
-      class="review-progress"
-      role="progressbar"
-      aria-label="Review progress"
-      aria-valuenow={index}
-      aria-valuemin="0"
-      aria-valuemax={entries.length}
-    >
-      <span style={`width: ${(index / entries.length) * 100}%`}></span>
-    </div>
-    <div class="review-meta">
-      <span>RECALL</span><span>{index + 1} / {entries.length}</span>
-    </div>
     <div class="review-content">
-      <p class="eyebrow" id="review-title">WHAT YOU WANT TO REMEMBER</p>
-      {#key `${card.folderId}/${card.id}/${entry.item.id}`}<CardContent {card} {mediaURL} />{/key}
+      {#key `${card.folderId}/${card.id}/${entry.item.id}`}
+        <div class="review-item">
+          <CardContent {card} {mediaURL} />
+        </div>
+        {#if entry.card.items.some((item) => item.hint)}
+          <button
+            class="hint-button"
+            aria-label={hintsVisible ? 'Hide hints' : 'Show hints'}
+            title={hintsVisible ? 'Hide hints' : 'Show hints'}
+            aria-expanded={hintsVisible}
+            disabled={saving || disabled}
+            onclick={() => (hintsVisible = !hintsVisible)}
+          >
+            <svg
+              class="hint-icon"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M9 18h6M10 22h4M8.1 14.5a6 6 0 1 1 7.8 0c-.9.7-.9 1.5-.9 2.5H9c0-1-.1-1.8-.9-2.5Z" />
+            </svg>
+          </button>
+          {#if hintsVisible}
+            <div class="hint-grid" role="group" aria-label="Choose a hint">
+              {#each entry.card.items.filter((item) => item.hint) as hint, hintIndex (hint.id)}
+                <button
+                  class="hint-tile"
+                  aria-label={`Open hint ${hintIndex + 1}: ${hint.kind === 'text' ? hint.text : hint.originalName || hint.kind}`}
+                  aria-haspopup="dialog"
+                  disabled={saving || disabled}
+                  onclick={() => showHint(hint)}
+                >
+                  {#if hint.kind === 'image'}
+                    <img src={mediaURL(hint)} alt={hint.originalName || `Hint ${hintIndex + 1}`} />
+                  {:else if hint.kind === 'text'}
+                    <span class="hint-preview">{hint.text}</span>
+                  {:else}
+                    <span class="hint-media-icon" aria-hidden="true">{hint.kind === 'audio' ? '♪' : '▶'}</span>
+                    <span class="hint-media-name">{hint.originalName || hint.kind}</span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          {/if}
+          <dialog
+            class="hint-dialog"
+            aria-label="Hint"
+            bind:this={hintDialog}
+            onclose={() => {
+              if (hintDialog) stopMedia(hintDialog);
+            }}
+            onkeydown={(event) => {
+              if (event.key === 'Escape') event.stopPropagation();
+            }}
+          >
+            <header>
+              <h2 class="hint-title">Hint</h2>
+              <button class="close-button" aria-label="Close hint" onclick={() => hintDialog?.close()}>✕</button>
+            </header>
+            <div class="hint-content">
+              {#if selectedHint}
+                <CardContent card={{ ...entry.card, items: [selectedHint] }} {mediaURL} />
+              {/if}
+            </div>
+          </dialog>
+        {/if}
+      {/key}
     </div>
     <footer>
       <p class="review-question">How familiar does this feel?</p>
@@ -130,7 +199,7 @@
     <div class="review-complete">
       <div class="complete-icon" aria-hidden="true">✓</div>
       <p class="eyebrow">A LITTLE MORE REMEMBERED</p>
-      <h2 id="review-title">{index ? 'Look at you, showing up.' : 'All caught up'}</h2>
+      <h2>{index ? 'Look at you, showing up.' : 'All caught up'}</h2>
       <p>
         {#if index}You practiced {index}
           {index === 1 ? 'item' : 'items'}. Your next reviews are scheduled.{:else}There’s nothing due right now. Your
@@ -147,12 +216,14 @@
   .review-session {
     --ink: #fff;
     --muted: #a3a3a3;
+    position: relative;
     color: var(--ink);
     display: flex;
     flex-direction: column;
     min-height: 0;
     height: 100%;
     gap: 16px;
+    padding: 24px;
   }
   .floating {
     height: 100%;
@@ -202,44 +273,26 @@
     line-height: 1.7;
     color: var(--muted);
   }
-  .review-progress {
-    flex-shrink: 0;
-    height: 2px;
-    width: 100%;
-    border-radius: 5px;
-    background: var(--line);
-    overflow: hidden;
-  }
-  .review-progress span {
-    display: block;
-    height: 100%;
-    background: #fff;
-    transition: width 0.2s;
-  }
-  .review-meta {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    font-size: 10px;
-    color: var(--muted);
-    letter-spacing: 1px;
-    flex-shrink: 0;
-  }
-  .review-meta > span:first-child {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-  .review-meta > span:last-child {
-    flex-shrink: 0;
-  }
   .review-content {
     display: flex;
     flex-direction: column;
-    justify-content: center;
     flex: 1;
-    padding: 24px 0;
-    min-height: 180px;
+    gap: 16px;
+    padding: 12px 0;
+    min-height: 0;
     overflow-wrap: anywhere;
+  }
+  .review-item {
+    container-type: size;
+    display: flex;
+    flex-direction: column;
+    justify-content: safe center;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+  .review-item :global(.card-content) {
+    flex-shrink: 0;
   }
   .review-content :global(.card-content) {
     width: 100%;
@@ -254,10 +307,125 @@
     max-height: 360px;
     object-fit: contain;
   }
+  .review-item :global(img),
+  .review-item :global(video) {
+    max-height: min(360px, 100cqh);
+  }
+  .hint-button {
+    position: absolute;
+    top: 62px;
+    right: 21px;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #000;
+    color: var(--muted);
+  }
+  .hint-button:hover {
+    border-color: var(--line-strong);
+    background: #151515;
+    color: var(--ink);
+  }
+  .hint-grid {
+    position: absolute;
+    top: 106px;
+    right: 21px;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    width: min(252px, calc(100% - 42px));
+    max-height: calc(100% - 130px);
+    overflow: auto;
+    padding: 8px;
+    box-sizing: border-box;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #000;
+  }
+  .hint-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 1;
+    min-width: 0;
+    overflow: hidden;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #000;
+    color: #fff;
+  }
+  .hint-tile:hover {
+    border-color: var(--line-strong);
+    background: #151515;
+  }
+  .hint-tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .hint-preview {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    font-size: 10px;
+    line-height: 1.5;
+  }
+  .hint-media-icon {
+    font-size: 20px;
+  }
+  .hint-media-name {
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 9px;
+    margin-top: 5px;
+  }
+  .hint-dialog {
+    box-sizing: border-box;
+    width: min(720px, calc(100vw - 32px));
+    max-height: calc(100svh - 32px);
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #000;
+    color: #fff;
+    overflow: auto;
+  }
+  .hint-dialog::backdrop {
+    background: #000b;
+  }
+  .hint-dialog header {
+    margin-bottom: 16px;
+  }
+  .hint-title {
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: normal;
+  }
+  .hint-content {
+    border-top: 1px solid var(--line);
+    padding-top: 16px;
+    overflow-wrap: anywhere;
+  }
+  .hint-content :global(.content-item > p) {
+    font-size: 15px;
+    line-height: 1.8;
+  }
   footer {
     flex-shrink: 0;
-    border-top: 1px solid var(--line);
-    padding-top: 20px;
   }
   .review-question {
     text-align: center;
@@ -348,8 +516,7 @@
     line-height: 1.9;
   }
   @media (prefers-reduced-motion: reduce) {
-    *,
-    .review-progress span {
+    * {
       transition: none;
     }
   }

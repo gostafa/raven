@@ -6,7 +6,7 @@
   import { CardEditor } from '../../cards';
   import { CardContent } from '../../cards';
   import { ReviewSession } from '../../reviews';
-  import { ActionMenu } from '../../ui';
+  import { ActionMenu, ChoiceMenu, type ChoiceOption } from '../../ui';
   import {
     cardPreview,
     editItems,
@@ -19,6 +19,8 @@
   } from '../../cards';
   import { reviewItems, type ReviewItem } from '../../reviews';
   import {
+    selectFolders,
+    type FolderSort,
     emptyWorkspace,
     loadPreferences,
     parseTags,
@@ -43,9 +45,41 @@
   const dueCards = $derived(scheduledItems.filter((entry) => entry.dueAt <= now));
   let search = $state('');
   let foldersOpen = $state(true);
+  let folderTags = $state<string[]>([]);
+  let folderSort = $state<FolderSort>('default');
+  const folderSortOptions: ChoiceOption<FolderSort>[] = [
+    { value: 'default', label: 'Default order' },
+    { value: 'tags-desc', label: 'Tags: most first' },
+    { value: 'tags-asc', label: 'Tags: fewest first' },
+    { value: 'cards-desc', label: 'Cards: most first' },
+    { value: 'cards-asc', label: 'Cards: fewest first' },
+    { value: 'review-asc', label: 'Next review: earliest first' },
+    { value: 'review-desc', label: 'Next review: latest first' },
+  ];
+  const availableTags = $derived(
+    parseTags(workspace.folders.flatMap((folder) => folder.tags).join(',')).toSorted((a, b) => a.localeCompare(b)),
+  );
+  const tagOptions = $derived(availableTags.map((tag) => ({ value: tag, label: tag })));
+  const folderMetrics = $derived(
+    new Map(
+      workspace.folders.map((folder) => {
+        const reviews = scheduledItems.filter(
+          (entry) => entry.card.folderId === folder.id && Number.isFinite(entry.dueAt),
+        );
+        return [
+          folder.id,
+          {
+            cardCount: cards.filter((card) => card.folderId === folder.id).length,
+            nextReview: reviews.length ? Math.min(...reviews.map((entry) => entry.dueAt)) : null,
+          },
+        ];
+      }),
+    ),
+  );
+  const filteredFolders = $derived(selectFolders(workspace.folders, folderTags, folderSort, folderMetrics));
   const query = $derived(search.trim().toLowerCase());
   const visibleFolders = $derived(
-    workspace.folders.filter((folder) =>
+    filteredFolders.filter((folder) =>
       [folder.title, folder.description, ...folder.tags].some((value) => value.toLowerCase().includes(query)),
     ),
   );
@@ -554,8 +588,64 @@
             </div>
             <button class="primary-button" onclick={openFolder}>{@render icon('plus', 17)} New folder</button>
           </section>
+          <div class="folder-controls" aria-label="Folder controls">
+            <div class="folder-toolbar">
+              <ChoiceMenu
+                label="Sort"
+                options={folderSortOptions}
+                selected={[folderSort]}
+                onselect={(value) => {
+                  folderSort = value;
+                }}
+              />
+              <ChoiceMenu
+                label="Tags"
+                options={tagOptions}
+                selected={folderTags}
+                multiple
+                searchable
+                hint="Folders must match every selected tag."
+                onselect={(tag) => {
+                  folderTags = folderTags.includes(tag)
+                    ? folderTags.filter((value) => value !== tag)
+                    : [...folderTags, tag];
+                }}
+                onclear={() => {
+                  folderTags = [];
+                }}
+              />
+            </div>
+            <span class="folder-result-count" role="status"
+              >{filteredFolders.length}
+              {filteredFolders.length === 1 ? 'folder' : 'folders'}{folderTags.length
+                ? ` of ${workspace.folders.length}`
+                : ''}</span
+            >
+          </div>
+          {#if folderTags.length}<div class="active-folder-tags" aria-label="Selected tag filters">
+              {#each folderTags as tag (tag)}<button
+                  type="button"
+                  class="filter-chip"
+                  aria-label={`Remove tag filter ${tag}`}
+                  onclick={() => {
+                    folderTags = folderTags.filter((value) => value !== tag);
+                  }}
+                >
+                  <span>{tag}</span>{@render icon('close', 12)}
+                </button>{/each}
+              <button
+                class="clear-folder-tags"
+                type="button"
+                onclick={() => {
+                  folderTags = [];
+                }}>Clear all</button
+              >
+            </div>{/if}
+          {#if folderTags.length && !filteredFolders.length}<p class="folder-filter-empty">
+              No folders match all selected tags.
+            </p>{/if}
           <ul class="folder-grid" aria-label="Your folders">
-            {#each workspace.folders as folder (folder.id)}
+            {#each filteredFolders as folder (folder.id)}
               <li class="folder-tile">
                 <button class="folder-card" onclick={() => navigate(folder.id)}>
                   <h3>{folder.title}</h3>
@@ -568,8 +658,8 @@
                       >{cardsInFolder(folder.id).length}
                       {cardsInFolder(folder.id).length === 1 ? 'card' : 'cards'}</span
                     >
-                    {#if cardsInFolder(folder.id).some((card) => card.dueAt <= now)}<span class="due-dot"
-                        >Ready to review</span
+                    {#if scheduledItems.some((entry) => entry.card.folderId === folder.id && entry.dueAt <= now)}<span
+                        class="due-dot">Ready to review</span
                       >{/if}
                   </span>
                 </button>
@@ -824,7 +914,7 @@
 <dialog
   class="review-dialog"
   bind:this={reviewDialog}
-  aria-labelledby="review-title"
+  aria-label="Review"
   onclose={closeReview}
   oncancel={(event) => {
     if (reviewSaving) event.preventDefault();
@@ -842,6 +932,78 @@
 </dialog>
 
 <style>
+  .folder-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 19px;
+  }
+  .folder-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .folder-result-count {
+    color: var(--muted);
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .active-folder-tags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    margin: -8px 0 23px;
+  }
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--selected);
+    color: var(--ink);
+    font-size: 10px;
+  }
+  .filter-chip span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .filter-chip :global(svg) {
+    flex-shrink: 0;
+    color: var(--muted);
+  }
+  .filter-chip:hover {
+    border-color: var(--line-strong);
+    background: var(--hover);
+  }
+  .clear-folder-tags {
+    border: 0;
+    padding: 6px 5px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .clear-folder-tags:hover {
+    color: var(--ink);
+  }
+  .filter-chip:focus-visible,
+  .clear-folder-tags:focus-visible {
+    outline: 1px solid var(--focus);
+    outline-offset: 3px;
+  }
+  .folder-filter-empty {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
   .sr-only {
     position: absolute;
     width: 1px;
@@ -915,8 +1077,9 @@
     background: none;
     color: var(--ink);
     font-size: 25px;
-    font-weight: 650;
-    letter-spacing: -1.3px;
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: 0;
   }
   .brand-icon {
     display: grid;
@@ -1139,10 +1302,10 @@
   }
   h1 {
     margin: 0;
-    font-family: Georgia, 'Times New Roman', serif;
+    font-family: var(--font-display);
     font-size: clamp(32px, 3.9vw, 49px);
     font-weight: 400;
-    letter-spacing: -1.7px;
+    letter-spacing: 0;
     line-height: 1.13;
   }
   .primary-button,
@@ -1666,10 +1829,10 @@
   }
   .review-dialog {
     box-sizing: border-box;
-    width: min(360px, calc((100svh - 36px) / 2), calc(100vw - 36px));
-    height: min(720px, calc(100svh - 36px), calc((100vw - 36px) * 2));
-    aspect-ratio: 1 / 2;
-    padding: 24px;
+    width: min(360px, calc((100svh - 36px) / 1.7), calc(100vw - 36px));
+    height: min(612px, calc(100svh - 36px), calc((100vw - 36px) * 1.7));
+    aspect-ratio: 1 / 1.7;
+    padding: 0;
   }
   @media (min-width: 1250px) {
     .content {
@@ -1753,7 +1916,7 @@
       padding: 23px;
     }
     .review-dialog {
-      padding: 22px;
+      padding: 0;
     }
     dialog h2 {
       font-size: 25px;

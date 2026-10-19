@@ -71,6 +71,16 @@
             >
           </div>
         </div>
+        <label class="remember-switch">
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label={`Remember item ${index + 1}`}
+            checked={!item.hint}
+            onchange={(event) => (item.hint = !event.currentTarget.checked)}
+          />
+          <span>Remember this <small>{item.hint ? 'Hint for other items' : 'Included in reviews'}</small></span>
+        </label>
         {#if item.kind === 'text'}<textarea
             aria-label={`Card text ${index + 1}`}
             bind:value={item.text}
@@ -124,6 +134,50 @@
 {#if selecting}<p class="hint" role="status">Choosing files…</p>{/if}
 
 <style>
+  .remember-switch {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .remember-switch input {
+    appearance: none;
+    width: 30px;
+    height: 18px;
+    margin: 0;
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    background: #181818;
+    cursor: pointer;
+  }
+  .remember-switch input::before {
+    content: '';
+    display: block;
+    width: 12px;
+    height: 12px;
+    margin: 2px;
+    border-radius: 50%;
+    background: #a3a3a3;
+  }
+  .remember-switch input:checked {
+    background: #fff;
+  }
+  .remember-switch input:checked::before {
+    background: #000;
+    transform: translateX(12px);
+  }
+  .remember-switch input:focus-visible {
+    outline: 2px solid var(--muted);
+    outline-offset: 3px;
+  }
+  .remember-switch small {
+    display: block;
+    color: var(--muted);
+    font-size: 10px;
+    margin-top: 3px;
+  }
   fieldset {
     border: 1px solid var(--line);
     border-radius: 8px;

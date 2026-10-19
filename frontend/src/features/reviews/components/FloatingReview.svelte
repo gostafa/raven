@@ -114,13 +114,13 @@
     flex-direction: column;
     height: 100svh;
     overflow: auto;
-    padding: 24px;
     border: 1px solid var(--line);
-    border-radius: 14px;
+    border-radius: 15px;
     background: #000;
     color: #fff;
   }
   header {
+    margin: 24px 24px 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -144,6 +144,7 @@
     color: #fff;
   }
   .status {
+    padding: 24px;
     display: flex;
     flex: 1;
     flex-direction: column;
@@ -175,6 +176,7 @@
     color: #fff;
   }
   .error {
+    margin: 0 24px 24px;
     padding: 10px;
     border: 1px solid var(--line);
     border-radius: 6px;

@@ -3,7 +3,11 @@ import type { ReviewItem } from './types';
 
 export function reviewItems(cards: Card[]): ReviewItem[] {
   return cards
-    .flatMap((card) => card.items.map((item) => ({ card, item, dueAt: new Date(item.schedule.Due).getTime() })))
+    .flatMap((card) =>
+      card.items
+        .filter((item) => item.hint !== true)
+        .map((item) => ({ card, item, dueAt: new Date(item.schedule.Due).getTime() })),
+    )
     .sort(
       (a, b) =>
         a.dueAt - b.dueAt ||

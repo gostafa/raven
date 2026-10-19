@@ -9,5 +9,5 @@ import (
 
 const (
 	zero            = 0
-	playbackTimeout = 5 * time.Second
+	playbackTimeout = 3 * time.Second
 )

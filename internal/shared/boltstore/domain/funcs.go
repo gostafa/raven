@@ -218,6 +218,10 @@ func aggregateSchedule(card *cardapi.Card) {
 	card.LastReviewed = zero
 
 	for index := range contentapi.Items(card.Items) {
+		if contentapi.Items(card.Items)[index].Hint {
+			continue
+		}
+
 		updateDue(card, &contentapi.Items(card.Items)[index])
 		updateLastReview(card, contentapi.Reviews(contentapi.Items(card.Items)[index].Reviews))
 	}
@@ -561,6 +565,8 @@ func newDraftItem(id, kind string) contentapi.Item {
 }
 
 func applyDraft(rules *Rules, item *contentapi.Item, draft *contentapi.Draft) error {
+	item.Hint = draft.Hint
+
 	err := applyDraftContent(rules, item, draft)
 	if err != nil {
 		return fmt.Errorf("apply content: %w", err)
