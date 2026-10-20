@@ -10,6 +10,22 @@ import { test } from 'node:test';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const helper = path.join(root, '.github/actions/build-macos/funcs.sh');
 
+test('the real packaging task uses the requested bundle directory throughout the build', () => {
+  for (const output of [undefined, path.join(tmpdir(), 'raven macos output', 'build')]) {
+    const args = ['--dry', '--force', 'darwin:package', 'ARCH=arm64', 'DEV=false'];
+    if (output) args.push(`BIN_DIR=${output}`);
+    const result = spawnSync('task', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const commands = result.stdout + result.stderr;
+    const directory = output ?? 'bin';
+    assert.ok(commands.includes(`prepare-macos-output --dir "${directory}"`), commands);
+    assert.ok(commands.includes(`-o "${directory}/raven"`), commands);
+    assert.ok(commands.includes(`mkdir -p "${directory}/raven.app/Contents/MacOS"`), commands);
+    assert.ok(commands.includes(`codesign --verify --deep --strict "${directory}/raven.app"`), commands);
+    if (output) assert.ok(!commands.includes('"bin/'), commands);
+  }
+});
+
 async function fixture(t) {
   const directory = await mkdtemp(path.join(tmpdir(), 'raven macos test '));
   t.after(() => rm(directory, { recursive: true, force: true }));

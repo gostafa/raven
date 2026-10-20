@@ -3,7 +3,7 @@ version: '3.5'
 
 vars:
   APP_NAME: raven
-  BIN_DIR: bin
+  BIN_DIR: '{{.BIN_DIR | default "bin"}}'
   PACKAGE_MANAGER: bun
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
   # Target OS for build/package/run. Defaults to the host OS, and is overridden
