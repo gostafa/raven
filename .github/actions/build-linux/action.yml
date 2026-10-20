@@ -71,7 +71,15 @@ runs:
       env:
         RELEASE_TAG: ${{ inputs.tag }}
         PACKAGE_ARCH: ${{ inputs.arch }}
-      run: task linux:release "TAG=$RELEASE_TAG" "ARCH=$PACKAGE_ARCH"
+      run: |
+        # Ubuntu 24.04 blocks user namespaces for AppImage's bundled bwrap.
+        # Permit namespaces on this disposable runner while retaining WebKit's sandbox.
+        userns_key=kernel.apparmor_restrict_unprivileged_userns
+        userns_previous=$(sysctl -n "$userns_key")
+        restore_userns() { sudo sysctl -w "$userns_key=$userns_previous"; }
+        trap restore_userns EXIT
+        sudo sysctl -w "$userns_key=0"
+        task linux:release "TAG=$RELEASE_TAG" "ARCH=$PACKAGE_ARCH"
     - name: Upload verified packages and checksums
       id: upload
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2

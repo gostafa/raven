@@ -155,6 +155,28 @@ test('the release workflow requires both native Linux builds and opts into check
   assert.ok(!action.includes('continue-on-error'));
 });
 
+test('Linux release permits sandbox namespaces and restores host policy after success or failure', async (t) => {
+  const { directory, env } = await fixture(t, {
+    sysctl: 'if [ "$1" = -n ]; then echo 1; else printf "%s\\n" "$2" >> "$RAVEN_LINUX_ROOT/policy-log"; fi',
+    sudo: 'exec "$@"',
+    task: 'grep -qx "kernel.apparmor_restrict_unprivileged_userns=0" "$RAVEN_LINUX_ROOT/policy-log" || exit 43; exit "$TEST_RELEASE_STATUS"',
+  });
+  const action = Bun.YAML.parse(await readFile(path.join(root, '.github/actions/build-linux/action.yml'), 'utf8'));
+  const script = action.runs.steps.find((step) => step.id === 'build').run;
+  for (const status of [0, 42]) {
+    await rm(path.join(directory, 'policy-log'), { force: true });
+    const result = spawnSync('/bin/bash', ['-e', '-c', script], {
+      env: { ...env, RELEASE_TAG: 'v1.2.3', PACKAGE_ARCH: 'amd64', TEST_RELEASE_STATUS: String(status) },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, status, result.stderr);
+    assert.deepEqual((await readFile(path.join(directory, 'policy-log'), 'utf8')).trim().split('\n'), [
+      'kernel.apparmor_restrict_unprivileged_userns=0',
+      'kernel.apparmor_restrict_unprivileged_userns=1',
+    ]);
+  }
+});
+
 test('checksum publication is opt-in and requires valid checksums', async (t) => {
   const directory = await realpath(await mkdtemp(path.join(tmpdir(), 'raven-sidecars-')));
   t.after(() => rm(directory, { recursive: true, force: true }));
