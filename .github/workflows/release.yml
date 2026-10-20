@@ -131,13 +131,13 @@ jobs:
             }
           }
           if (@(Get-ChildItem dist -File).Count -ne 4) { throw 'Expected exactly two MSIs and two checksums' }
-      - name: Publish MSI files and checksums
+      - name: Publish MSI files
         shell: pwsh
         run: |-
           $assets = @()
           foreach ($arch in @('amd64', 'arm64')) {
             $name = "dist/raven-$env:RELEASE_VERSION-windows-$arch.msi"
-            $assets += @($name, "$name.sha256")
+            $assets += $name
           }
           gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes --title "Raven $env:RELEASE_TAG"
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
