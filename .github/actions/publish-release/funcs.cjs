@@ -83,7 +83,6 @@ async function verifyAssets(env) {
     if (hash.digest('hex') !== match[1].toLowerCase()) {
       throw new Error(`SHA-256 checksum mismatch for ${relative}`);
     }
-    files.push(sidecar);
   }
   return files;
 }

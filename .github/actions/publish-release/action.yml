@@ -23,6 +23,10 @@ inputs:
     description: Require and verify adjacent SHA-256 sidecars
     required: false
     default: 'true'
+  include-checksums:
+    description: Publish verified SHA-256 sidecars alongside selected assets (requires verify-checksums)
+    required: false
+    default: 'false'
 
 outputs:
   release-id:
@@ -64,11 +68,21 @@ runs:
         RELEASE_FILES: ${{ inputs.files }}
         VERIFY_CHECKSUMS: ${{ inputs.verify-checksums }}
         DOWNLOAD_PATH: ${{ steps.prepare.outputs.download-path }}
+        INCLUDE_CHECKSUMS: ${{ inputs.include-checksums }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const { verifyAssets } = require(`${process.env.PUBLISH_ACTION_PATH}/funcs.cjs`);
           const files = await verifyAssets(process.env);
+          if (!['true', 'false'].includes(process.env.INCLUDE_CHECKSUMS)) {
+            throw new Error('include-checksums must be true or false');
+          }
+          if (process.env.INCLUDE_CHECKSUMS === 'true') {
+            if (process.env.VERIFY_CHECKSUMS !== 'true') {
+              throw new Error('Publishing checksums requires verification');
+            }
+            files.push(...files.map(file => `${file}.sha256`));
+          }
           core.setOutput('files', files.join('\n'));
     - name: Publish verified release assets
       id: publish

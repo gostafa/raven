@@ -60,7 +60,7 @@ test('prepare isolates downloads and rejects existing releases and API failures'
   await assert.rejects(prepare(args), /forbidden/);
 });
 
-test('verify returns exact assets and sidecars and rejects missing or corrupt assets', async (t) => {
+test('verify returns only selected assets while requiring valid checksum sidecars', async (t) => {
   const { verifyAssets } = require('./funcs.cjs');
   const root = await mkdtemp(path.join(tmpdir(), 'raven-publish-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -70,7 +70,7 @@ test('verify returns exact assets and sidecars and rejects missing or corrupt as
   await writeFile(file, 'MSI contents');
   await writeFile(`${file}.sha256`, `${hash}  raven.msi\r\n`);
   const env = { DOWNLOAD_PATH: root, RELEASE_FILES: 'artifact/raven.msi', VERIFY_CHECKSUMS: 'true' };
-  assert.deepEqual(await verifyAssets(env), [file, `${file}.sha256`]);
+  assert.deepEqual(await verifyAssets(env), [file]);
   await writeFile(file, 'corrupted');
   await assert.rejects(verifyAssets(env), /checksum mismatch/i);
   env.VERIFY_CHECKSUMS = 'false';

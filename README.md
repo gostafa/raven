@@ -45,6 +45,22 @@ bun run package
 
 Output is written to `bin/`.
 
+### Linux Packaging
+
+Linux releases support AMD64 and ARM64 with AppImage, Debian (`.deb`), RPM,
+Snap, and pacman (`.pkg.tar.zst`) packages. Build natively on Ubuntu 24.04:
+
+```sh
+task linux:install:deps ARCH=amd64
+task linux:release TAG=v1.2.3 ARCH=amd64
+```
+
+Use `ARCH=arm64` on ARM64. All formats share one production build and must pass
+package and GUI startup checks before promotion. Snap packaging uses destructive
+mode and requires a disposable Ubuntu machine. See the
+[Linux task documentation](taskfiles/linux/README.md) for local packaging,
+dependencies, verification, filenames, and installation commands.
+
 ### Windows MSI Packaging
 
 Package on Windows; the **.NET 10 SDK** is installed automatically through
@@ -93,8 +109,9 @@ same version are blocked; use the original MSI for maintenance. Upgrade and
 uninstall preserve `%AppData%\raven`. Releases are unsigned; verify the published
 SHA-256 checksum before installing.
 
-The release workflow validates both Windows MSI packages before publishing them
-and their SHA-256 checksums.
+The release workflow validates both Windows MSI packages and all five Linux
+package formats on AMD64 and ARM64 before publishing them and their SHA-256
+checksums.
 Run the Release workflow manually with a version to execute its checks without
 publishing; publication runs only for stable version tags. Existing releases are
 not overwritten.

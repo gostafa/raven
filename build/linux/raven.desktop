@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Raven
+Comment=Your quiet desktop companion.
+Exec=raven
+Icon=raven
+Terminal=false
+Categories=Education;
+StartupWMClass=raven

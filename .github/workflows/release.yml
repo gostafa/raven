@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: MSI version to verify without publishing (MAJOR.MINOR.PATCH)
+        description: Release version to verify without publishing (MAJOR.MINOR.PATCH)
         required: true
         type: string
 
@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: Validate stable MSI release tag
+      - name: Validate stable release tag
         id: version
         uses: $/.github/actions/validate-version
         with:
@@ -59,12 +59,36 @@ jobs:
         with:
           tag: v${{ needs.validate.outputs.version }}
           arch: ${{ matrix.arch }}
+  linux:
+    name: Build Linux ${{ matrix.arch }} packages
+    needs:
+      - validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and upload Linux release
+        uses: $/.github/actions/build-linux
+        with:
+          tag: v${{ needs.validate.outputs.version }}
+          arch: ${{ matrix.arch }}
   publish:
-    name: Publish verified MSI release
+    name: Publish verified Windows and Linux release
     if: github.event_name == 'push'
     needs:
       - validate
       - windows
+      - linux
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -73,12 +97,23 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: Publish verified MSI files
+      - name: Publish verified installers and checksums
         uses: $/.github/actions/publish-release
         with:
           tag: ${{ github.ref_name }}
           name: Raven ${{ github.ref_name }}
-          artifact-pattern: raven-${{ github.ref_name }}-windows-*
+          artifact-pattern: raven-${{ github.ref_name }}-*
+          include-checksums: 'true'
           files: |-
             raven-${{ github.ref_name }}-windows-amd64/raven-${{ github.ref_name }}-windows-amd64.msi
             raven-${{ github.ref_name }}-windows-arm64/raven-${{ github.ref_name }}-windows-arm64.msi
+            raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.AppImage
+            raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.deb
+            raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.rpm
+            raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.snap
+            raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.pkg.tar.zst
+            raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.AppImage
+            raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.deb
+            raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.rpm
+            raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.snap
+            raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.pkg.tar.zst
