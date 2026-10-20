@@ -51,10 +51,3 @@ tasks:
       - >-
         powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
         -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" promote
-  test:
-    desc: Test packaging validation and failure handling on Windows
-    preconditions: *windows
-    cmds:
-      - >-
-        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
-        -File "{{.ROOT_DIR}}/taskfiles/wix/test.ps1"

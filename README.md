@@ -90,12 +90,8 @@ same version are blocked; use the original MSI for maintenance. Upgrade and
 uninstall preserve `%AppData%\raven`. Releases are unsigned; verify the published
 SHA-256 checksum before installing.
 
-`task wix:test` checks packaging validation and failure handling on Windows.
-The release workflow requires repository checks, MSI validation, and native x64
-and ARM64 installation tests before publishing both MSIs and their checksums.
-The installation tests cover isolated prerequisite searches, repair, upgrades,
-downgrades, replacement blocking, and data preservation. They require disposable
-Windows runners with WebView2 already installed and must not run on a personal machine.
+The release workflow validates both Windows MSI packages before publishing them
+and their SHA-256 checksums.
 Run the Release workflow manually with a version to execute its checks without
 publishing; publication runs only for stable version tags. Existing releases are
 not overwritten.

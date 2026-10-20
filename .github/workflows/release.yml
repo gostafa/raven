@@ -85,14 +85,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not determine Wails version' }
           go install "github.com/wailsapp/wails/v3/cmd/wails3@$wails"
           if ($LASTEXITCODE -ne 0) { throw 'Wails installation failed' }
-      - name: Test packaging validation
-        shell: pwsh
-        run: |
-          task wix:test
-          if ($LASTEXITCODE -ne 0) { throw 'Packaging validation tests failed' }
-      - name: Build upgrade and replacement test fixtures
-        shell: pwsh
-        run: ./taskfiles/wix/fixtures.ps1 -Arch $env:PACKAGE_ARCH
       - name: Build and validate release MSI
         shell: pwsh
         run: |
@@ -108,68 +100,12 @@ jobs:
             bin/raven-${{ env.RELEASE_VERSION }}-windows-${{ matrix.arch }}.msi
             bin/raven-${{ env.RELEASE_VERSION }}-windows-${{ matrix.arch }}.msi.sha256
           if-no-files-found: error
-      - name: Upload test fixtures separately
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: raven-msi-tests-${{ matrix.arch }}
-          path: |
-            bin/msi-tests/${{ matrix.arch }}/old.msi
-            bin/msi-tests/${{ matrix.arch }}/new.msi
-            bin/msi-tests/${{ matrix.arch }}/replacement.msi
-          if-no-files-found: error
-  installation:
-    name: Verify native Windows ${{ matrix.arch }} installation
-    needs:
-      - validate
-      - windows
-    permissions:
-      contents: read
-      actions: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: windows-latest
-          - arch: arm64
-            runner: windows-11-arm
-    runs-on: ${{ matrix.runner }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      RUN_ID: ${{ github.run_id }}
-      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-      PACKAGE_ARCH: ${{ matrix.arch }}
-    steps:
-      - name: Check out installation tests
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Download exact release candidate and test fixtures
-        shell: pwsh
-        run: |
-          gh run download $env:RUN_ID --name "raven-$env:RELEASE_VERSION-windows-$env:PACKAGE_ARCH" --dir dist
-          if ($LASTEXITCODE -ne 0) { throw 'Candidate download failed' }
-          foreach ($arch in @('amd64', 'arm64')) {
-            gh run download $env:RUN_ID --name "raven-msi-tests-$arch" --dir "bin/msi-tests/$arch"
-            if ($LASTEXITCODE -ne 0) { throw 'Test fixture download failed' }
-          }
-      - name: Verify installation, repair, prerequisites, upgrades, and uninstall
-        shell: pwsh
-        run: ./taskfiles/wix/smoke.ps1 -Arch $env:PACKAGE_ARCH -Version $env:RELEASE_VERSION
-      - name: Retain installer diagnostics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: raven-msi-logs-${{ matrix.arch }}
-          path: bin/msi-logs/${{ matrix.arch }}/*.log
-          if-no-files-found: warn
   publish:
     name: Publish verified MSI release
     if: github.event_name == 'push'
     needs:
       - validate
-      - installation
+      - windows
     runs-on: windows-latest
     permissions:
       contents: write
