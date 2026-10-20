@@ -54,7 +54,9 @@ try {
             Assert-WixVersion
             if (Test-Path -LiteralPath $proofPath) { Remove-Item -LiteralPath $proofPath -Force }
             Assert-Payload $payload $version $arch
-            Invoke-Wix @('msi', 'validate', $msi, '-wx')
+            # ICE91 warns about per-user paths even for this intentionally per-user-only MSI.
+            # Assert-Msi below independently rejects packages with ALLUSERS set.
+            Invoke-Wix @('msi', 'validate', $msi, '-sice', 'ICE91', '-wx')
             Assert-Msi $msi $version $arch
             @{
                 Version = $version
