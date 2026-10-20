@@ -350,10 +350,16 @@ smoke() {
         # Sideloaded packages need --dangerous because no Snap Store assertion is used.
         local elevate=()
         if (( EUID != 0 )); then elevate=(sudo); fi
+        # CI runners may have no login session. Snap needs the real user manager
+        # to create its confinement scope, rather than the disposable GUI bus.
+        local user_id
+        user_id=$(id -u)
+        "${elevate[@]}" systemctl start "user@$user_id.service"
         "${elevate[@]}" snap install --dangerous "$stage/packages/$artifact.snap"
         local status=0
         ("${elevate[@]}" snap connect raven:webkit-sandbox :browser-support &&
-          smoke_command snap snap run raven) || status=$?
+          smoke_command snap env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$user_id/bus" \
+            snap run raven) || status=$?
         "${elevate[@]}" snap remove --purge raven
         (( status == 0 )) || fail 'Snap startup check failed.'
         ;;

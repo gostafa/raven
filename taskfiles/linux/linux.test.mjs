@@ -137,6 +137,37 @@ test('Snap builds elevate destructive mode and use an explicit pack command', as
   assert.equal(await readFile(path.join(stage, 'packages/raven-v1.2.3-linux-amd64.snap'), 'utf8'), 'snap');
 });
 
+test('Snap smoke launch reaches the host user manager despite the private GUI bus', async (t) => {
+  const { directory, run } = await fixture(t, {
+    sudo: 'exec "$@"',
+    systemctl: 'printf "%s\\n" "$*" >> "$RAVEN_LINUX_ROOT/manager-log"',
+    snap: `if [ "$1" = run ]; then
+      test "$DBUS_SESSION_BUS_ADDRESS" = "unix:path=/run/user/$(id -u)/bus" || { echo 'is not a snap cgroup' >&2; exit 1; }
+      exec /bin/sleep 30
+    fi`,
+    timeout: 'shift 3; exec "$@"',
+    'dbus-run-session': 'shift; export DBUS_SESSION_BUS_ADDRESS=unix:path=/private-test-bus; exec "$@"',
+    'xvfb-run': 'shift 2; exec "$@"',
+    xdotool: 'exit 0',
+    sleep: 'exit 0',
+    sha256sum: 'echo fixture-checksum',
+  });
+  const stage = path.join(directory, 'bin/.linux/amd64');
+  await mkdir(path.join(stage, 'payload/usr/bin'), { recursive: true });
+  await mkdir(path.join(directory, 'taskfiles/linux'), { recursive: true });
+  await cp(helper, path.join(directory, 'taskfiles/linux/funcs.sh'));
+  await writeFile(path.join(stage, 'prepared'), '1.2.3|snap|\n');
+  await writeFile(path.join(stage, 'payload/usr/bin/raven'), 'fixture');
+  await chmod(path.join(stage, 'payload/usr/bin/raven'), 0o755);
+  await mkdir(path.join(stage, 'packages'));
+  await writeFile(path.join(stage, 'packages/raven.snap'), 'fixture');
+  ok(run('smoke', { RAVEN_LINUX_FORMAT: 'snap' }));
+  assert.match(
+    await readFile(path.join(directory, 'manager-log'), 'utf8'),
+    new RegExp(`start user@${process.getuid()}\\.service`),
+  );
+});
+
 test('the release workflow requires both native Linux builds and opts into checksum publication', async () => {
   const workflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8');
   const publish = workflow.slice(workflow.indexOf('  publish:'));
