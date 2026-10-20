@@ -1,0 +1,83 @@
+---
+name: Cleanup run artifacts
+description: Delete all artifacts from the current or a completed run and verify the final count.
+
+inputs:
+  run-id:
+    description: Current or completed workflow run ID to clean after all artifact consumers finish
+    required: true
+  github-token:
+    description: GitHub token with actions write permission
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Get target run
+      id: run
+      uses: octokit/request-action@b91aabaa861c777dcdb14e2387e30eddf04619ae  # v3.0.0
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      with:
+        route: GET /repos/{repository}/actions/runs/{run_id}
+        repository: ${{ github.repository }}
+        run_id: ${{ inputs.run-id }}
+    - name: Require other runs to be completed
+      if: fromJSON(steps.run.outputs.data).id != github.run_id
+      uses: nick-fields/assert-action@0efd6166067d9c59d89c710fab4f79fb066f8985  # v4.0.1
+      with:
+        expected: completed
+        actual: ${{ fromJSON(steps.run.outputs.data).status }}
+    - name: Count target artifacts
+      id: before
+      uses: octokit/request-action@b91aabaa861c777dcdb14e2387e30eddf04619ae  # v3.0.0
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      with:
+        route: GET /repos/{repository}/actions/runs/{run_id}/artifacts
+        repository: ${{ github.repository }}
+        run_id: ${{ fromJSON(steps.run.outputs.data).id }}
+        per_page: 1
+    - name: Delete every artifact
+      if: fromJSON(steps.before.outputs.data).total_count > 0
+      continue-on-error: true
+      uses: joutvhu/delete-artifact@e8511ee448fc8cfa02508df13dc0c0974f20d52d  # v2.0.1
+      with:
+        token: ${{ inputs.github-token }}
+        run-id: ${{ fromJSON(steps.run.outputs.data).id }}
+        latest: 'false'
+    - name: Count remaining artifacts
+      id: remaining
+      uses: octokit/request-action@b91aabaa861c777dcdb14e2387e30eddf04619ae  # v3.0.0
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      with:
+        route: GET /repos/{repository}/actions/runs/{run_id}/artifacts
+        repository: ${{ github.repository }}
+        run_id: ${{ fromJSON(steps.run.outputs.data).id }}
+        per_page: 1
+    - name: Retry leftover artifacts
+      if: fromJSON(steps.remaining.outputs.data).total_count > 0
+      # The independent count below determines success, including concurrent deletion.
+      continue-on-error: true
+      uses: joutvhu/delete-artifact@e8511ee448fc8cfa02508df13dc0c0974f20d52d  # v2.0.1
+      with:
+        token: ${{ inputs.github-token }}
+        run-id: ${{ fromJSON(steps.run.outputs.data).id }}
+        latest: 'false'
+    - name: Get final artifact count
+      id: final
+      uses: octokit/request-action@b91aabaa861c777dcdb14e2387e30eddf04619ae  # v3.0.0
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      with:
+        route: GET /repos/{repository}/actions/runs/{run_id}/artifacts
+        repository: ${{ github.repository }}
+        run_id: ${{ fromJSON(steps.run.outputs.data).id }}
+        per_page: 1
+    - name: Require complete artifact deletion
+      uses: nick-fields/assert-action@0efd6166067d9c59d89c710fab4f79fb066f8985  # v4.0.1
+      with:
+        expected: '0'
+        actual: ${{ fromJSON(steps.final.outputs.data).total_count }}

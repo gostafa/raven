@@ -117,3 +117,25 @@ jobs:
             raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.rpm
             raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.snap
             raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.pkg.tar.zst
+  cleanup:
+    name: Clean up release artifacts
+    if: always()
+    needs:
+      - validate
+      - windows
+      - linux
+      - publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Remove all release run artifacts
+        uses: ./.github/actions/cleanup-artifacts
+        with:
+          run-id: ${{ github.run_id }}
