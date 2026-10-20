@@ -83,9 +83,11 @@ test('packaging validates stable versions, limits, development mode, tags, and f
   }
   fails(run('validate-package', { RAVEN_LINUX_DEV: 'true' }), /DEV=false/);
   fails(run('validate-package', { RAVEN_LINUX_TAG: 'v2.0.0' }), /TAG must equal/);
-  fails(run('validate-package', { RAVEN_LINUX_FORMAT: 'aur' }), /FORMAT must be/);
+  for (const format of ['aur', 'snap', 'appimage']) {
+    fails(run('validate-package', { RAVEN_LINUX_FORMAT: format }), /FORMAT must be/);
+  }
   fails(run('validate-release'), /TAG is required/);
-  fails(run('validate-release', { RAVEN_LINUX_TAG: 'v1.2.3', RAVEN_LINUX_FORMAT: 'deb' }), /all five formats/);
+  fails(run('validate-release', { RAVEN_LINUX_TAG: 'v1.2.3', RAVEN_LINUX_FORMAT: 'deb' }), /all three formats/);
 });
 
 test('missing build dependencies fail before frontend generation or package writes', async (t) => {
@@ -111,63 +113,6 @@ test('a failed package command cannot be promoted or expose action outputs', asy
   fails(run('bundle', { RAVEN_LINUX_FORMAT: 'rpm' }), /does not match/);
 });
 
-test('Snap builds elevate destructive mode and use an explicit pack command', async (t) => {
-  const { directory, run } = await fixture(t, {
-    sudo: 'printf "%s\\n" "$@" > "$PWD/sudo-args"; exec "$@"',
-    snapcraft:
-      'test "$1" = pack || exit 41; test -f snapcraft.yaml || exit 43; while [ "$#" -gt 0 ]; do if [ "$1" = --output ]; then shift; printf snap > "$1"; break; fi; shift; done',
-  });
-  const stage = path.join(directory, 'bin/.linux/amd64');
-  await mkdir(path.join(stage, 'payload/usr/bin'), { recursive: true });
-  await mkdir(path.join(stage, 'packages'));
-  await writeFile(path.join(stage, 'prepared'), '1.2.3|snap|\n');
-  await writeFile(path.join(stage, 'payload/usr/bin/raven'), 'fixture binary');
-  await chmod(path.join(stage, 'payload/usr/bin/raven'), 0o755);
-  ok(run('bundle', { RAVEN_LINUX_FORMAT: 'snap' }));
-  if (process.getuid() !== 0) {
-    const args = (await readFile(path.join(stage, 'snap/sudo-args'), 'utf8')).trim().split('\n');
-    assert.equal(args[0], path.join(directory, 'mock-tools/snapcraft'));
-    assert.deepEqual(args.slice(1), [
-      'pack',
-      '--destructive-mode',
-      '--output',
-      path.join(stage, 'packages/raven-v1.2.3-linux-amd64.snap'),
-    ]);
-  }
-  assert.equal(await readFile(path.join(stage, 'packages/raven-v1.2.3-linux-amd64.snap'), 'utf8'), 'snap');
-});
-
-test('Snap smoke launch reaches the host user manager despite the private GUI bus', async (t) => {
-  const { directory, run } = await fixture(t, {
-    sudo: 'exec "$@"',
-    systemctl: 'printf "%s\\n" "$*" >> "$RAVEN_LINUX_ROOT/manager-log"',
-    snap: `if [ "$1" = run ]; then
-      test "$DBUS_SESSION_BUS_ADDRESS" = "unix:path=/run/user/$(id -u)/bus" || { echo 'is not a snap cgroup' >&2; exit 1; }
-      exec /bin/sleep 30
-    fi`,
-    timeout: 'shift 3; exec "$@"',
-    'dbus-run-session': 'shift; export DBUS_SESSION_BUS_ADDRESS=unix:path=/private-test-bus; exec "$@"',
-    'xvfb-run': 'shift 2; exec "$@"',
-    xdotool: 'exit 0',
-    sleep: 'exit 0',
-    sha256sum: 'echo fixture-checksum',
-  });
-  const stage = path.join(directory, 'bin/.linux/amd64');
-  await mkdir(path.join(stage, 'payload/usr/bin'), { recursive: true });
-  await mkdir(path.join(directory, 'taskfiles/linux'), { recursive: true });
-  await cp(helper, path.join(directory, 'taskfiles/linux/funcs.sh'));
-  await writeFile(path.join(stage, 'prepared'), '1.2.3|snap|\n');
-  await writeFile(path.join(stage, 'payload/usr/bin/raven'), 'fixture');
-  await chmod(path.join(stage, 'payload/usr/bin/raven'), 0o755);
-  await mkdir(path.join(stage, 'packages'));
-  await writeFile(path.join(stage, 'packages/raven.snap'), 'fixture');
-  ok(run('smoke', { RAVEN_LINUX_FORMAT: 'snap' }));
-  assert.match(
-    await readFile(path.join(directory, 'manager-log'), 'utf8'),
-    new RegExp(`start user@${process.getuid()}\\.service`),
-  );
-});
-
 test('the release workflow requires both native Linux builds and keeps checksums private', async () => {
   const workflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8');
   const publish = workflow.slice(workflow.indexOf('  publish:'));
@@ -177,7 +122,7 @@ test('the release workflow requires both native Linux builds and keeps checksums
   assert.match(publish, /- windows\s+- linux/);
   assert.match(publish, /include-checksums: 'false'/);
   for (const arch of ['amd64', 'arm64']) {
-    for (const extension of ['AppImage', 'deb', 'rpm', 'snap', 'pkg.tar.zst']) {
+    for (const extension of ['deb', 'rpm', 'pkg.tar.zst']) {
       assert.ok(publish.includes(`-linux-${arch}.${extension}\n`));
     }
   }

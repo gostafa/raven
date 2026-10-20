@@ -10,7 +10,7 @@ vars:
   LINUX_STAGE: '{{.ROOT_DIR}}/bin/.linux/{{.LINUX_ARCH}}'
 
 env:
-  PATH: '{{.ROOT_DIR}}/.tools:{{.PATH}}:/snap/bin'
+  PATH: '{{.ROOT_DIR}}/.tools:{{.PATH}}'
   RAVEN_LINUX_ROOT: '{{.ROOT_DIR}}'
   RAVEN_LINUX_ARCH: '{{.LINUX_ARCH}}'
   RAVEN_LINUX_VERSION: '{{.LINUX_VERSION}}'
@@ -76,12 +76,6 @@ tasks:
       - bash taskfiles/linux/funcs.sh verify
       - bash taskfiles/linux/funcs.sh smoke
       - bash taskfiles/linux/funcs.sh promote
-  create:appimage:
-    summary: Build and verify an AppImage
-    cmds:
-      - task: package
-        vars:
-          FORMAT: appimage
   create:deb:
     summary: Build and verify a Debian package
     cmds:
@@ -94,12 +88,6 @@ tasks:
       - task: package
         vars:
           FORMAT: rpm
-  create:snap:
-    summary: Build and verify a Snap package
-    cmds:
-      - task: package
-        vars:
-          FORMAT: snap
   create:pacman:
     summary: Build and verify an Arch Linux package
     cmds:

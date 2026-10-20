@@ -63,8 +63,8 @@ for verification before publication; the GitHub release publishes the DMGs only.
 
 ### Linux Packaging
 
-Linux releases support AMD64 and ARM64 with AppImage, Debian (`.deb`), RPM,
-Snap, and pacman (`.pkg.tar.zst`) packages. Build natively on Ubuntu 24.04:
+Linux releases support AMD64 and ARM64 with Debian (`.deb`), RPM,
+and pacman (`.pkg.tar.zst`) packages. Build natively on Ubuntu 24.04:
 
 ```sh
 task linux:install:deps ARCH=amd64
@@ -72,8 +72,7 @@ task linux:release TAG=v1.2.3 ARCH=amd64
 ```
 
 Use `ARCH=arm64` on ARM64. All formats share one production build and must pass
-package and GUI startup checks before promotion. Snap packaging uses destructive
-mode and requires a disposable Ubuntu machine. See the
+package and GUI startup checks before promotion. See the
 [Linux task documentation](taskfiles/linux/README.md) for local packaging,
 dependencies, verification, filenames, and installation commands.
 
@@ -124,7 +123,7 @@ from x64 to ARM64 on ARM64 Windows. Downgrades and replacement packages with the
 same version are blocked; use the original MSI for maintenance. Upgrade and
 uninstall preserve `%AppData%\raven`. MSI packages are unsigned.
 
-The release workflow validates Windows MSI packages, all five Linux package
+The release workflow validates Windows MSI packages, all three Linux package
 formats, and macOS DMGs on AMD64 and ARM64 before publishing the installers.
 SHA-256 sidecars are verified before publication and are not published as release assets.
 Run the Release workflow manually with a version to execute its checks without

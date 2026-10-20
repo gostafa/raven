@@ -133,15 +133,11 @@ jobs:
             raven-${{ github.ref_name }}-macos-arm64/raven-${{ github.ref_name }}-macos-arm64.dmg
             raven-${{ github.ref_name }}-windows-amd64/raven-${{ github.ref_name }}-windows-amd64.msi
             raven-${{ github.ref_name }}-windows-arm64/raven-${{ github.ref_name }}-windows-arm64.msi
-            raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.AppImage
             raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.deb
             raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.rpm
-            raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.snap
             raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.pkg.tar.zst
-            raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.AppImage
             raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.deb
             raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.rpm
-            raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.snap
             raven-${{ github.ref_name }}-linux-arm64/raven-${{ github.ref_name }}-linux-arm64.pkg.tar.zst
   cleanup:
     name: Clean up release artifacts

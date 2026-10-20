@@ -48,9 +48,9 @@ validate_package() {
   validate_host
   validate_version
   case $format in
-    all) formats=(appimage deb rpm snap pacman) ;;
-    appimage|deb|rpm|snap|pacman) formats=("$format") ;;
-    *) fail 'FORMAT must be all, appimage, deb, rpm, snap, or pacman.' ;;
+    all) formats=(deb rpm pacman) ;;
+    deb|rpm|pacman) formats=("$format") ;;
+    *) fail 'FORMAT must be all, deb, rpm, or pacman.' ;;
   esac
 }
 
@@ -63,13 +63,12 @@ clean_sources() {
 validate_release() {
   validate_package
   [[ $tag == "v$version" ]] || fail 'TAG is required: vMAJOR.MINOR.PATCH.'
-  [[ $format == all ]] || fail 'Releases require all five formats.'
+  [[ $format == all ]] || fail 'Releases require all three formats.'
   clean_sources
 }
 
 install_deps() {
   validate_host
-  # Snapcraft destructive mode must run on an expendable Ubuntu 24.04 host.
   # shellcheck source=/dev/null
   source /etc/os-release
   [[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || fail 'Automatic dependency setup requires Ubuntu 24.04.'
@@ -78,12 +77,9 @@ install_deps() {
   "${elevate[@]}" apt-get update
   "${elevate[@]}" apt-get install -y --no-install-recommends build-essential pkg-config \
     libgtk-4-dev libwebkitgtk-6.0-dev libnotify-dev dpkg-dev desktop-file-utils \
-    librsvg2-bin patchelf file binutils rpm libarchive-tools zstd squashfs-tools snapd \
+    file binutils rpm libarchive-tools zstd \
     xvfb xauth xdotool dbus-x11
-  if ! snap list snapcraft >/dev/null 2>&1; then
-    "${elevate[@]}" snap install snapcraft --classic --channel=8.x/stable
-  fi
-  require_tools snapcraft
+
 }
 
 install_tooling() {
@@ -112,7 +108,7 @@ desktop() {
 }
 
 extension() {
-  case $1 in appimage) printf AppImage ;; pacman) printf pkg.tar.zst ;; *) printf '%s' "$1" ;; esac
+  case $1 in pacman) printf pkg.tar.zst ;; *) printf '%s' "$1" ;; esac
 }
 
 prepare() {
@@ -122,10 +118,8 @@ prepare() {
   local kind
   for kind in "${formats[@]}"; do
     case $kind in
-      appimage) require_tools patchelf ;;
       deb) require_tools dpkg-deb ;;
       rpm) require_tools rpm bsdtar ;;
-      snap) require_tools snapcraft snap unsquashfs ;;
       pacman) require_tools tar zstd ;;
     esac
   done
@@ -154,32 +148,11 @@ bundle() {
   for kind in "${formats[@]}"; do
     output="$stage/packages/$artifact.$(extension "$kind")"
     case $kind in
-      appimage)
-        mkdir -p "$stage/appimage" "$stage/appimage-output"
-        APPIMAGE_EXTRACT_AND_RUN=1 VERSION="$version" wails3 generate appimage -binary "$payload/usr/bin/raven" \
-          -icon "$payload/usr/share/icons/hicolor/1024x1024/apps/raven.png" \
-          -desktopfile "$payload/usr/share/applications/raven.desktop" \
-          -outputdir "$stage/appimage-output" -builddir "$stage/appimage"
-        mv "$stage/appimage-output/raven-$native_arch.AppImage" "$output"
-        chmod 755 "$output"
-        ;;
       deb|rpm|pacman)
         local packager=$kind
         [[ $kind != pacman ]] || packager=archlinux
         wails3 tool package -name "$artifact" -format "$packager" \
           -config "$root/build/linux/nfpm/nfpm.yaml" -out "$stage/packages"
-        ;;
-      snap)
-        mkdir -p "$stage/snap"
-        cp -a "$payload" "$stage/snap/payload"
-        sed -e "s/@VERSION@/$version/g" -e "s/@ARCH@/$arch/g" -e "s/@TRIPLET@/$triplet/g" \
-          "$root/build/linux/snap/snapcraft.yaml" > "$stage/snap/snapcraft.yaml"
-        # core24 destructive builds install apt packages and build-snaps on the host.
-        # Resolve the executable before sudo replaces PATH (Snapcraft lives in /snap/bin).
-        local elevate=() snapcraft_command
-        if (( EUID != 0 )); then elevate=(sudo); fi
-        snapcraft_command=$(command -v snapcraft)
-        (cd "$stage/snap" && "${elevate[@]}" "$snapcraft_command" pack --destructive-mode --output "$output")
         ;;
     esac
     [[ -s $output ]] || fail "Missing package: $output"
@@ -191,15 +164,7 @@ expect() { [[ $1 == "$2" ]] || fail "Expected $2; found $1 ($3)."; }
 verify_elf() {
   [[ -x $1 ]] || fail "Missing executable: $1"
   readelf -h "$1" | grep -Eq "Machine:.*$elf_machine" || fail "Incorrect ELF architecture: $1"
-  if [[ ${2:-} == bundled ]]; then
-    # Bundlers can rewrite ELF RPATHs; the Go build ID must still identify our build.
-    local expected_id
-    expected_id=$(go tool buildid "$payload/usr/bin/raven")
-    [[ -n $expected_id ]] || fail 'Missing Go build ID in the staged binary.'
-    expect "$(go tool buildid "$1")" "$expected_id" 'bundled Go build ID'
-  else
-    cmp "$payload/usr/bin/raven" "$1" || fail "Package executable differs from the built payload: $1"
-  fi
+  cmp "$payload/usr/bin/raven" "$1" || fail "Package executable differs from the built payload: $1"
 }
 
 verify_payload() {
@@ -209,13 +174,6 @@ verify_payload() {
   cmp "$payload/usr/share/icons/hicolor/1024x1024/apps/raven.png" \
     "$directory/usr/share/icons/hicolor/1024x1024/apps/raven.png"
   desktop-file-validate "$directory/usr/share/applications/raven.desktop"
-}
-
-verify_webkit() {
-  local directory=$1 name
-  for name in WebKitWebProcess WebKitNetworkProcess libwebkitgtkinjectedbundle.so; do
-    [[ -n $(find "$directory" -name "$name" -print -quit) ]] || fail "Missing WebKit resource: $name"
-  done
 }
 
 verify() {
@@ -229,16 +187,6 @@ verify() {
     rm -rf "$directory"
     mkdir -p "$directory"
     case $kind in
-      appimage)
-        readelf -h "$file" | grep -Eq "Machine:.*$elf_machine" || fail 'Incorrect AppImage runtime architecture.'
-        (cd "$directory" && "$file" --appimage-extract >/dev/null)
-        directory="$directory/squashfs-root"
-        verify_elf "$directory/usr/bin/raven" bundled
-        verify_bundled_desktop "$directory/raven.desktop"
-        grep -Fxq "X-AppImage-Version=$version" "$directory/raven.desktop" || fail 'Incorrect AppImage version.'
-        cmp "$root/build/appicon.png" "$directory/.DirIcon"
-        verify_webkit "$directory"
-        ;;
       deb)
         expect "$(dpkg-deb -f "$file" Package)" raven 'DEB name'
         expect "$(dpkg-deb -f "$file" Version)" "$version-1" 'DEB version'
@@ -271,32 +219,8 @@ verify() {
         grep -qx 'depend = webkitgtk-6.0' "$metadata"
         verify_payload "$directory"
         ;;
-      snap)
-        unsquashfs -no-progress -d "$directory/root" "$file" >/dev/null
-        directory="$directory/root"
-        metadata="$directory/meta/snap.yaml"
-        grep -Eq '^name: raven$' "$metadata"
-        grep -Eq "^version: ['\"]?${version}['\"]?$" "$metadata"
-        grep -Eq '^base: core24$' "$metadata"
-        grep -Eq '^confinement: strict$' "$metadata"
-        grep -Eq "^[[:space:]]*- $arch$" "$metadata"
-        verify_elf "$directory/usr/bin/raven" bundled
-        [[ -s $directory/meta/gui/raven.desktop ]] || fail 'Missing Snap desktop entry.'
-        verify_webkit "$directory"
-        ;;
     esac
   done
-}
-
-verify_bundled_desktop() {
-  local file=$1 line
-  desktop-file-validate "$file"
-  # linuxdeploy appends AppImage metadata; preserve every original desktop entry.
-  while IFS= read -r line; do
-    if [[ -n $line ]] && ! grep -Fxq -- "$line" "$file"; then
-      fail "Changed desktop entry: $line"
-    fi
-  done < "$payload/usr/share/applications/raven.desktop"
 }
 
 smoke_session() {
@@ -322,9 +246,8 @@ smoke_command() {
   shift
   local status=0 log="$stage/$label.log"
   # Require a visible native window and continued liveness; retain WebKit's sandbox.
-  # -ac lets a strictly confined snap access the disposable display without a /tmp Xauthority file.
   timeout --signal=TERM --kill-after=5s 40s dbus-run-session -- \
-    xvfb-run -a --server-args='-screen 0 1280x800x24 -ac -nolisten tcp' \
+    xvfb-run -a --server-args='-screen 0 1280x800x24 -nolisten tcp' \
     env GDK_BACKEND=x11 GSK_RENDERER=cairo LIBGL_ALWAYS_SOFTWARE=1 \
     XDG_CONFIG_HOME="$stage/config-$label" XDG_DATA_HOME="$stage/data-$label" \
     bash "$root/taskfiles/linux/funcs.sh" smoke-session "$@" > "$log" 2>&1 || status=$?
@@ -341,30 +264,7 @@ smoke() {
   local kind directory
   for kind in "${formats[@]}"; do
     directory="$stage/verified/$kind"
-    case $kind in
-      appimage)
-        smoke_command appimage env APPIMAGE_EXTRACT_AND_RUN=1 "$stage/packages/$artifact.AppImage"
-        ;;
-      snap)
-        # Install the actual snap to exercise confinement and extension command chains.
-        # Sideloaded packages need --dangerous because no Snap Store assertion is used.
-        local elevate=()
-        if (( EUID != 0 )); then elevate=(sudo); fi
-        # CI runners may have no login session. Snap needs the real user manager
-        # to create its confinement scope, rather than the disposable GUI bus.
-        local user_id
-        user_id=$(id -u)
-        "${elevate[@]}" systemctl start "user@$user_id.service"
-        "${elevate[@]}" snap install --dangerous "$stage/packages/$artifact.snap"
-        local status=0
-        ("${elevate[@]}" snap connect raven:webkit-sandbox :browser-support &&
-          smoke_command snap env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$user_id/bus" \
-            snap run raven) || status=$?
-        "${elevate[@]}" snap remove --purge raven
-        (( status == 0 )) || fail 'Snap startup check failed.'
-        ;;
-      *) smoke_command "$kind" "$directory/usr/bin/raven" ;;
-    esac
+    smoke_command "$kind" "$directory/usr/bin/raven"
   done
   (cd "$stage/packages" && sha256sum ./*) > "$stage/smoked.sha256"
 }
@@ -413,8 +313,8 @@ main() {
   root=$PWD
   arch=${RAVEN_LINUX_ARCH:-}
   case $arch in
-    amd64) native_arch=x86_64; triplet=x86_64-linux-gnu; elf_machine='Advanced Micro Devices X86-64' ;;
-    arm64) native_arch=aarch64; triplet=aarch64-linux-gnu; elf_machine=AArch64 ;;
+    amd64) native_arch=x86_64; elf_machine='Advanced Micro Devices X86-64' ;;
+    arm64) native_arch=aarch64; elf_machine=AArch64 ;;
     *) fail 'ARCH must be amd64 or arm64.' ;;
   esac
   version=${RAVEN_LINUX_VERSION:-}
@@ -423,7 +323,7 @@ main() {
   stage="$root/bin/.linux/$arch"
   payload="$stage/payload"
   artifact="raven-v$version-linux-$arch"
-  export PATH="$root/.tools:$PATH:/snap/bin"
+  export PATH="$root/.tools:$PATH"
   case $command in
     validate-host) validate_host ;;
     validate-build) validate_build ;;
