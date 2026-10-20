@@ -76,7 +76,7 @@ function New-WebViewTestTransform {
         }
         $modified.Commit()
         if (!$modified.GenerateTransform($original, $transform)) { throw 'Could not generate WebView2 test transform.' }
-        $modified.CreateTransformSummaryInfo($original, 0, 0)
+        [void]$modified.CreateTransformSummaryInfo($original, $transform, 0, 0)
     } finally {
         if ($modified) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($modified) }
         if ($original) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($original) }

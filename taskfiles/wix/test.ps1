@@ -82,6 +82,57 @@ try {
         }
         $rows = @(Read-MsiRows $database "SELECT ``Property`` FROM ``Property`` WHERE ``Property`` = 'Missing'" 1)
         if ($rows.Count -ne 0) { throw 'Empty MSI queries must not emit COM return values.' }
+
+        # Build a minimal real MSI for the smoke test's registry-search transform.
+        foreach ($query in @(
+            "INSERT INTO ``Property`` (``Property``, ``Value``) VALUES ('ProductCode', '{74CE072D-0DA0-40A3-8700-7AE3A65B9769}')",
+            'CREATE TABLE `RegLocator` (`Signature_` CHAR(72) NOT NULL, `Root` SHORT NOT NULL, `Key` CHAR(255) NOT NULL, `Name` CHAR(255), `Type` SHORT PRIMARY KEY `Signature_`)',
+            "INSERT INTO ``RegLocator`` (``Signature_``, ``Root``, ``Key``, ``Name``, ``Type``) VALUES ('WebViewUser', 1, 'Software\Original\User', 'pv', 2)",
+            "INSERT INTO ``RegLocator`` (``Signature_``, ``Root``, ``Key``, ``Name``, ``Type``) VALUES ('WebViewMachine', 2, 'Software\Original\Machine', 'pv', 2)"
+        )) {
+            $view = $database.OpenView($query)
+            try { [void]$view.Execute() } finally {
+                [void]$view.Close()
+                [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
+            }
+        }
+        $summary = $database.SummaryInformation(1)
+        try {
+            $summary.Property(7) = 'x64;1033'
+            [void]$summary.Persist()
+        } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($summary) }
+        [void]$database.Commit()
+    } finally {
+        if ($null -ne $database) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) }
+        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)
+    }
+
+    $transformHelper = $smoke.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'New-WebViewTestTransform'
+    }, $true)
+    . ([scriptblock]::Create($transformHelper.Extent.Text))
+    $candidate = Join-Path $temporary 'rows.msi'
+    $testCopy = Join-Path $temporary 'webview-test.msi'
+    $transform = Join-Path $temporary 'webview-test.mst'
+    $registryFixture = 'Software\Raven\InstallerTests\Transform'
+    New-WebViewTestTransform
+    $installer = New-Object -ComObject WindowsInstaller.Installer
+    $database = $null
+    try {
+        $summary = $installer.SummaryInformation($transform, 0)
+        try {
+            if (!$summary.Property(9)) { throw 'Transform summary must contain product identity information.' }
+        } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($summary) }
+        $database = $installer.OpenDatabase($candidate, 1)
+        [void]$database.ApplyTransform($transform, 0)
+        $rows = @(Read-MsiRows $database 'SELECT `Signature_`, `Root`, `Key` FROM `RegLocator`' 3)
+        if ($rows.Count -ne 2) { throw 'Transform must preserve both WebView2 searches.' }
+        foreach ($row in $rows) {
+            $location = if ($row[0] -eq 'WebViewUser') { 'User' } else { 'Machine' }
+            if ($row[1] -ne '1' -or $row[2] -cne "$registryFixture\$location") {
+                throw 'Transform must redirect WebView2 searches to the test registry fixture.'
+            }
+        }
     } finally {
         if ($null -ne $database) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) }
         [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)
