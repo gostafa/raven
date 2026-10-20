@@ -174,7 +174,12 @@ bundle() {
         cp -a "$payload" "$stage/snap/payload"
         sed -e "s/@VERSION@/$version/g" -e "s/@ARCH@/$arch/g" -e "s/@TRIPLET@/$triplet/g" \
           "$root/build/linux/snap/snapcraft.yaml" > "$stage/snap/snapcraft.yaml"
-        (cd "$stage/snap" && snapcraft --destructive-mode --output "$output")
+        # core24 destructive builds install apt packages and build-snaps on the host.
+        # Resolve the executable before sudo replaces PATH (Snapcraft lives in /snap/bin).
+        local elevate=() snapcraft_command
+        if (( EUID != 0 )); then elevate=(sudo); fi
+        snapcraft_command=$(command -v snapcraft)
+        (cd "$stage/snap" && "${elevate[@]}" "$snapcraft_command" pack --destructive-mode --output "$output")
         ;;
     esac
     [[ -s $output ]] || fail "Missing package: $output"
