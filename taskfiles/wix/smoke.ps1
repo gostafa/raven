@@ -16,14 +16,16 @@ $application = Join-Path $env:LOCALAPPDATA 'Programs/Raven/raven.exe'
 $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Raven/Raven.lnk'
 $sentinel = Join-Path $env:APPDATA "raven/msi-test-$([guid]::NewGuid()).txt"
 $registryFixture = "Software\Raven\InstallerTests\$([guid]::NewGuid())"
-$transform = Join-Path $logs 'webview-test.mst'
+$transform = [IO.Path]::GetFullPath((Join-Path $logs 'webview-test.mst'))
 $testCopy = Join-Path $logs 'webview-test.msi'
 $counter = 0
 
 function Invoke-MsiTest {
     param([string]$Name, [string]$Operation, [string]$Package, [string[]]$Extra = @(), [int[]]$ExpectedCodes = @(0, 3010))
     $script:counter++
-    $log = Join-Path $logs "$script:counter-$Name.log"
+    # PowerShell accepts mixed separators; msiexec needs native absolute paths.
+    $Package = [IO.Path]::GetFullPath($Package)
+    $log = [IO.Path]::GetFullPath((Join-Path $logs "$script:counter-$Name.log"))
     $arguments = @($Operation, "`"$Package`"", '/qn', '/norestart', '/L*v', "`"$log`"") + $Extra
     $process = Start-Process -FilePath "$env:SystemRoot/System32/msiexec.exe" -ArgumentList $arguments -Wait -PassThru
     if ($process.ExitCode -notin $ExpectedCodes) { throw "$Name failed with exit code $($process.ExitCode); see $log." }
@@ -89,6 +91,7 @@ $hash = (Get-PackagingHash $candidate).ToLowerInvariant()
 if ($checksum -cne "$hash  $([IO.Path]::GetFileName($candidate))") { throw 'Candidate checksum mismatch.' }
 New-Item -ItemType Directory -Path (Split-Path $sentinel) -Force | Out-Null
 Set-Content -LiteralPath $sentinel -Value 'preserve Raven data' -Encoding ascii
+$testFailed = $false
 try {
     New-WebViewTestTransform
     $transforms = @("TRANSFORMS=`"$transform`"")
@@ -140,13 +143,30 @@ try {
         throw 'Uninstall left application files or shortcuts behind.'
     }
     Assert-DataPreserved
+} catch {
+    $testFailed = $true
+    throw
 } finally {
+    $cleanupFailure = $null
     foreach ($package in @($candidate, "$fixtures/new.msi", "$fixtures/old.msi", "$root/bin/msi-tests/amd64/old.msi")) {
-        if (Test-Path -LiteralPath $package) {
-            Invoke-MsiTest cleanup /x $package @() @(0, 3010, 1605)
+        try {
+            if (Test-Path -LiteralPath $package) {
+                Invoke-MsiTest cleanup /x $package @() @(0, 3010, 1605)
+            }
+        } catch {
+            if ($null -eq $cleanupFailure) { $cleanupFailure = $_ }
+            Write-Warning "MSI cleanup failed: $_"
         }
     }
-    [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($registryFixture, $false)
-    Remove-Item -LiteralPath $sentinel -Force
+    try { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($registryFixture, $false) } catch {
+        if ($null -eq $cleanupFailure) { $cleanupFailure = $_ }
+        Write-Warning "Registry cleanup failed: $_"
+    }
+    try { Remove-Item -LiteralPath $sentinel -Force } catch {
+        if ($null -eq $cleanupFailure) { $cleanupFailure = $_ }
+        Write-Warning "User data fixture cleanup failed: $_"
+    }
+    # Cleanup must fail a successful test, but must not replace the original test error.
+    if (!$testFailed -and $null -ne $cleanupFailure) { throw $cleanupFailure }
 }
 Write-Host "Native $Arch MSI installation tests passed."

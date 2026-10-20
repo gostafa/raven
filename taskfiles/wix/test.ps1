@@ -24,6 +24,38 @@ Assert-Throws { Assert-PackagingInput '1.2.3' 'amd64' 'true' } 'development buil
 $temporary = Join-Path ([IO.Path]::GetTempPath()) "raven-wix-tests-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $temporary | Out-Null
 try {
+    # Load the real smoke-test launcher without running installations on the test host.
+    $tokens = $null
+    $parseErrors = $null
+    $smoke = [Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $PSScriptRoot 'smoke.ps1'), [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -ne 0) { throw 'Smoke test script has PowerShell syntax errors.' }
+    $launcher = $smoke.Find({ param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-MsiTest'
+    }, $true)
+    . ([scriptblock]::Create($launcher.Extent.Text))
+    $logs = "$temporary/log directory"
+    $counter = 0
+    $script:msiExitCode = 0
+    function Start-Process {
+        param($FilePath, $ArgumentList, [switch]$Wait, [switch]$PassThru)
+        $script:msiArguments = $ArgumentList
+        return [pscustomobject]@{ ExitCode = $script:msiExitCode }
+    }
+    try {
+        $package = "$temporary/package directory/raven.msi"
+        Invoke-MsiTest launcher /i $package
+        $expectedPackage = '"' + $package.Replace('/', '\') + '"'
+        $expectedLog = '"' + "$logs/1-launcher.log".Replace('/', '\') + '"'
+        if ($msiArguments[1] -cne $expectedPackage -or $msiArguments[5] -cne $expectedLog) {
+            throw 'msiexec package and log paths must use native separators and preserve spaces.'
+        }
+        $script:msiExitCode = 1619
+        Assert-Throws { Invoke-MsiTest launcher /i $package } 'unreadable MSI must fail'
+        $script:msiExitCode = 1605
+        Invoke-MsiTest cleanup /x $package @() @(0, 3010, 1605)
+    } finally { Remove-Item Function:Start-Process }
+
     # Exercise the actual COM output stream: Execute/Close must not become rows.
     $installer = New-Object -ComObject WindowsInstaller.Installer
     $database = $null
