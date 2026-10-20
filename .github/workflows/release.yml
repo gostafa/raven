@@ -31,7 +31,7 @@ jobs:
           persist-credentials: false
       - name: Validate stable MSI release tag
         id: version
-        uses: ./.github/actions/validate-version
+        uses: $/.github/actions/validate-version
         with:
           tag: >-
             ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
@@ -52,7 +52,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Build and upload Windows release
-        uses: ./.github/actions/build-windows
+        uses: $/.github/actions/build-windows
         with:
           tag: v${{ needs.validate.outputs.version }}
           arch: ${{ matrix.arch }}
@@ -71,7 +71,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Publish verified MSI files
-        uses: ./.github/actions/publish-release
+        uses: $/.github/actions/publish-release
         with:
           tag: ${{ github.ref_name }}
           name: Raven ${{ github.ref_name }}

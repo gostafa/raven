@@ -32,6 +32,15 @@ runs:
   steps:
     - name: Set up Task
       uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
+    - name: Initialize WinGet package source
+      shell: pwsh
+      run: |
+        task taskotter:winget:install
+        if ($LASTEXITCODE -ne 0) { throw 'WinGet setup failed' }
+        winget source reset --name winget --force --disable-interactivity
+        if ($LASTEXITCODE -ne 0) { throw 'WinGet source reset failed' }
+        winget source update --name winget --disable-interactivity
+        if ($LASTEXITCODE -ne 0) { throw 'WinGet source update failed' }
     - name: Build and validate release MSI
       id: build
       shell: pwsh
