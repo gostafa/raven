@@ -75,7 +75,9 @@ function Read-MsiRows {
     param([object]$Database, [string]$Query, [int]$Columns)
     $view = $Database.OpenView($Query)
     try {
-        $view.Execute()
+        # COM methods can emit null return values into PowerShell's output stream.
+        # Only records belong in the rows returned to callers.
+        [void]$view.Execute()
         while ($null -ne ($record = $view.Fetch())) {
             try {
                 $row = @()
@@ -85,7 +87,7 @@ function Read-MsiRows {
             } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($record) }
         }
     } finally {
-        $view.Close()
+        [void]$view.Close()
         [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
     }
 }

@@ -24,6 +24,36 @@ Assert-Throws { Assert-PackagingInput '1.2.3' 'amd64' 'true' } 'development buil
 $temporary = Join-Path ([IO.Path]::GetTempPath()) "raven-wix-tests-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $temporary | Out-Null
 try {
+    # Exercise the actual COM output stream: Execute/Close must not become rows.
+    $installer = New-Object -ComObject WindowsInstaller.Installer
+    $database = $null
+    try {
+        $database = $installer.OpenDatabase((Join-Path $temporary 'rows.msi'), 3)
+        foreach ($query in @(
+            'CREATE TABLE `Property` (`Property` CHAR(72) NOT NULL, `Value` CHAR(0) PRIMARY KEY `Property`)',
+            "INSERT INTO ``Property`` (``Property``, ``Value``) VALUES ('ProductVersion', '1.2.3')"
+        )) {
+            $view = $database.OpenView($query)
+            try { [void]$view.Execute() } finally {
+                [void]$view.Close()
+                [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
+            }
+        }
+        $rows = @(Read-MsiRows $database 'SELECT `Property`, `Value` FROM `Property`' 2)
+        if ($rows.Count -ne 1 -or $null -eq $rows[0] -or
+            $rows[0][0] -cne 'ProductVersion' -or $rows[0][1] -cne '1.2.3') {
+            throw 'MSI queries must return only data rows, without COM return values.'
+        }
+        $rows = @(Read-MsiRows $database 'SELECT `Property` FROM `Property`' 1)
+        if ($rows.Count -ne 1 -or $rows[0] -isnot [array] -or $rows[0][0] -cne 'ProductVersion') {
+            throw 'Single-column MSI rows must remain arrays.'
+        }
+        $rows = @(Read-MsiRows $database "SELECT ``Property`` FROM ``Property`` WHERE ``Property`` = 'Missing'" 1)
+        if ($rows.Count -ne 0) { throw 'Empty MSI queries must not emit COM return values.' }
+    } finally {
+        if ($null -ne $database) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database) }
+        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)
+    }
     $payload = Join-Path $temporary 'raven.exe'
     $msi = Join-Path $temporary 'raven.msi'
     $proof = Join-Path $temporary 'verified.json'
