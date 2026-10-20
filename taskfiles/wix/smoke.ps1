@@ -13,7 +13,9 @@ New-Item -ItemType Directory -Path $logs -Force | Out-Null
 $fixtures = Join-Path $root "bin/msi-tests/$Arch"
 $candidate = Join-Path $root "dist/raven-$Version-windows-$Arch.msi"
 $application = Join-Path $env:LOCALAPPDATA 'Programs/Raven/raven.exe'
-$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Raven/Raven.lnk'
+# Clean runner profiles may not have a Programs folder until the first install.
+# Resolve its configured location even before it exists.
+$shortcut = Join-Path ([Environment]::GetFolderPath('Programs', 'DoNotVerify')) 'Raven/Raven.lnk'
 $sentinel = Join-Path $env:APPDATA "raven/msi-test-$([guid]::NewGuid()).txt"
 $registryFixture = "Software\Raven\InstallerTests\$([guid]::NewGuid())"
 $transform = [IO.Path]::GetFullPath((Join-Path $logs 'webview-test.mst'))
@@ -43,7 +45,7 @@ function Invoke-MsiTest {
 function Assert-Installed {
     param([string]$InstalledVersion, [string]$InstalledArch)
     Assert-Payload $application $InstalledVersion $InstalledArch
-    if (!(Test-Path -LiteralPath $shortcut)) { throw 'Start menu shortcut is missing.' }
+    if (!(Test-Path -LiteralPath $shortcut)) { throw "Start menu shortcut is missing: $shortcut" }
     # Per-user MSI products need not have a CurrentVersion\Uninstall entry.
     # Query Windows Installer for the current user's unmanaged products (context 2).
     $installer = New-Object -ComObject WindowsInstaller.Installer
