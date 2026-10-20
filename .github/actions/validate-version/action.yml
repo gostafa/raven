@@ -1,0 +1,35 @@
+---
+name: Validate Release Version
+description: Validate stable release versions against shared cross-platform limits.
+
+inputs:
+  tag:
+    description: Release tag (vMAJOR.MINOR.PATCH)
+    required: true
+
+outputs:
+  version:
+    description: Validated version without the v prefix
+    value: ${{ steps.validate.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate version
+      id: validate
+      shell: bash
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+      run: |-
+        pattern='^v(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,4})$'
+        if [[ ! "$RELEASE_TAG" =~ $pattern ]]; then
+          echo "::error::Expected a stable release tag: vMAJOR.MINOR.PATCH"
+          exit 1
+        fi
+        version="${RELEASE_TAG#v}"
+        IFS=. read -r major minor patch <<< "$version"
+        if (( 10#$major > 255 || 10#$minor > 255 || 10#$patch > 65535 )); then
+          echo "::error::Version exceeds cross-platform limits (255.255.65535)."
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"

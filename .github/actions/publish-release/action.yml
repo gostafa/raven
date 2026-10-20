@@ -1,0 +1,84 @@
+---
+name: Publish GitHub release
+description: Download current-run artifacts, verify selected assets, and publish a new tagged release on Ubuntu.
+
+inputs:
+  tag:
+    description: Existing Git tag to publish
+    required: true
+  artifact-pattern:
+    description: Glob matching current-run artifact names
+    required: true
+  files:
+    description: Newline-delimited exact asset paths including artifact subdirectories
+    required: true
+  name:
+    description: Release title (defaults to the tag)
+    required: false
+  github-token:
+    description: GitHub token with contents write permission
+    required: false
+    default: ${{ github.token }}
+  verify-checksums:
+    description: Require and verify adjacent SHA-256 sidecars
+    required: false
+    default: 'true'
+
+outputs:
+  release-id:
+    description: Published release ID
+    value: ${{ steps.publish.outputs.id }}
+  release-url:
+    description: Published release URL
+    value: ${{ steps.publish.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check release and prepare isolated download directory
+      id: prepare
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+      env:
+        PUBLISH_ACTION_PATH: ${{ github.action_path }}
+        RELEASE_TAG: ${{ inputs.tag }}
+        RELEASE_FILES: ${{ inputs.files }}
+        ARTIFACT_PATTERN: ${{ inputs.artifact-pattern }}
+        VERIFY_CHECKSUMS: ${{ inputs.verify-checksums }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { prepare } = require(`${process.env.PUBLISH_ACTION_PATH}/funcs.cjs`);
+          await prepare({ github, context, core, env: process.env });
+    - name: Download current-run release artifacts
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+      with:
+        pattern: ${{ inputs.artifact-pattern }}
+        path: ${{ steps.prepare.outputs.download-path }}
+        merge-multiple: false
+        digest-mismatch: error
+    - name: Verify exact release assets
+      id: verify
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+      env:
+        PUBLISH_ACTION_PATH: ${{ github.action_path }}
+        RELEASE_FILES: ${{ inputs.files }}
+        VERIFY_CHECKSUMS: ${{ inputs.verify-checksums }}
+        DOWNLOAD_PATH: ${{ steps.prepare.outputs.download-path }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { verifyAssets } = require(`${process.env.PUBLISH_ACTION_PATH}/funcs.cjs`);
+          const files = await verifyAssets(process.env);
+          core.setOutput('files', files.join('\n'));
+    - name: Publish verified release assets
+      id: publish
+      # v3.0.3: Keep publication declarative with generated notes, strict asset matching, and release outputs.
+      uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # zizmor: ignore[superfluous-actions]
+      with:
+        token: ${{ inputs.github-token }}
+        tag_name: ${{ inputs.tag }}
+        name: ${{ inputs.name || inputs.tag }}
+        files: ${{ steps.verify.outputs.files }}
+        generate_release_notes: true
+        fail_on_unmatched_files: true
+        overwrite_files: false

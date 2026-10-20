@@ -1,0 +1,52 @@
+---
+name: Build Windows release
+description: Install Task, package a verified Windows MSI through Taskfiles, and upload release artifacts.
+
+inputs:
+  tag:
+    description: Release tag (vMAJOR.MINOR.PATCH)
+    required: true
+  arch:
+    description: Windows architecture (amd64 or arm64)
+    required: true
+
+outputs:
+  artifact-name:
+    description: Uploaded artifact name
+    value: ${{ steps.build.outputs.artifact-name }}
+  msi-name:
+    description: MSI filename
+    value: ${{ steps.build.outputs.msi-name }}
+  checksum-name:
+    description: Checksum filename
+    value: ${{ steps.build.outputs.checksum-name }}
+  artifact-id:
+    description: Uploaded artifact ID
+    value: ${{ steps.upload.outputs.artifact-id }}
+  artifact-url:
+    description: Uploaded artifact URL
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Task
+      uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
+    - name: Build and validate release MSI
+      id: build
+      shell: pwsh
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+        PACKAGE_ARCH: ${{ inputs.arch }}
+      run: |
+        task windows:release "TAG=$env:RELEASE_TAG" "ARCH=$env:PACKAGE_ARCH"
+        if ($LASTEXITCODE -ne 0) { throw 'Windows release failed' }
+    - name: Upload release candidate and checksum
+      id: upload
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: ${{ steps.build.outputs.artifact-name }}
+        path: |
+          ${{ steps.build.outputs.msi-path }}
+          ${{ steps.build.outputs.checksum-path }}
+        if-no-files-found: error

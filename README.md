@@ -47,8 +47,11 @@ Output is written to `bin/`.
 
 ### Windows MSI Packaging
 
-Package on Windows with the **.NET 10 SDK** installed. WiX Toolset **5.0.2** is
-restored from the repository-local tool manifest; no global WiX installation is used.
+Package on Windows; the **.NET 10 SDK** is installed automatically through
+TaskOtter’s WinGet module when missing. To install it ahead of time, run
+`task dotnet:install`. See the [.NET tasks](taskfiles/dotnet/README.md) for
+SDK information and common project commands. WiX Toolset **5.0.2** is restored
+from the repository-local tool manifest; no global WiX installation is used.
 From the repository root, build each architecture separately:
 
 ```sh

@@ -3,8 +3,103 @@ version: '3.5'
 
 includes:
   common: ../common/Taskfile.yml
+  go:
+    taskfile: ../../taskotter/go/Taskfile.yml
+    internal: true
+  winget:
+    taskfile: ../../taskotter/winget/Taskfile.yml
+    internal: true
 
 tasks:
+  release:
+    desc: Install tooling and package a tagged Windows release
+    preconditions:
+      - sh: '{{if eq OS "windows"}}true{{else}}false{{end}}'
+        msg: Windows releases require a Windows host
+    env:
+      RAVEN_RELEASE_TAG: '{{.TAG | default ""}}'
+      RAVEN_RELEASE_ARCH: '{{.ARCH | default ""}}'
+      CI: '1'
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "
+        \$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest;
+        \$tag = \$env:RAVEN_RELEASE_TAG;
+        \$arch = \$env:RAVEN_RELEASE_ARCH;
+        if (\$tag -cnotmatch '\Av(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,4})\z') {
+            throw 'TAG must be vMAJOR.MINOR.PATCH without leading zeroes or suffixes.'
+        }
+        \$version = \$tag.Substring(1);
+        \$parts = \$version.Split('.');
+        if ([int]\$parts[0] -gt 255 -or [int]\$parts[1] -gt 255 -or [int]\$parts[2] -gt 65535) {
+            throw 'MSI version limits are 255.255.65535.'
+        }
+        if (\$arch -cnotin @('amd64', 'arm64')) { throw 'ARCH must be amd64 or arm64.' }
+        function Refresh-ReleasePath {
+            {{.WINGET_LOAD}};
+            {{.GO_LOAD}};
+        }
+        function Invoke-ReleaseTask([string[]]\$taskArgs) {
+            & task @taskArgs;
+            if (\$LASTEXITCODE -ne 0) { throw ('Task failed: ' + (\$taskArgs -join ' ')) }
+            Refresh-ReleasePath;
+        }
+        Refresh-ReleasePath;
+        \$goMatch = [regex]::Match((Get-Content go.mod -Raw), '(?m)^go ([0-9]+\.[0-9]+\.[0-9]+)\r?\$');
+        if (!\$goMatch.Success) { throw 'Could not determine Go version from go.mod.' }
+        \$goVersion = \$goMatch.Groups[1].Value;
+        \$package = Get-Content package.json -Raw | ConvertFrom-Json;
+        if (\$package.packageManager -cnotmatch '\Abun@([0-9]+\.[0-9]+\.[0-9]+)\z') {
+            throw 'package.json must pin a Bun version.'
+        }
+        \$bunVersion = \$Matches[1];
+        if (!(Get-Command go -ErrorAction SilentlyContinue)) {
+            Invoke-ReleaseTask @('taskotter:go:install', ('WINGET_VERSION=' + \$goVersion));
+        }
+        # Go selects the exact repository toolchain even when the host Go is older or newer.
+        \$env:GOTOOLCHAIN = 'go' + \$goVersion;
+        \$actualGo = & go env GOVERSION;
+        if (\$LASTEXITCODE -ne 0 -or \$actualGo -cne ('go' + \$goVersion)) {
+            throw 'The repository Go toolchain is unavailable.'
+        }
+        if (!(Get-Command bun -ErrorAction SilentlyContinue)) {
+            Invoke-ReleaseTask @('--taskfile', 'taskotter/bun/Taskfile.yml', 'install',
+                ('WINGET_VERSION=' + \$bunVersion));
+        }
+        \$actualBun = & bun --version;
+        if (\$LASTEXITCODE -ne 0) { throw 'Could not determine Bun version.' }
+        if (\$actualBun -cne \$bunVersion) {
+            Invoke-ReleaseTask @('--taskfile', 'taskotter/winget/Taskfile.yml', 'upgrade',
+                'WINGET_INSTALLABLE=Oven-sh.Bun', ('WINGET_VERSION=' + \$bunVersion), 'WINGET_EXTRA_ARGS=--force');
+            \$actualBun = & bun --version;
+            if (\$LASTEXITCODE -ne 0 -or \$actualBun -cne \$bunVersion) {
+                throw ('Expected Bun ' + \$bunVersion + '; found ' + \$actualBun);
+            }
+        }
+        \$wails = & go list -m -f '{{"{{.Version}}"}}' github.com/wailsapp/wails/v3;
+        if (\$LASTEXITCODE -ne 0 -or !\$wails) { throw 'Could not determine Wails version.' }
+        Invoke-ReleaseTask @('taskotter:go:install:pkg',
+            ('GO_PKG=github.com/wailsapp/wails/v3/cmd/wails3@' + \$wails));
+        Invoke-ReleaseTask @('windows:package', ('TAG=' + \$tag), ('VERSION=' + \$version), ('ARCH=' + \$arch));
+        & git diff --exit-code;
+        if (\$LASTEXITCODE -ne 0) { throw 'Packaging changed tracked sources.' }
+        & git diff --cached --exit-code;
+        if (\$LASTEXITCODE -ne 0) { throw 'Packaging changed staged sources.' }
+        \$artifact = 'raven-' + \$tag + '-windows-' + \$arch;
+        \$msi = \$artifact + '.msi';
+        \$checksum = \$msi + '.sha256';
+        foreach (\$name in @(\$msi, \$checksum)) {
+            if (!(Test-Path -LiteralPath ('bin/' + \$name) -PathType Leaf)) {
+                throw ('Missing release output: ' + \$name);
+            }
+        }
+        if (\$env:GITHUB_OUTPUT) {
+            [string[]]\$outputs = @('artifact-name=' + \$artifact; 'msi-name=' + \$msi; 'checksum-name=' + \$checksum;
+                'msi-path=bin/' + \$msi; 'checksum-path=bin/' + \$checksum);
+            [IO.File]::AppendAllLines(\$env:GITHUB_OUTPUT, \$outputs, (New-Object Text.UTF8Encoding(\$false)));
+        }
+        Write-Host ('Verified release: ' + \$artifact);
+        "
   build:
     summary: Builds the application for Windows
     cmds:

@@ -2,10 +2,10 @@
 name: CI
 
 on:
-  # push:
-  #   branches:
-  #     - '**'
-  # workflow_call: null
+  push:
+    branches:
+      - '**'
+  workflow_call: null
   workflow_dispatch: null
 
 concurrency:

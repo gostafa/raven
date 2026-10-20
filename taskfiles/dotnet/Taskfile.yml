@@ -1,0 +1,196 @@
+---
+version: '3.5'
+
+output:
+  group:
+    begin: ::group::{{.TASK}}
+    end: '::endgroup::'
+    error_only: false
+
+silent: true
+
+includes:
+  nix:
+    taskfile: ../../taskotter/nix/Taskfile.yml
+    internal: true
+  winget:
+    taskfile: ../../taskotter/winget/Taskfile.yml
+    internal: true
+
+vars:
+  DOTNET_NIX_INSTALLABLE: '{{.DOTNET_NIX_INSTALLABLE | default "nixpkgs#dotnet-sdk_10"}}'
+  DOTNET_WINGET_INSTALLABLE: '{{.DOTNET_WINGET_INSTALLABLE | default "Microsoft.DotNet.SDK.10"}}'
+  DOTNET_DIR: '{{.DOTNET_DIR | default .USER_WORKING_DIR}}'
+
+tasks:
+  default:
+    desc: Show available .NET automation tasks
+    cmds:
+      - task --taskfile "{{.TASKFILE_DIR}}/Taskfile.yml" --list
+  install:
+    run: once
+    desc: Ensure the .NET 10 SDK is installed via Nix or WinGet
+    summary: |
+      Reuse an installed .NET 10 SDK, or install it through TaskOtter's Nix
+      (macOS/Linux) or WinGet (Windows) module. A runtime or another SDK major
+      does not satisfy this check. Package overrides must provide SDK 10.
+    cmds:
+      - task: _install:unix
+      - task: _install:windows
+  _install:unix:
+    internal: true
+    platforms:
+      - linux
+      - darwin
+    status:
+      - &sdk-unix >-
+        bash -c '{{.NIX_LOAD}};
+        sdks=$(dotnet --list-sdks) && printf "%s\n" "$sdks" | grep -Eq "^10[.]"'
+    cmds:
+      - task: nix:install:profile
+        vars:
+          NIX_INSTALLABLE: '{{.DOTNET_NIX_INSTALLABLE}}'
+      - *sdk-unix
+  _install:windows:
+    internal: true
+    platforms:
+      - windows
+    status:
+      - &sdk-windows >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+        "{{.WINGET_LOAD}};
+        if (!(Get-Command dotnet -ErrorAction SilentlyContinue)) { exit 1 };
+        \$sdks = & dotnet --list-sdks;
+        if (\$LASTEXITCODE -eq 0 -and
+        @(\$sdks | Where-Object { \$_ -match '^10\.' }).Count -gt 0) { exit 0 };
+        exit 1"
+    cmds:
+      - task: winget:install:package
+        vars:
+          WINGET_INSTALLABLE: '{{.DOTNET_WINGET_INSTALLABLE}}'
+      - *sdk-windows
+  version:
+    desc: Show the active .NET SDK version
+    summary: Run dotnet --version in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: --version
+  info:
+    desc: Show .NET SDK and environment information
+    summary: Run dotnet --info in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: --info
+  list:sdks:
+    desc: List installed .NET SDKs
+    summary: Run dotnet --list-sdks in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: --list-sdks
+  list:runtimes:
+    desc: List installed .NET runtimes
+    summary: Run dotnet --list-runtimes in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: --list-runtimes
+  restore:
+    desc: Restore .NET project dependencies
+    summary: Run dotnet restore in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: restore
+  build:
+    desc: Build a .NET project or solution
+    summary: Run dotnet build in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: build
+  test:
+    desc: Run .NET project tests
+    summary: Run dotnet test in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: test
+  run:
+    desc: Run a .NET project
+    summary: Run dotnet run in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: run
+  publish:
+    desc: Publish a .NET project
+    summary: Run dotnet publish in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: publish
+  clean:
+    desc: Clean .NET build outputs
+    summary: Run dotnet clean in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: clean
+  tool:restore:
+    desc: Restore tools from the local .NET tool manifest
+    summary: Run dotnet tool restore in DOTNET_DIR, forwarding CLI_ARGS. Ensures SDK 10 is installed.
+    cmds:
+      - task: _run
+        vars:
+          DOTNET_ARGS: tool restore
+  _run:
+    internal: true
+    deps:
+      - task: install
+    requires:
+      vars:
+        - DOTNET_ARGS
+    cmds:
+      - task: _run:unix
+        vars:
+          DOTNET_ARGS: '{{.DOTNET_ARGS}}'
+      - task: _run:windows
+        vars:
+          DOTNET_ARGS: '{{.DOTNET_ARGS}}'
+  _run:unix:
+    internal: true
+    platforms:
+      - linux
+      - darwin
+    env:
+      RAVEN_DOTNET_DIR: '{{.DOTNET_DIR}}'
+      RAVEN_DOTNET_CALLER_DIR: '{{.USER_WORKING_DIR}}'
+      RAVEN_DOTNET_ARGS: '{{.DOTNET_ARGS}} {{.CLI_ARGS}}'
+    cmds:
+      # Keep arguments in the environment so quotes survive Task's outer shell.
+      - >-
+        bash -c '{{.NIX_LOAD}};
+        cd -- "$RAVEN_DOTNET_CALLER_DIR" && cd -- "$RAVEN_DOTNET_DIR" &&
+        eval "exec dotnet $RAVEN_DOTNET_ARGS"'
+  _run:windows:
+    internal: true
+    platforms:
+      - windows
+    env:
+      RAVEN_DOTNET_DIR: '{{.DOTNET_DIR}}'
+      RAVEN_DOTNET_CALLER_DIR: '{{.USER_WORKING_DIR}}'
+      RAVEN_DOTNET_COMMAND: '{{.DOTNET_ARGS}}'
+      RAVEN_DOTNET_ARGS_JSON: '{{.CLI_ARGS | splitArgs | default (list) | toJson}}'
+    cmds:
+      - >-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+        "{{.WINGET_LOAD}}; \$ErrorActionPreference = 'Stop';
+        Set-Location -LiteralPath \$env:RAVEN_DOTNET_CALLER_DIR;
+        Set-Location -LiteralPath \$env:RAVEN_DOTNET_DIR;
+        \$dotnetArgs = @(\$env:RAVEN_DOTNET_COMMAND -split ' ') +
+        @(ConvertFrom-Json -InputObject \$env:RAVEN_DOTNET_ARGS_JSON);
+        & dotnet @dotnetArgs;
+        exit \$LASTEXITCODE"

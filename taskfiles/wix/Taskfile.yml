@@ -1,53 +1,451 @@
 ---
 version: '3.5'
 
+output:
+  group:
+    begin: ::group::{{.TASK}}
+    end: '::endgroup::'
+    error_only: false
+
+silent: true
+
+includes:
+  dotnet:
+    taskfile: ../dotnet/Taskfile.yml
+    internal: true
+
+vars:
+  WIX_ROOT: '{{joinPath .TASKFILE_DIR "../.." | clean}}'
+  # Escape $ for Task's POSIX shell so PowerShell receives literal variables.
+  # Refresh PATH after WinGet, then establish the shared packaging paths.
+  WIX_LOAD: >-
+    {{.WINGET_LOAD}};
+    \$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest;
+    \$root = \$env:RAVEN_WIX_ROOT;
+    Set-Location -LiteralPath \$root;
+    \$version = \$env:RAVEN_WIX_VERSION;
+    \$arch = \$env:RAVEN_WIX_ARCH;
+    \$stage = Join-Path \$root ('bin/.wix/' + \$arch);
+    \$payload = Join-Path \$stage 'payload/raven.exe';
+    \$label = if (\$env:RAVEN_WIX_TAG) { \$env:RAVEN_WIX_TAG } else { \$version };
+    \$name = 'raven-' + \$label + '-windows-' + \$arch + '.msi';
+    \$msi = Join-Path \$stage \$name;
+    \$proofPath = Join-Path \$stage 'verified.json'
+
 env:
+  RAVEN_WIX_ROOT: '{{.WIX_ROOT}}'
   RAVEN_WIX_VERSION: '{{.VERSION | default ""}}'
   RAVEN_WIX_ARCH: '{{.ARCH | default "amd64"}}'
   RAVEN_WIX_DEV: '{{.DEV | default "false"}}'
+  RAVEN_WIX_TAG: '{{.TAG | default ""}}'
 
 tasks:
-  validate:
-    desc: Validate Windows MSI packaging inputs before building
+  default:
+    run: once
+    desc: Show available WiX automation tasks
+    summary: List the repository-local WiX installation and Windows MSI packaging tasks.
+    cmds:
+      - task --taskfile "{{.TASKFILE_DIR}}/Taskfile.yml" --list
+  install:
+    run: once
+    desc: Install repository-pinned WiX Toolset 5.0.2
+    summary: Ensure SDK 10 is available and restore WiX from the repository-local tool manifest.
     preconditions: &windows
       - sh: '{{if eq OS "windows"}}true{{else}}false{{end}}'
         msg: WiX MSI packaging requires Windows and the .NET 10 SDK
     cmds:
-      - >-
-        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
-        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" validate
+      - task: restore
+  validate:
+    desc: Validate Windows MSI packaging inputs before building
+    summary: Check the host, production mode, architecture, and MSI version before staging.
+    preconditions: *windows
+    cmds:
+      - task: _setup
+      - task: _validate:windows
   restore:
     desc: Restore repository-pinned WiX Toolset 5.0.2
+    summary: Restore the local tool manifest and check the installed WiX version.
     preconditions: *windows
     cmds:
-      - >-
-        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
-        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" restore
+      - task: _setup
+      - task: _restore:windows
+      - task: _version:windows
+  version:
+    desc: Show the repository-local WiX version
+    summary: Ensure WiX is installed, print its version, and require the pinned release.
+    preconditions: *windows
+    cmds:
+      - task: install
+      - task: _version:windows
   prepare:
     internal: true
-    preconditions: *windows
+    desc: Prepare the architecture-specific MSI staging directory
+    summary: Validate inputs, clear stale artifacts, and write versioned executable metadata.
     cmds:
-      - >-
-        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
-        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" prepare
+      - task: validate
+      - task: _prepare:windows
   build:
     desc: Compile a staged Windows executable into an MSI
+    summary: Check inputs and payload identity before compiling with the pinned WiX tool.
     preconditions: *windows
     cmds:
-      - >-
-        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
-        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" build
+      - task: validate
+      - task: _version:windows
+      - task: _build:invalidate:windows
+      - task: _payload:windows
+      - task: _build:windows
   verify:
     desc: Validate the staged MSI with ICEs and inspect its contracts
+    summary: Invalidate old proof, verify payload and MSI contracts, and record artifact hashes.
     preconditions: *windows
     cmds:
-      - >-
-        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
-        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" verify
+      - task: validate
+      - task: _version:windows
+      - task: _proof:invalidate:windows
+      - task: _payload:windows
+      - task: _ice:windows
+      - task: _msi:windows
+      - task: _proof:write:windows
   promote:
     internal: true
-    preconditions: *windows
+    desc: Promote a verified MSI and its checksum
+    summary: Require unchanged verified inputs before publishing the MSI and SHA-256 checksum.
     cmds:
-      - >-
-        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
-        -File "{{.ROOT_DIR}}/taskfiles/wix/run.ps1" promote
+      - task: validate
+      - task: _promote:windows
+  _setup:
+    run: once
+    preconditions: *windows
+    internal: true
+    desc: Ensure the Windows packaging host is ready
+    summary: Install .NET 10 if missing and validate the active SDK.
+    cmds:
+      - task: dotnet:install
+      - task: _host:windows
+  _host:windows:
+    internal: true
+    desc: Validate the active .NET SDK
+    summary: Require an active .NET 10 SDK after refreshing PATH.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'MSI packaging requires Windows.' }
+        if (!(Get-Command dotnet -ErrorAction SilentlyContinue)) {
+            throw 'The .NET 10 SDK is unavailable. Run task dotnet:install and check PATH.'
+        }
+        \$sdk = & dotnet --version
+        if (\$LASTEXITCODE -ne 0 -or \$sdk -notmatch '^10\.') {
+            throw 'The active SDK must be .NET 10. Check dotnet --info, PATH, and global.json.'
+        }"
+  _validate:windows:
+    internal: true
+    desc: Validate MSI version and architecture
+    summary: Require production amd64 or arm64 inputs and a version within MSI numeric limits.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        if (\$arch -cnotin @('amd64', 'arm64')) { throw 'ARCH must be amd64 or arm64.' }
+        if (\$env:RAVEN_WIX_DEV -and \$env:RAVEN_WIX_DEV -cne 'false') {
+            throw 'MSI packaging requires a production build (DEV=false).'
+        }
+        if (\$version -cnotmatch '\A(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,4})\z') {
+            throw 'VERSION is required and must be MAJOR.MINOR.PATCH without leading zeroes or suffixes.'
+        }
+        \$parts = \$version.Split('.')
+        if ([int]\$parts[0] -gt 255 -or [int]\$parts[1] -gt 255 -or [int]\$parts[2] -gt 65535) {
+            throw 'MSI VERSION limits are 255.255.65535.'
+        }
+        if (\$env:RAVEN_WIX_TAG -and \$env:RAVEN_WIX_TAG -cne ('v' + \$version)) {
+            throw 'TAG must equal v followed by VERSION.'
+        }"
+  _restore:windows:
+    internal: true
+    desc: Restore the local WiX tool
+    summary: Use the repository manifest without installing a global WiX tool.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        & dotnet tool restore --tool-manifest \"\$root/.config/dotnet-tools.json\"
+        if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }"
+  _version:windows:
+    internal: true
+    desc: Check the pinned WiX version
+    summary: Print WiX 5.0.2 and fail if the local tool does not match the repository pin.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        \$wixVersion = & dotnet tool run wix --allow-roll-forward -- --version
+        if (\$LASTEXITCODE -ne 0 -or \$wixVersion -notmatch '^5\.0\.2(?:\+|\$)') {
+            throw 'Restore the repository-pinned WiX Toolset 5.0.2 with task wix:restore.'
+        }
+        Write-Output \$wixVersion"
+  _prepare:windows:
+    internal: true
+    desc: Stage versioned Windows packaging inputs
+    summary: Clear stale outputs and write UTF-8 executable metadata in the staging directory.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        if (Test-Path -LiteralPath \$stage) { Remove-Item -LiteralPath \$stage -Recurse -Force }
+        New-Item -ItemType Directory -Path \"\$stage/payload\" -Force | Out-Null
+        # A failed rebuild must not leave a previous published artifact available.
+        foreach (\$artifact in @(\"\$root/bin/\$name\", \"\$root/bin/\$name.sha256\")) {
+            if (Test-Path -LiteralPath \$artifact) { Remove-Item -LiteralPath \$artifact -Force }
+        }
+        \$info = Get-Content -LiteralPath \"\$root/build/windows/info.json\" -Raw | ConvertFrom-Json
+        \$info.fixed.file_version = \$version
+        \$info.fixed.product_version = \$version
+        \$info.info.'0409'.FileVersion = \$version
+        \$info.info.'0409'.ProductVersion = \$version
+        \$json = \$info | ConvertTo-Json -Depth 10
+        [IO.File]::WriteAllText(\"\$stage/info.json\", \$json, (New-Object Text.UTF8Encoding(\$false)))"
+  _build:invalidate:windows:
+    internal: true
+    desc: Remove stale MSI build artifacts
+    summary: Delete previous verification proof and the staged MSI before checking the new payload.
+    platforms:
+      - windows
+    cmds:
+      - task: _proof:invalidate:windows
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        if (Test-Path -LiteralPath \$msi) { Remove-Item -LiteralPath \$msi -Force }"
+  _proof:invalidate:windows:
+    internal: true
+    desc: Invalidate MSI verification proof
+    summary: Remove any earlier proof before building or verifying a staged MSI.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        if (Test-Path -LiteralPath \$proofPath) { Remove-Item -LiteralPath \$proofPath -Force }"
+  _payload:windows:
+    internal: true
+    desc: Check staged executable identity
+    summary: Check the PE signature, architecture, file version, and product version.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        \$stream = [IO.File]::OpenRead(\$payload)
+        \$reader = New-Object IO.BinaryReader(\$stream)
+        try {
+            if (\$reader.ReadUInt16() -ne 0x5a4d) { throw 'Payload is not a Windows executable.' }
+            \$stream.Position = 0x3c
+            \$offset = \$reader.ReadInt32()
+            if (\$offset -lt 0x40 -or \$offset -gt (\$stream.Length - 6)) { throw 'Invalid PE header offset.' }
+            \$stream.Position = \$offset
+            if (\$reader.ReadUInt32() -ne 0x4550) { throw 'Payload has no PE signature.' }
+            \$expected = if (\$arch -eq 'amd64') { 0x8664 } else { 0xaa64 }
+            if (\$reader.ReadUInt16() -ne \$expected) { throw \"Payload architecture does not match \$arch.\" }
+        } finally {
+            \$reader.Dispose()
+            \$stream.Dispose()
+        }
+        \$info = [Diagnostics.FileVersionInfo]::GetVersionInfo(\$payload)
+        foreach (\$actual in @(\$info.FileVersion, \$info.ProductVersion)) {
+            if (\$actual -notin @(\$version, \"\$version.0\")) {
+                throw \"Payload version '\$actual' does not match \$version.\"
+            }
+        }"
+  _build:windows:
+    internal: true
+    desc: Compile the staged MSI
+    summary: Run local WiX with warnings as errors and the architecture-specific payload.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        \$platform = if (\$arch -eq 'amd64') { 'x64' } else { 'arm64' }
+        & dotnet tool run wix --allow-roll-forward -- build \"\$root/build/windows/wix/Package.wxs\" -arch \$platform \`
+            -d \"Version=\$version\" -d \"BinaryPath=\$payload\" -d \"IconPath=\$root/build/windows/icon.ico\" \`
+            -intermediateFolder \"\$stage/obj\" -wx -out \$msi
+        exit \$LASTEXITCODE"
+  _ice:windows:
+    internal: true
+    desc: Run MSI ICE validation
+    summary: Treat ICE warnings as errors except ICE91 for intentional per-user paths.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        # The MSI contract task independently enforces per-user installation.
+        & dotnet tool run wix --allow-roll-forward -- msi validate \$msi -sice ICE91 -wx
+        exit \$LASTEXITCODE"
+  _msi:windows:
+    internal: true
+    desc: Inspect staged MSI contracts
+    summary: Check installer scope, identity, payload, cabinet, shortcuts, conditions, and upgrade ordering.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        \$installer = New-Object -ComObject WindowsInstaller.Installer
+        \$database = \$null
+        \$summary = \$null
+        try {
+            \$database = \$installer.OpenDatabase(\$msi, 0)
+            \$summary = \$database.SummaryInformation(0)
+            \$expected = if (\$arch -eq 'amd64') { 'x64;1033' } else { 'Arm64;1033' }
+            if (\$summary.Property(7) -cne \$expected) { throw 'MSI platform does not match ARCH.' }
+            if ((\$summary.Property(15) -band 8) -eq 0) { throw 'MSI must not require elevation.' }
+            \$data = @{}
+            \$queries = @{
+                Properties = @('SELECT \`Property\`, \`Value\` FROM \`Property\`', 2)
+                Files = @('SELECT \`FileName\`, \`Version\` FROM \`File\`', 2)
+                Media = @('SELECT \`Cabinet\` FROM \`Media\`', 1)
+                Tables = @('SELECT \`Name\` FROM \`_Tables\`', 1)
+                Shortcuts = @('SELECT \`Target\` FROM \`Shortcut\`', 1)
+                Conditions = @('SELECT \`Condition\` FROM \`LaunchCondition\`', 1)
+                Sequence = @('SELECT \`Action\`, \`Sequence\` FROM \`InstallExecuteSequence\`', 2)
+            }
+            foreach (\$key in \$queries.Keys) {
+                \$query = \$queries[\$key]
+                \$view = \$database.OpenView(\$query[0])
+                try {
+                    [void]\$view.Execute()
+                    \$rows = New-Object 'System.Collections.Generic.List[object]'
+                    while (\$null -ne (\$record = \$view.Fetch())) {
+                        try {
+                            \$row = @()
+                            for (\$column = 1; \$column -le \$query[1]; \$column++) {
+                                \$row += \$record.StringData(\$column)
+                            }
+                            [void]\$rows.Add(\$row)
+                        } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(\$record) }
+                    }
+                    \$data[\$key] = \$rows
+                } finally {
+                    [void]\$view.Close()
+                    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(\$view)
+                }
+            }
+            \$properties = @{}
+            foreach (\$row in (\$data['Properties'])) {
+                \$properties[\$row[0]] = \$row[1]
+            }
+            if (\$properties.ProductVersion -cne \$version) { throw 'MSI version does not match VERSION.' }
+            if (\$properties.UpgradeCode -ne '{74CE072D-0DA0-40A3-8700-7AE3A65B9769}') {
+                throw 'Unexpected UpgradeCode.'
+            }
+            if (\$properties['ALLUSERS']) { throw 'MSI must install per user.' }
+            if (\$properties.MSIRESTARTMANAGERCONTROL -ne 'DisableShutdown') {
+                throw 'MSI must not force application shutdown.'
+            }
+            \$files = \$data['Files']
+            if (\$files.Count -ne 1 -or \$files[0][0] -notmatch '(^|\|)raven\.exe\$' -or
+                \$files[0][1] -notin @(\$version, \"\$version.0\")) {
+                    throw 'Unexpected MSI payload or payload version.'
+                }
+            \$media = \$data['Media']
+            if (\$media.Count -ne 1 -or !\$media[0][0].StartsWith('#')) {
+                throw 'MSI must contain one embedded cabinet.'
+            }
+            \$tables = \$data['Tables']
+            if (@(\$tables | Where-Object { \$_[0] -eq 'CustomAction' }).Count -gt 0) {
+                \$view = \$database.OpenView('SELECT \`Action\` FROM \`CustomAction\`')
+                try {
+                    [void]\$view.Execute()
+                    \$record = \$view.Fetch()
+                    if (\$null -ne \$record) {
+                        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(\$record)
+                        throw 'Custom installer actions are not permitted.'
+                    }
+                } finally {
+                    [void]\$view.Close()
+                    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(\$view)
+                }
+            }
+            \$shortcuts = \$data['Shortcuts']
+            if (\$shortcuts.Count -ne 1 -or \$shortcuts[0][0] -ne '[#RavenExe]') {
+                throw 'Unexpected Start menu shortcut.'
+            }
+            \$conditions = \$data['Conditions']
+            # Three explicit Launch elements plus the downgrade guard generated by MajorUpgrade.
+            if (\$conditions.Count -ne 4) {
+                throw \"Expected 4 installer launch conditions; found \$(\$conditions.Count).\"
+            }
+            \$sequence = \$data['Sequence']
+            \$order = @{}
+            foreach (\$row in \$sequence) { \$order[\$row[0]] = [int]\$row[1] }
+            if (\$order.RemoveExistingProducts -le \$order.InstallInitialize -or
+                \$order.RemoveExistingProducts -ge \$order.InstallFiles) {
+                    throw 'Upgrade removal must be inside the transaction before file installation.'
+                }
+        } finally {
+            if (\$summary) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(\$summary) }
+            if (\$database) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(\$database) }
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(\$installer)
+        }"
+  _proof:write:windows:
+    internal: true
+    desc: Record verification proof
+    summary: Record the validated architecture, version, and SHA-256 hashes after all checks pass.
+    platforms:
+      - windows
+    cmds:
+      - |
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        \$hashes = @{}
+        \$paths = @{ MsiHash = \$msi; PayloadHash = \$payload }
+        foreach (\$key in \$paths.Keys) {
+            \$algorithm = [Security.Cryptography.SHA256]::Create()
+            \$stream = \$null
+            try {
+                \$stream = [IO.File]::OpenRead(\$paths[\$key])
+                \$hashes[\$key] = [BitConverter]::ToString(\$algorithm.ComputeHash(\$stream)).Replace('-', '')
+            } finally {
+                if (\$null -ne \$stream) { \$stream.Dispose() }
+                \$algorithm.Dispose()
+            }
+        }
+        \$hashes['Version'] = \$version
+        \$hashes['Arch'] = \$arch
+        \$hashes | ConvertTo-Json | Set-Content -LiteralPath \$proofPath -Encoding ascii"
+  _promote:windows:
+    internal: true
+    desc: Publish the verified MSI and checksum
+    summary: Recompute hashes and reject changed artifacts before moving verified outputs to bin.
+    platforms:
+      - windows
+    cmds:
+      - |-
+        powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
+        \$hashes = @{}
+        \$paths = @{ MsiHash = \$msi; PayloadHash = \$payload }
+        foreach (\$key in \$paths.Keys) {
+            \$algorithm = [Security.Cryptography.SHA256]::Create()
+            \$stream = \$null
+            try {
+                \$stream = [IO.File]::OpenRead(\$paths[\$key])
+                \$hashes[\$key] = [BitConverter]::ToString(\$algorithm.ComputeHash(\$stream)).Replace('-', '')
+            } finally {
+                if (\$null -ne \$stream) { \$stream.Dispose() }
+                \$algorithm.Dispose()
+            }
+        }
+        \$proof = Get-Content -LiteralPath \$proofPath -Raw | ConvertFrom-Json
+        if (\$proof.Version -cne \$version -or \$proof.Arch -cne \$arch -or
+            \$proof.MsiHash -cne \$hashes['MsiHash'] -or \$proof.PayloadHash -cne \$hashes['PayloadHash']) {
+            throw 'Package or payload changed after verification; run task wix:verify again.'
+        }
+        \$hash = \$hashes['MsiHash'].ToLowerInvariant()
+        \"\$hash  \$name\" | Set-Content -LiteralPath \"\$stage/\$name.sha256\" -Encoding ascii
+        Move-Item -LiteralPath \$msi -Destination \"\$root/bin/\$name\" -Force
+        Move-Item -LiteralPath \"\$stage/\$name.sha256\" -Destination \"\$root/bin/\$name.sha256\" -Force
+        Write-Host \"Verified MSI: bin/\$name\""

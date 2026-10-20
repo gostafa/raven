@@ -40,6 +40,8 @@ includes:
   windows:
     taskfile: ./taskfiles/windows/Taskfile.yml
     dir: .
+  dotnet:
+    taskfile: ./taskfiles/dotnet/Taskfile.yml
   wix:
     taskfile: ./taskfiles/wix/Taskfile.yml
     dir: .

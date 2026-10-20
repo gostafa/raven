@@ -25,23 +25,16 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      - name: Check out release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
       - name: Validate stable MSI release tag
         id: version
-        shell: bash
-        env:
-          RELEASE_TAG: >-
+        uses: ./.github/actions/validate-version
+        with:
+          tag: >-
             ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
-        run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,4})$ ]]; then
-            echo '::error::Expected a stable vMAJOR.MINOR.PATCH tag within MSI version limits.'
-            exit 1
-          fi
-          IFS=. read -r major minor patch <<< "${RELEASE_TAG#v}"
-          if (( 10#$major > 255 || 10#$minor > 255 || 10#$patch > 65535 )); then
-            echo '::error::MSI version limits are 255.255.65535.'
-            exit 1
-          fi
-          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
   windows:
     name: Build Windows ${{ matrix.arch }} MSI
     needs:
@@ -53,91 +46,36 @@ jobs:
         arch:
           - amd64
           - arm64
-    env:
-      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-      PACKAGE_ARCH: ${{ matrix.arch }}
     steps:
       - name: Check out release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
+      - name: Build and upload Windows release
+        uses: ./.github/actions/build-windows
         with:
-          go-version-file: go.mod
-          cache: false
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
-        with:
-          bun-version-file: package.json
-          no-cache: true
-      - name: Set up Task
-        uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
-      - name: Set up .NET 10 SDK
-        uses: actions/setup-dotnet@baa11fbfe1d6520db94683bd5c7a3818018e4309  # v5.1.0
-        with:
-          dotnet-version: 10.0.x
-      - name: Install Wails
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $wails = go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3
-          if ($LASTEXITCODE -ne 0) { throw 'Could not determine Wails version' }
-          go install "github.com/wailsapp/wails/v3/cmd/wails3@$wails"
-          if ($LASTEXITCODE -ne 0) { throw 'Wails installation failed' }
-      - name: Build and validate release MSI
-        shell: pwsh
-        run: |
-          task windows:package "ARCH=$env:PACKAGE_ARCH" "VERSION=$env:RELEASE_VERSION"
-          if ($LASTEXITCODE -ne 0) { throw 'MSI packaging failed' }
-          git diff --exit-code
-          if ($LASTEXITCODE -ne 0) { throw 'Packaging changed tracked sources' }
-      - name: Upload release candidate and checksum
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
-        with:
-          name: raven-${{ env.RELEASE_VERSION }}-windows-${{ matrix.arch }}
-          path: |
-            bin/raven-${{ env.RELEASE_VERSION }}-windows-${{ matrix.arch }}.msi
-            bin/raven-${{ env.RELEASE_VERSION }}-windows-${{ matrix.arch }}.msi.sha256
-          if-no-files-found: error
+          tag: v${{ needs.validate.outputs.version }}
+          arch: ${{ matrix.arch }}
   publish:
     name: Publish verified MSI release
     if: github.event_name == 'push'
     needs:
       - validate
       - windows
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: read
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      RUN_ID: ${{ github.run_id }}
-      RELEASE_TAG: ${{ github.ref_name }}
-      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
     steps:
-      - name: Download and verify exact release assets
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          foreach ($arch in @('amd64', 'arm64')) {
-            gh run download $env:RUN_ID --name "raven-$env:RELEASE_VERSION-windows-$arch" --dir dist
-            if ($LASTEXITCODE -ne 0) { throw 'Artifact download failed' }
-            $name = "raven-$env:RELEASE_VERSION-windows-$arch.msi"
-            $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ((Get-Content "dist/$name.sha256" -Raw).Trim() -cne "$hash  $name") {
-              throw "Checksum mismatch: $name"
-            }
-          }
-          if (@(Get-ChildItem dist -File).Count -ne 4) { throw 'Expected exactly two MSIs and two checksums' }
-      - name: Publish MSI files
-        shell: pwsh
-        run: |-
-          $assets = @()
-          foreach ($arch in @('amd64', 'arm64')) {
-            $name = "dist/raven-$env:RELEASE_VERSION-windows-$arch.msi"
-            $assets += $name
-          }
-          gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes --title "Raven $env:RELEASE_TAG"
-          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
+      - name: Check out release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publish verified MSI files
+        uses: ./.github/actions/publish-release
+        with:
+          tag: ${{ github.ref_name }}
+          name: Raven ${{ github.ref_name }}
+          artifact-pattern: raven-${{ github.ref_name }}-windows-*
+          files: |-
+            raven-${{ github.ref_name }}-windows-amd64/raven-${{ github.ref_name }}-windows-amd64.msi
+            raven-${{ github.ref_name }}-windows-arm64/raven-${{ github.ref_name }}-windows-arm64.msi
