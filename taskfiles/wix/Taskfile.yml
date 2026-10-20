@@ -32,13 +32,6 @@ vars:
     \$msi = Join-Path \$stage \$name;
     \$proofPath = Join-Path \$stage 'verified.json'
 
-env:
-  RAVEN_WIX_ROOT: '{{.WIX_ROOT}}'
-  RAVEN_WIX_VERSION: '{{.VERSION | default ""}}'
-  RAVEN_WIX_ARCH: '{{.ARCH | default "amd64"}}'
-  RAVEN_WIX_DEV: '{{.DEV | default "false"}}'
-  RAVEN_WIX_TAG: '{{.TAG | default ""}}'
-
 tasks:
   default:
     run: once
@@ -128,6 +121,14 @@ tasks:
     summary: Require an active .NET 10 SDK after refreshing PATH.
     platforms:
       - windows
+    # Keep WiX inputs local: inherited environment values override nested Task inputs.
+    # A global mapping exports an empty VERSION from windows:release before packaging.
+    env: &wix_env
+      RAVEN_WIX_ROOT: '{{.WIX_ROOT}}'
+      RAVEN_WIX_VERSION: '{{.VERSION | default ""}}'
+      RAVEN_WIX_ARCH: '{{.ARCH | default "amd64"}}'
+      RAVEN_WIX_DEV: '{{.DEV | default "false"}}'
+      RAVEN_WIX_TAG: '{{.TAG | default ""}}'
     cmds:
       - |
         powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
@@ -140,6 +141,7 @@ tasks:
             throw 'The active SDK must be .NET 10. Check dotnet --info, PATH, and global.json.'
         }"
   _validate:windows:
+    env: *wix_env
     internal: true
     desc: Validate MSI version and architecture
     summary: Require production amd64 or arm64 inputs and a version within MSI numeric limits.
@@ -163,6 +165,7 @@ tasks:
             throw 'TAG must equal v followed by VERSION.'
         }"
   _restore:windows:
+    env: *wix_env
     internal: true
     desc: Restore the local WiX tool
     summary: Use the repository manifest without installing a global WiX tool.
@@ -174,6 +177,7 @@ tasks:
         & dotnet tool restore --tool-manifest \"\$root/.config/dotnet-tools.json\"
         if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }"
   _version:windows:
+    env: *wix_env
     internal: true
     desc: Check the pinned WiX version
     summary: Print WiX 5.0.2 and fail if the local tool does not match the repository pin.
@@ -188,6 +192,7 @@ tasks:
         }
         Write-Output \$wixVersion"
   _prepare:windows:
+    env: *wix_env
     internal: true
     desc: Stage versioned Windows packaging inputs
     summary: Clear stale outputs and write UTF-8 executable metadata in the staging directory.
@@ -210,6 +215,7 @@ tasks:
         \$json = \$info | ConvertTo-Json -Depth 10
         [IO.File]::WriteAllText(\"\$stage/info.json\", \$json, (New-Object Text.UTF8Encoding(\$false)))"
   _build:invalidate:windows:
+    env: *wix_env
     internal: true
     desc: Remove stale MSI build artifacts
     summary: Delete previous verification proof and the staged MSI before checking the new payload.
@@ -221,6 +227,7 @@ tasks:
         powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
         if (Test-Path -LiteralPath \$msi) { Remove-Item -LiteralPath \$msi -Force }"
   _proof:invalidate:windows:
+    env: *wix_env
     internal: true
     desc: Invalidate MSI verification proof
     summary: Remove any earlier proof before building or verifying a staged MSI.
@@ -231,6 +238,7 @@ tasks:
         powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{{.WIX_LOAD}};
         if (Test-Path -LiteralPath \$proofPath) { Remove-Item -LiteralPath \$proofPath -Force }"
   _payload:windows:
+    env: *wix_env
     internal: true
     desc: Check staged executable identity
     summary: Check the PE signature, architecture, file version, and product version.
@@ -261,6 +269,7 @@ tasks:
             }
         }"
   _build:windows:
+    env: *wix_env
     internal: true
     desc: Compile the staged MSI
     summary: Run local WiX with warnings as errors and the architecture-specific payload.
@@ -275,6 +284,7 @@ tasks:
             -intermediateFolder \"\$stage/obj\" -wx -out \$msi
         exit \$LASTEXITCODE"
   _ice:windows:
+    env: *wix_env
     internal: true
     desc: Run MSI ICE validation
     summary: Treat ICE warnings as errors except ICE91 for intentional per-user paths.
@@ -287,6 +297,7 @@ tasks:
         & dotnet tool run wix --allow-roll-forward -- msi validate \$msi -sice ICE91 -wx
         exit \$LASTEXITCODE"
   _msi:windows:
+    env: *wix_env
     internal: true
     desc: Inspect staged MSI contracts
     summary: Check installer scope, identity, payload, cabinet, shortcuts, conditions, and upgrade ordering.
@@ -393,6 +404,7 @@ tasks:
             [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(\$installer)
         }"
   _proof:write:windows:
+    env: *wix_env
     internal: true
     desc: Record verification proof
     summary: Record the validated architecture, version, and SHA-256 hashes after all checks pass.
@@ -418,6 +430,7 @@ tasks:
         \$hashes['Arch'] = \$arch
         \$hashes | ConvertTo-Json | Set-Content -LiteralPath \$proofPath -Encoding ascii"
   _promote:windows:
+    env: *wix_env
     internal: true
     desc: Publish the verified MSI and checksum
     summary: Recompute hashes and reject changed artifacts before moving verified outputs to bin.
