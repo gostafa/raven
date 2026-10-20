@@ -44,8 +44,23 @@ function Assert-Installed {
     param([string]$InstalledVersion, [string]$InstalledArch)
     Assert-Payload $application $InstalledVersion $InstalledArch
     if (!(Test-Path -LiteralPath $shortcut)) { throw 'Start menu shortcut is missing.' }
-    $registrations = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' |
-        Get-ItemProperty | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'Raven' })
+    # Per-user MSI products need not have a CurrentVersion\Uninstall entry.
+    # Query Windows Installer for the current user's unmanaged products (context 2).
+    $installer = New-Object -ComObject WindowsInstaller.Installer
+    $products = $null
+    try {
+        $products = $installer.ProductsEx('', '', 2)
+        $registrations = @(foreach ($product in $products) {
+            try {
+                if ($product.InstallProperty('InstalledProductName') -eq 'Raven') {
+                    [pscustomobject]@{ DisplayVersion = $product.InstallProperty('VersionString') }
+                }
+            } finally { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($product) }
+        })
+    } finally {
+        if ($null -ne $products) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($products) }
+        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)
+    }
     if ($registrations.Count -ne 1 -or $registrations[0].DisplayVersion -ne $InstalledVersion) {
         throw 'Expected exactly one per-user Raven installation at the expected version.'
     }
