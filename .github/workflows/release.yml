@@ -103,7 +103,7 @@ jobs:
           tag: ${{ github.ref_name }}
           name: Raven ${{ github.ref_name }}
           artifact-pattern: raven-${{ github.ref_name }}-*
-          include-checksums: 'true'
+          include-checksums: 'false'
           files: |-
             raven-${{ github.ref_name }}-windows-amd64/raven-${{ github.ref_name }}-windows-amd64.msi
             raven-${{ github.ref_name }}-windows-arm64/raven-${{ github.ref_name }}-windows-arm64.msi
