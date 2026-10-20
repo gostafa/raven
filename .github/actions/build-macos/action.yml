@@ -1,0 +1,70 @@
+---
+name: Build macOS release
+description: Build and verify an ad-hoc-signed DMG on a matching native macOS runner.
+
+inputs:
+  tag:
+    description: Release tag (vMAJOR.MINOR.PATCH)
+    required: true
+  arch:
+    description: Native macOS architecture (amd64 or arm64)
+    required: true
+
+outputs:
+  artifact-name:
+    description: Uploaded artifact name
+    value: ${{ steps.build.outputs.artifact-name }}
+  dmg-path:
+    description: Verified DMG path
+    value: ${{ steps.build.outputs.dmg-path }}
+  checksum-path:
+    description: SHA-256 sidecar path
+    value: ${{ steps.build.outputs.checksum-path }}
+  artifact-id:
+    description: Uploaded artifact ID
+    value: ${{ steps.upload.outputs.artifact-id }}
+  artifact-url:
+    description: Uploaded artifact URL
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate release tag
+      uses: $/.github/actions/validate-version
+      with:
+        tag: ${{ inputs.tag }}
+    - name: Set up Task
+      uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e  # v2.2.0
+    - name: Set up repository Go toolchain and cache
+      uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
+      with:
+        go-version-file: go.mod
+        cache-dependency-path: |
+          go.mod
+          go.sum
+    - name: Set up repository Bun version
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2
+      with:
+        bun-version-file: package.json
+    - name: Test DMG packaging failure handling
+      shell: bash
+      run: bun test --timeout 60000 ./.github/actions/build-macos/macos.test.mjs
+    - name: Build and verify release DMG
+      id: build
+      shell: bash
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+        PACKAGE_ARCH: ${{ inputs.arch }}
+        MACOS_ACTION_PATH: ${{ github.action_path }}
+        CI: '1'
+      run: bash "$MACOS_ACTION_PATH/funcs.sh"
+    - name: Upload verified DMG and checksum
+      id: upload
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+      with:
+        name: ${{ steps.build.outputs.artifact-name }}
+        path: |
+          ${{ steps.build.outputs.dmg-path }}
+          ${{ steps.build.outputs.checksum-path }}
+        if-no-files-found: error

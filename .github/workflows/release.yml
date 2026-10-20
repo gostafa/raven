@@ -82,13 +82,37 @@ jobs:
         with:
           tag: v${{ needs.validate.outputs.version }}
           arch: ${{ matrix.arch }}
+  macos:
+    name: Build macOS ${{ matrix.arch }} DMG
+    needs:
+      - validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: macos-15-intel
+          - arch: arm64
+            runner: macos-15
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and upload macOS release
+        uses: $/.github/actions/build-macos
+        with:
+          tag: v${{ needs.validate.outputs.version }}
+          arch: ${{ matrix.arch }}
   publish:
-    name: Publish verified Windows and Linux release
+    name: Publish verified Windows, Linux, and macOS release
     if: github.event_name == 'push'
     needs:
       - validate
       - windows
       - linux
+      - macos
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -97,7 +121,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      - name: Publish verified installers and checksums
+      - name: Publish verified installers
         uses: $/.github/actions/publish-release
         with:
           tag: ${{ github.ref_name }}
@@ -105,6 +129,8 @@ jobs:
           artifact-pattern: raven-${{ github.ref_name }}-*
           include-checksums: 'false'
           files: |-
+            raven-${{ github.ref_name }}-macos-amd64/raven-${{ github.ref_name }}-macos-amd64.dmg
+            raven-${{ github.ref_name }}-macos-arm64/raven-${{ github.ref_name }}-macos-arm64.dmg
             raven-${{ github.ref_name }}-windows-amd64/raven-${{ github.ref_name }}-windows-amd64.msi
             raven-${{ github.ref_name }}-windows-arm64/raven-${{ github.ref_name }}-windows-arm64.msi
             raven-${{ github.ref_name }}-linux-amd64/raven-${{ github.ref_name }}-linux-amd64.AppImage
@@ -124,6 +150,7 @@ jobs:
       - validate
       - windows
       - linux
+      - macos
       - publish
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -45,6 +45,22 @@ bun run package
 
 Output is written to `bin/`.
 
+### macOS Release DMGs
+
+The Release workflow builds separate disk images for macOS 13 or later:
+
+- Intel: `raven-vVERSION-macos-amd64.dmg`
+- Apple Silicon: `raven-vVERSION-macos-arm64.dmg`
+
+Download the image for your Mac, open it, and drag `raven.app` onto the Applications
+shortcut. Quit any running copy of Raven before replacing it. The app uses ad-hoc
+signing and is not notarized; macOS may require approval in **System Settings →
+Privacy & Security** before its first launch.
+
+DMGs are built and verified only by the release workflow. Local `bun run package`
+continues to produce an `.app` bundle. Release artifacts include SHA-256 sidecars
+for verification before publication; the GitHub release publishes the DMGs only.
+
 ### Linux Packaging
 
 Linux releases support AMD64 and ARM64 with AppImage, Debian (`.deb`), RPM,
@@ -106,12 +122,11 @@ msiexec /x "raven-0.1.0-windows-amd64.msi" /qn /norestart /L*v uninstall.log
 Newer versions upgrade the existing per-user installation, including a switch
 from x64 to ARM64 on ARM64 Windows. Downgrades and replacement packages with the
 same version are blocked; use the original MSI for maintenance. Upgrade and
-uninstall preserve `%AppData%\raven`. Releases are unsigned; verify the published
-SHA-256 checksum before installing.
+uninstall preserve `%AppData%\raven`. MSI packages are unsigned.
 
-The release workflow validates both Windows MSI packages and all five Linux
-package formats on AMD64 and ARM64 before publishing them and their SHA-256
-checksums.
+The release workflow validates Windows MSI packages, all five Linux package
+formats, and macOS DMGs on AMD64 and ARM64 before publishing the installers.
+SHA-256 sidecars are verified before publication and are not published as release assets.
 Run the Release workflow manually with a version to execute its checks without
 publishing; publication runs only for stable version tags. Existing releases are
 not overwritten.

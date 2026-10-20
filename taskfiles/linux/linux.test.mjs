@@ -168,14 +168,14 @@ test('Snap smoke launch reaches the host user manager despite the private GUI bu
   );
 });
 
-test('the release workflow requires both native Linux builds and opts into checksum publication', async () => {
+test('the release workflow requires both native Linux builds and keeps checksums private', async () => {
   const workflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8');
   const publish = workflow.slice(workflow.indexOf('  publish:'));
   assert.match(workflow, /runner: ubuntu-24\.04\n/);
   assert.match(workflow, /runner: ubuntu-24\.04-arm\n/);
   assert.match(publish, /if: github.event_name == 'push'/);
   assert.match(publish, /- windows\s+- linux/);
-  assert.match(publish, /include-checksums: 'true'/);
+  assert.match(publish, /include-checksums: 'false'/);
   for (const arch of ['amd64', 'arm64']) {
     for (const extension of ['AppImage', 'deb', 'rpm', 'snap', 'pkg.tar.zst']) {
       assert.ok(publish.includes(`-linux-${arch}.${extension}\n`));
