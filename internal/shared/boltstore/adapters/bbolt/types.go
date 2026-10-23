@@ -18,9 +18,30 @@ import (
 
 	cardapi "raven/api/cards"
 	contentapi "raven/api/content"
+	archive "raven/internal/features/folderarchive/domain"
+	archiveports "raven/internal/features/folderarchive/ports"
 )
 
 type (
+	archiveSnapshotRequest = struct {
+		document *archive.Document
+		ids      []string
+	}
+	archiveImportRequest = struct {
+		open     archiveports.OpenMedia
+		manifest string
+		mode     string
+	}
+
+	folderImport = struct {
+		storage   *persistence
+		document  *archive.Document
+		open      archiveports.OpenMedia
+		now       time.Time
+		mode      string
+		imported  []string
+		folderIDs []string
+	}
 	// Store exposes transactional persistence through JSON records.
 	Store struct{ state *persistence }
 

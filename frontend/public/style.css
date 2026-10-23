@@ -60,3 +60,17 @@ img {
   background: #666;
   color: #fff;
 }
+
+html[lang='ar'] {
+  font-family: 'Geeza Pro', Tahoma, 'Segoe UI', sans-serif;
+  --font-display: 'Geeza Pro', Tahoma, 'Segoe UI', sans-serif;
+}
+html[lang='ar'] :is(h1, h2, h3, p, label, button, input, textarea, select, .eyebrow, .nav-caption) {
+  letter-spacing: normal;
+}
+html[lang='ar'] :is(h1, h2, h3) {
+  line-height: 1.5;
+}
+bdi {
+  unicode-bidi: isolate;
+}

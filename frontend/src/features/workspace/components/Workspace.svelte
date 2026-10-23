@@ -1,24 +1,50 @@
 <script lang="ts">
+  import { useLocalization, LanguageSelector, type MessageKey } from '../../localization';
+  const l = useLocalization();
+
   import { onMount, tick } from 'svelte';
   import type { Card } from '../../cards';
   import type { AppPorts } from '../domain/types';
-  import { loadWorkspace as loadData, saveCard as saveMemory, deleteSelection } from '../application/funcs';
+  import {
+    loadWorkspace as loadData,
+    saveCard as saveMemory,
+    deleteSelection,
+    loadViewPreferences,
+    saveViewPreferences,
+  } from '../application/funcs';
+  import { defaultViewPreferences } from '../domain/funcs';
   import { CardEditor } from '../../cards';
   import { CardContent } from '../../cards';
+  import { RecallFilter } from '../../cards';
   import { ReviewSession } from '../../reviews';
-  import { ActionMenu, ChoiceMenu, type ChoiceOption } from '../../ui';
+  import { ActionMenu, ChoiceMenu, Skeleton, type ChoiceOption } from '../../ui';
+  import {
+    ArchiveDialog,
+    exportFolders,
+    importFolders,
+    type ArchiveResult,
+    type ImportMode,
+  } from '../../folderarchive';
   import {
     cardPreview,
+    cardProgress,
+    selectCards,
+    type CardContentKind,
+    type CardProgressRange,
+    type CardSort,
     editItems,
     hasContent,
     matchesCard,
     mergeCardSnapshot,
+    removeCardPart,
     saveItems,
     textDraft,
     type EditorItem,
   } from '../../cards';
-  import { reviewItems, type ReviewItem } from '../../reviews';
+  import { reviewItems, shuffledReviewItems, type ReviewItem } from '../../reviews';
   import {
+    FolderTile,
+    selectFolderPapers,
     selectFolders,
     type FolderSort,
     emptyWorkspace,
@@ -31,8 +57,10 @@
   } from '../../folders';
 
   let { backend }: { backend: AppPorts } = $props();
-  let error = $state('');
-  let preferencesError = $state('');
+  let error = $state<MessageKey | ''>('');
+  let preferencesError = $state<MessageKey | ''>('');
+  let viewPreferencesError = $state<MessageKey | ''>('');
+  const initialView = restoreViewPreferences();
   let workspace = $state(restoreWorkspace());
   let status = $state<'loading' | 'ready' | 'error'>('loading');
   let cards = $state<Card[]>([]);
@@ -43,21 +71,69 @@
   const selectedFolder = $derived(workspace.folders.find((folder) => folder.id === workspace.selectedFolderId));
   const scheduledItems = $derived(reviewItems(cards));
   const dueCards = $derived(scheduledItems.filter((entry) => entry.dueAt <= now));
-  let search = $state('');
-  let foldersOpen = $state(true);
-  let folderTags = $state<string[]>([]);
-  let folderSort = $state<FolderSort>('default');
-  const folderSortOptions: ChoiceOption<FolderSort>[] = [
-    { value: 'default', label: 'Default order' },
-    { value: 'tags-desc', label: 'Tags: most first' },
-    { value: 'tags-asc', label: 'Tags: fewest first' },
-    { value: 'cards-desc', label: 'Cards: most first' },
-    { value: 'cards-asc', label: 'Cards: fewest first' },
-    { value: 'review-asc', label: 'Next review: earliest first' },
-    { value: 'review-desc', label: 'Next review: latest first' },
-  ];
+  let search = $state(initialView.search);
+  let cardSort = $state<CardSort>(initialView.cardSort);
+  let cardKinds = $state<CardContentKind[]>(initialView.cardKinds);
+  let cardProgressRange = $state<CardProgressRange>(initialView.cardProgressRange);
+  const cardSortOptions: ChoiceOption<CardSort>[] = $derived([
+    { value: 'created-desc', label: $l.t('workspace.newest_first') },
+    { value: 'created-asc', label: $l.t('workspace.oldest_first') },
+    { value: 'review-asc', label: $l.t('workspace.next_review_earliest_first') },
+    { value: 'review-desc', label: $l.t('workspace.next_review_latest_first') },
+    { value: 'progress-asc', label: $l.t('workspace.recall_progress_lowest_first') },
+    { value: 'progress-desc', label: $l.t('workspace.recall_progress_highest_first') },
+  ]);
+  const cardKindOptions: ChoiceOption<CardContentKind>[] = $derived([
+    { value: 'text', label: $l.t('workspace.text') },
+    { value: 'image', label: $l.t('workspace.image') },
+    { value: 'audio', label: $l.t('cards.audio') },
+    { value: 'video', label: $l.t('cards.video') },
+  ]);
+  const hasRecallFilter = $derived(cardProgressRange.minimum > 0 || cardProgressRange.maximum < 100);
+  const hasCardFilters = $derived(cardKinds.length > 0 || hasRecallFilter);
+  function clearCardFilters() {
+    cardKinds = [];
+    cardProgressRange = { minimum: 0, maximum: 100 };
+  }
+  let foldersOpen = $state(initialView.foldersOpen);
+  let folderTags = $state<string[]>(initialView.folderTags);
+  let folderSort = $state<FolderSort>(initialView.folderSort);
+  $effect(() => {
+    try {
+      saveViewPreferences(backend.preferences, backend.configuration.preferencesStorageKey, {
+        search,
+        foldersOpen,
+        folderTags,
+        folderSort,
+        cardSort,
+        cardKinds,
+        cardProgressRange,
+      });
+      viewPreferencesError = '';
+    } catch {
+      viewPreferencesError = 'workspace.your_filters_and_sort_preferences_could_not_be_saved_on_this_device';
+    }
+  });
+
+  function restoreViewPreferences() {
+    try {
+      return loadViewPreferences(backend.preferences, backend.configuration.preferencesStorageKey);
+    } catch {
+      viewPreferencesError = 'workspace.your_filters_and_sort_preferences_could_not_be_loaded';
+      return defaultViewPreferences();
+    }
+  }
+  const folderSortOptions: ChoiceOption<FolderSort>[] = $derived([
+    { value: 'default', label: $l.t('workspace.default_order') },
+    { value: 'tags-desc', label: $l.t('workspace.tags_most_first') },
+    { value: 'tags-asc', label: $l.t('workspace.tags_fewest_first') },
+    { value: 'cards-desc', label: $l.t('workspace.cards_most_first') },
+    { value: 'cards-asc', label: $l.t('workspace.cards_fewest_first') },
+    { value: 'review-asc', label: $l.t('workspace.next_review_earliest_first') },
+    { value: 'review-desc', label: $l.t('workspace.next_review_latest_first') },
+  ]);
   const availableTags = $derived(
-    parseTags(workspace.folders.flatMap((folder) => folder.tags).join(',')).toSorted((a, b) => a.localeCompare(b)),
+    parseTags(workspace.folders.flatMap((folder) => folder.tags).join(',')).toSorted((a, b) => $l.compare(a, b)),
   );
   const tagOptions = $derived(availableTags.map((tag) => ({ value: tag, label: tag })));
   const folderMetrics = $derived(
@@ -76,30 +152,34 @@
       }),
     ),
   );
-  const filteredFolders = $derived(selectFolders(workspace.folders, folderTags, folderSort, folderMetrics));
+  const filteredFolders = $derived(selectFolders(workspace.folders, folderTags, folderSort, folderMetrics, $l.compare));
   const query = $derived(search.trim().toLowerCase());
   const visibleFolders = $derived(
     filteredFolders.filter((folder) =>
       [folder.title, folder.description, ...folder.tags].some((value) => value.toLowerCase().includes(query)),
     ),
   );
+  const matchingCards = $derived(
+    cards.filter(
+      (card) =>
+        (!selectedFolder || card.folderId === selectedFolder.id) && matchesCard(card, folderName(card.folderId), query),
+    ),
+  );
   const visibleCards = $derived(
-    cards
-      .filter(
-        (card) =>
-          (!selectedFolder || card.folderId === selectedFolder.id) &&
-          matchesCard(card, folderName(card.folderId), query),
-      )
-      .toSorted((a, b) => b.createdAt - a.createdAt),
+    selectCards(matchingCards, { sort: cardSort, kinds: cardKinds, progressRange: cardProgressRange }),
   );
   const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘ K' : 'Ctrl K';
   let searchInput = $state<HTMLInputElement>();
   let sidebarToggle = $state<HTMLButtonElement>();
   let folderDialog = $state<HTMLDialogElement>();
   let cardDialog = $state<HTMLDialogElement>();
+  let partDialog = $state<HTMLDialogElement>();
+  let selectedPart = $state<{ card: Card; itemId: string } | null>(null);
+  let partError = $state<MessageKey | ''>('');
+  let partDeleteDialog = $state<HTMLDialogElement>();
   let deleteDialog = $state<HTMLDialogElement>();
   let deletion = $state<{ folderId: string; cardId?: string; title: string } | null>(null);
-  let deleteError = $state('');
+  let deleteError = $state<MessageKey | ''>('');
   let reviewDialog = $state<HTMLDialogElement>();
   let titleInput = $state<HTMLInputElement>();
   let editingFolder = $state<Folder | null>(null);
@@ -111,14 +191,63 @@
   let selectingFiles = $state(false);
   let cardFolder = $state('');
   let newFolderTitle = $state('');
-  let formError = $state('');
+  let formError = $state<MessageKey | ''>('');
   let saving = $state(false);
   let dialogOpener: HTMLElement | null = null;
   let dialogFallback: HTMLElement | null = null;
   let reviewQueue = $state<ReviewItem[]>([]);
   let reviewOpen = $state(false);
   let reviewSaving = $state(false);
-  let savedCard = $state<Card | null>(null);
+  let archiveOperation = $state<'import' | 'export' | null>(null);
+  let archiveError = $state<MessageKey | ''>('');
+
+  function openArchive(event: MouseEvent, operation: 'import' | 'export') {
+    if (saving || status !== 'ready') return;
+    rememberOpener(event);
+    archiveError = '';
+    archiveOperation = operation;
+  }
+
+  async function refreshImportedFolders() {
+    try {
+      const data = await loadData(backend, workspace);
+      workspace = data.workspace;
+      cards = data.cards;
+      now = data.now;
+    } catch {
+      error = 'workspace.folders_were_imported_but_the_library_could_not_be_refreshed_reopen_the_library_to_see_them';
+    }
+  }
+
+  async function transferArchive(action: () => Promise<ArchiveResult>) {
+    if (saving) return;
+    saving = true;
+    archiveError = '';
+    try {
+      await action();
+      archiveOperation = null;
+      await restoreDialogFocus();
+    } catch {
+      const message = 'workspace.the_folder_archive_could_not_be_processed_please_try_again';
+      if (archiveOperation) archiveError = message;
+      else error = message;
+    } finally {
+      saving = false;
+    }
+  }
+
+  function exportSingleFolder(opener: HTMLElement, folderId: string) {
+    rememberOpener(opener);
+    void transferArchive(() => exportFolders(backend, [folderId]));
+  }
+
+  function exportSelectedFolders(ids: string[]) {
+    void transferArchive(() => exportFolders(backend, ids));
+  }
+
+  function importArchivedFolders(mode: ImportMode) {
+    void transferArchive(() => importFolders(backend, mode, refreshImportedFolders));
+  }
 
   async function refreshCards() {
     try {
@@ -162,7 +291,7 @@
         ...loadPreferences(backend.preferences, backend.configuration.preferencesStorageKey),
       };
     } catch {
-      preferencesError = 'Your navigation preferences could not be loaded.';
+      preferencesError = 'workspace.your_navigation_preferences_could_not_be_loaded';
       return emptyWorkspace();
     }
   }
@@ -178,7 +307,7 @@
       status = 'ready';
     } catch {
       status = 'error';
-      error = 'Your saved memories could not be loaded. Try again to reconnect to your local database.';
+      error = 'workspace.your_saved_memories_could_not_be_loaded_try_again_to_reconnect_to_your_local_database';
     }
   }
 
@@ -187,7 +316,7 @@
       savePreferences(backend.preferences, workspace, backend.configuration.preferencesStorageKey);
       preferencesError = '';
     } catch {
-      preferencesError = 'Your navigation preferences could not be saved on this device.';
+      preferencesError = 'workspace.your_navigation_preferences_could_not_be_saved_on_this_device';
     }
   }
 
@@ -208,8 +337,11 @@
     if (
       folderDialog?.open ||
       cardDialog?.open ||
+      partDialog?.open ||
+      partDeleteDialog?.open ||
       deleteDialog?.open ||
       reviewDialog?.open ||
+      archiveOperation !== null ||
       !(event.metaKey || event.ctrlKey) ||
       event.key.toLowerCase() !== 'k'
     )
@@ -219,16 +351,13 @@
   }
 
   function navigate(folderId: string | null = null) {
-    if (folderId) foldersOpen = true;
-    search = '';
-    savedCard = null;
     workspace = { ...workspace, selectedFolderId: folderId };
     persistPreferences();
     if (window.matchMedia('(max-width: 600px)').matches) void setSidebarOpen(false);
   }
 
   function folderName(id: string) {
-    return workspace.folders.find((folder) => folder.id === id)?.title ?? 'Folder';
+    return workspace.folders.find((folder) => folder.id === id)?.title ?? $l.t('workspace.folder');
   }
   function cardsInFolder(id: string) {
     return cards.filter((card) => card.folderId === id);
@@ -280,7 +409,7 @@
     event.preventDefault();
     if (saving) return;
     if (!title.trim()) {
-      formError = 'Give your folder a name.';
+      formError = 'workspace.give_your_folder_a_name';
       titleInput?.focus();
       return;
     }
@@ -297,11 +426,10 @@
           ? workspace.folders.map((saved) => (saved.id === folder.id ? folder : saved))
           : [...workspace.folders, folder],
       );
-      search = '';
       persistPreferences();
       folderDialog?.close();
     } catch {
-      formError = 'Your folder could not be saved. Your entries are still here; try again.';
+      formError = 'workspace.your_folder_could_not_be_saved_your_entries_are_still_here_try_again';
     } finally {
       saving = false;
     }
@@ -313,7 +441,7 @@
     editingCard = null;
     editorItems = [textDraft('', backend.newKey())];
     cardFolder = selectedFolder?.id ?? workspace.folders[0]?.id ?? '__new';
-    newFolderTitle = workspace.folders.length ? '' : 'Everyday learning';
+    newFolderTitle = workspace.folders.length ? '' : $l.t('workspace.everyday_learning');
     cardDialog?.showModal();
     void tick().then(() => cardDialog?.querySelector('textarea')?.focus());
   }
@@ -336,6 +464,36 @@
     deleteDialog?.showModal();
   }
 
+  function openPart(card: Card, itemId: string, opener: HTMLElement) {
+    if (saving) return;
+    rememberOpener(opener);
+    selectedPart = { card, itemId };
+    partError = '';
+    partDialog?.showModal();
+  }
+
+  async function removePart() {
+    if (!selectedPart || saving) return;
+    const { card, itemId } = selectedPart;
+    saving = true;
+    partError = '';
+    try {
+      const saved = await removeCardPart(backend, card, itemId);
+      if (saved) {
+        cards = mergeCardSnapshot(cards, saved);
+      } else {
+        cards = cards.filter((candidate) => candidate.folderId !== card.folderId || candidate.id !== card.id);
+      }
+      now = backend.now();
+      partDeleteDialog?.close();
+      partDialog?.close();
+    } catch {
+      partError = 'workspace.this_part_could_not_be_removed_please_try_again';
+    } finally {
+      saving = false;
+    }
+  }
+
   async function removeSelection(event: SubmitEvent) {
     event.preventDefault();
     if (!deletion || saving) return;
@@ -354,11 +512,10 @@
         );
         persistPreferences();
       }
-      savedCard = null;
       now = backend.now();
       deleteDialog?.close();
     } catch {
-      deleteError = 'Could not delete this item. Please try again.';
+      deleteError = 'workspace.could_not_delete_this_item_please_try_again';
     } finally {
       saving = false;
     }
@@ -369,7 +526,7 @@
     if (saving || selectingFiles) return;
     const items = saveItems(editorItems);
     if (!hasContent(items) || (cardFolder === '__new' && !newFolderTitle.trim())) {
-      formError = 'Add something you want to remember and choose a folder for this card.';
+      formError = 'workspace.add_something_you_want_to_remember_and_choose_a_folder_for_this_card';
       return;
     }
     saving = true;
@@ -388,10 +545,9 @@
         : mergeCardSnapshot(cards, card);
       now = backend.now();
       if (selectedFolder?.id !== card.folderId) navigate(card.folderId);
-      savedCard = card;
       cardDialog?.close();
-    } catch (error) {
-      formError = `Your card could not be saved. Your entries are still here. ${error instanceof Error ? error.message : 'Try again.'}`;
+    } catch {
+      formError = 'workspace.your_card_could_not_be_saved_your_entries_are_still_here_try_again';
     } finally {
       saving = false;
     }
@@ -401,6 +557,12 @@
     if (reviewOpen) return;
     rememberOpener(event);
     void openReview(card ? reviewItems([card]) : [...dueCards]);
+  }
+
+  function startFolderReview(opener: HTMLElement, folderId: string) {
+    if (reviewOpen) return;
+    rememberOpener(opener);
+    void openReview(shuffledReviewItems(cardsInFolder(folderId)));
   }
 
   async function openReview(entries: ReviewItem[]) {
@@ -427,6 +589,7 @@
 
 {#snippet icon(name: string, size = 18)}
   <svg
+    class:directional-icon={name === 'arrow'}
     width={size}
     height={size}
     viewBox="0 0 24 24"
@@ -446,34 +609,77 @@
     {:else if name === 'plus'}<path d="M12 5v14M5 12h14" />
     {:else if name === 'chevron'}<path d="m9 5 7 7-7 7" />
     {:else if name === 'arrow'}<path d="M4 12h16m-6-6 6 6-6 6" />
+    {:else if name === 'import'}<path d="M12 3v12m-4-4 4 4 4-4M4 15v5h16v-5" />
+    {:else if name === 'export'}<path d="M12 15V3m-4 4 4-4 4 4M4 15v5h16v-5" />
     {:else if name === 'check'}<path d="m5 12 4 4L19 6" />
     {:else if name === 'clock'}<circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
     {:else if name === 'close'}<path d="m6 6 12 12M18 6 6 18" />
+    {:else if name === 'trash'}<path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" />
     {:else if name === 'repeat'}<path d="M20 7h-9a7 7 0 1 0 7 10M16 3l4 4-4 4" />{/if}
   </svg>
+{/snippet}
+
+{#snippet workspaceSkeleton(cardsView: boolean)}
+  <div class="library-heading" aria-hidden="true">
+    <div class="skeleton-heading-copy">
+      <Skeleton width="80px" height="9px" />
+      <Skeleton width="min(330px, 70vw)" height="46px" />
+      <Skeleton width="min(400px, 65vw)" height="14px" />
+    </div>
+    <div class="heading-actions"><Skeleton width="125px" height="36px" radius="7px" /></div>
+  </div>
+  {#if cardsView}<div class="section-heading" aria-hidden="true">
+      <Skeleton width="min(130px, 45%)" height="18px" /><Skeleton width="min(170px, 40%)" height="9px" />
+    </div>{/if}
+  <div class="folder-controls" aria-hidden="true">
+    <div class="folder-toolbar">
+      <Skeleton width="76px" height="32px" radius="6px" />
+      <Skeleton width={cardsView ? '115px' : '76px'} height="32px" radius="6px" />
+      {#if cardsView}<Skeleton width="100px" height="32px" radius="6px" />{/if}
+    </div>
+    <Skeleton width="64px" height="10px" />
+  </div>
+  <ul class:memory-grid={cardsView} class:folder-grid={!cardsView} aria-hidden="true">
+    {#each [0, 1, 2, 3, 4, 5] as index (index)}
+      <li class="skeleton-tile" class:skeleton-memory={cardsView}>
+        {#if cardsView}
+          <div class="skeleton-progress"><Skeleton width="30px" height="11px" /></div>
+          <div class="skeleton-preview"><Skeleton height="100%" radius="5px" /></div>
+        {:else}
+          <div class="skeleton-folder-figure"><Skeleton height="100%" radius="9px" /></div>
+          <div class="skeleton-folder-copy">
+            <Skeleton width={index % 2 ? '55%' : '70%'} height="16px" />
+            <Skeleton width="90%" height="11px" />
+            <Skeleton width="65%" height="11px" />
+            <div class="skeleton-folder-count"><Skeleton width="50px" height="9px" /></div>
+          </div>
+        {/if}
+      </li>
+    {/each}
+  </ul>
 {/snippet}
 
 <main class="app-shell">
   <button
     class="sidebar-backdrop"
     class:visible={workspace.sidebarOpen}
-    aria-label="Collapse sidebar"
+    aria-label={$l.t('workspace.collapse_sidebar')}
     aria-hidden={!workspace.sidebarOpen}
     disabled={!workspace.sidebarOpen}
     tabindex="-1"
     onclick={() => setSidebarOpen(false)}
   ></button>
-  <aside id="sidebar" class:collapsed={!workspace.sidebarOpen} aria-label="Main navigation">
+  <aside id="sidebar" class:collapsed={!workspace.sidebarOpen} aria-label={$l.t('workspace.main_navigation')}>
     <header class="sidebar-header">
-      <button class="wordmark" onclick={() => navigate()} aria-label="Raven home"
+      <button class="wordmark" onclick={() => navigate()} aria-label={$l.t('workspace.raven_home')}
         ><span class="brand-icon"><img src="/raven.svg" alt="" /></span><span class="sidebar-label"
           >raven<span class="brand-dot">.</span></span
         ></button
       ><button
         class="icon-button sidebar-toggle"
         bind:this={sidebarToggle}
-        aria-label={workspace.sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-        title={workspace.sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+        aria-label={workspace.sidebarOpen ? $l.t('workspace.collapse_sidebar') : $l.t('workspace.expand_sidebar')}
+        title={workspace.sidebarOpen ? $l.t('workspace.collapse_sidebar') : $l.t('workspace.expand_sidebar')}
         aria-expanded={workspace.sidebarOpen}
         aria-controls="sidebar"
         onclick={() => setSidebarOpen(!workspace.sidebarOpen)}>{@render icon('sidebar', 17)}</button
@@ -481,29 +687,30 @@
     </header>
     {#if workspace.sidebarOpen}<div class="sidebar-search">
         {@render icon('search', 16)}<input
+          dir="auto"
           type="search"
-          aria-label="Search cards and folders"
-          placeholder="Find a memory…"
+          aria-label={$l.t('workspace.search_cards_and_folders')}
+          placeholder={$l.t('workspace.find_a_memory')}
           bind:this={searchInput}
           bind:value={search}
           onkeydown={(event) => {
             if (event.key === 'Escape') search = '';
           }}
-        />{#if !search}<kbd>{shortcut}</kbd>{/if}
+        />{#if !search}<kbd dir="ltr">{shortcut}</kbd>{/if}
       </div>
     {:else}<button
         class="icon-button collapsed-search"
-        aria-label="Search cards and folders"
-        title={`Search (${shortcut})`}
+        aria-label={$l.t('workspace.search_cards_and_folders')}
+        title={$l.t('workspace.searchShortcut', { shortcut })}
         onclick={focusSearch}>{@render icon('search')}</button
       >{/if}
-    <nav aria-label="Workspace">
-      <p class="nav-caption sidebar-label">YOUR SPACE</p>
+    <nav aria-label={$l.t('workspace.workspace')}>
+      <p class="nav-caption sidebar-label">{$l.t('workspace.your_space')}</p>
       <div class="folder-nav-row">
         {#if workspace.sidebarOpen}<button
             class="icon-button folder-disclosure"
             class:expanded={foldersOpen || !!query}
-            aria-label={foldersOpen || query ? 'Collapse folders' : 'Expand folders'}
+            aria-label={foldersOpen || query ? $l.t('workspace.collapse_folders') : $l.t('workspace.expand_folders')}
             aria-expanded={foldersOpen || !!query}
             aria-controls="folder-navigation"
             onclick={() => {
@@ -513,85 +720,112 @@
           >{/if}
         <button
           class="nav-item all-folders"
-          aria-current={!selectedFolder ? 'page' : undefined}
-          aria-label="All folders"
-          title="All folders"
+          aria-current={!workspace.selectedFolderId ? 'page' : undefined}
+          aria-label={$l.t('workspace.all_folders')}
+          title={$l.t('workspace.all_folders')}
           onclick={() => navigate()}
-          >{#if workspace.sidebarOpen}<span class="sidebar-label">All folders</span><span
-              class="nav-total sidebar-label">{workspace.folders.length}</span
-            >{:else}{@render icon('folder', 17)}{/if}</button
+          >{#if workspace.sidebarOpen}<span class="sidebar-label">{$l.t('workspace.all_folders')}</span>
+            {#if status === 'ready'}<span class="nav-total sidebar-label">{$l.number(workspace.folders.length)}</span
+              >{/if}
+          {:else}{@render icon('folder', 17)}{/if}</button
         >
         {#if workspace.sidebarOpen}<button
             class="icon-button folder-create"
-            aria-label="New folder"
-            title="New folder"
+            aria-label={$l.t('workspace.new_folder')}
+            title={$l.t('workspace.new_folder')}
             disabled={status !== 'ready'}
             onclick={openFolder}>{@render icon('plus', 16)}</button
           >{/if}
       </div>
-      {#if workspace.sidebarOpen && (foldersOpen || query)}<div id="folder-navigation" class="folder-navigation">
-          {#each visibleFolders as folder (folder.id)}<button
-              class="nav-item folder-link"
-              class:selected={selectedFolder?.id === folder.id}
-              aria-current={selectedFolder?.id === folder.id ? 'page' : undefined}
-              title={folder.title}
-              onclick={() => navigate(folder.id)}
-              >{@render icon('folder', 15)}<span class="sidebar-label">{folder.title}</span><span
-                class="nav-total sidebar-label">{cardsInFolder(folder.id).length}</span
-              ></button
-            >{:else}<p class="sidebar-empty">
-              {query ? 'No matching folders' : 'No folders yet. Use + to create one.'}
-            </p>{/each}
+      {#if workspace.sidebarOpen && (foldersOpen || query)}<div
+          id="folder-navigation"
+          class="folder-navigation"
+          aria-busy={status === 'loading'}
+        >
+          {#if status === 'loading'}
+            {#each [0, 1, 2, 3] as index (index)}<div class="sidebar-skeleton" aria-hidden="true">
+                <Skeleton width="15px" height="15px" radius="3px" />
+                <Skeleton width={index % 2 ? '55%' : '70%'} height="11px" />
+              </div>{/each}
+          {:else if status === 'ready'}
+            {#each visibleFolders as folder (folder.id)}<button
+                class="nav-item folder-link"
+                class:selected={selectedFolder?.id === folder.id}
+                aria-current={selectedFolder?.id === folder.id ? 'page' : undefined}
+                title={folder.title}
+                onclick={() => navigate(folder.id)}
+                >{@render icon('folder', 15)}<span class="sidebar-label"><bdi>{folder.title}</bdi></span><span
+                  class="nav-total sidebar-label">{$l.number(cardsInFolder(folder.id).length)}</span
+                ></button
+              >{:else}<p class="sidebar-empty">
+                {query ? $l.t('workspace.no_matching_folders') : $l.t('workspace.no_folders_yet_use_to_create_one')}
+              </p>{/each}
+          {/if}
         </div>{/if}
       {#if !workspace.sidebarOpen}<button
           class="nav-item"
-          title="New folder"
-          aria-label="New folder"
+          title={$l.t('workspace.new_folder')}
+          aria-label={$l.t('workspace.new_folder')}
           disabled={status !== 'ready'}
           onclick={openFolder}>{@render icon('plus', 16)}</button
         >{/if}
     </nav>
+    <footer class="sidebar-footer">
+      <div class="sidebar-transfers" role="group" aria-label={$l.t('workspace.import_and_export_folders')}>
+        <button
+          class="footer-action"
+          type="button"
+          aria-label={$l.t('workspace.import_folders')}
+          data-tooltip={$l.t('workspace.import_folders')}
+          disabled={saving || status !== 'ready'}
+          onclick={(event) => openArchive(event, 'import')}>{@render icon('import', 18)}</button
+        >
+        <button
+          class="footer-action"
+          type="button"
+          aria-label={$l.t('workspace.export_folders')}
+          data-tooltip={$l.t('workspace.export_folders')}
+          disabled={saving || status !== 'ready' || !workspace.folders.length}
+          onclick={(event) => openArchive(event, 'export')}>{@render icon('export', 18)}</button
+        >
+      </div>
+      <div class="footer-language"><LanguageSelector compact /></div>
+    </footer>
   </aside>
-  <section class="content" aria-label={selectedFolder?.title ?? 'Folders'}>
-    <div class="page-container">
-      {#if error || preferencesError}<p class="error" role="alert">{error || preferencesError}</p>{/if}
-      {#if status === 'loading'}<div class="loading-state" role="status">
-          <span class="loading-mark">✳</span>
-          <h1>Gathering your memories…</h1>
-          <p>Picking up where you left off.</p>
-        </div>
+  <section class="content" aria-label={selectedFolder?.title ?? $l.t('workspace.folders')}>
+    <p class="visually-hidden" role="status">{status === 'loading' ? $l.t('workspace.gathering_your_memories') : ''}</p>
+    <div class="page-container" aria-busy={status === 'loading'}>
+      {#if error || preferencesError || viewPreferencesError}<p class="error" role="alert">
+          {error || preferencesError || viewPreferencesError}
+        </p>{/if}
+      {#if status === 'loading'}
+        {@render workspaceSkeleton(workspace.selectedFolderId !== null || !!query)}
       {:else if status === 'error'}<div class="empty-state">
           <div class="empty-icon">{@render icon('cards', 26)}</div>
-          <h1>Let’s reconnect.</h1>
-          <p>Your memories are saved in your local database.</p>
-          <button class="primary-button" onclick={loadWorkspace}>Try again {@render icon('repeat', 16)}</button>
+          <h1>{$l.t('workspace.let_s_reconnect')}</h1>
+          <p>{$l.t('workspace.your_memories_are_saved_in_your_local_database')}</p>
+          <button class="primary-button" onclick={loadWorkspace}
+            >{$l.t('workspace.try_again')} {@render icon('repeat', 16)}</button
+          >
         </div>
       {:else}
-        {#if savedCard}<div class="saved-notice">
-            <span role="status">{@render icon('check', 15)} Memory saved. Its items are scheduled for review.</span
-            ><button class="text-button" onclick={(event) => startReview(event, savedCard ?? undefined)}
-              >Review now {@render icon('arrow', 14)}</button
-            ><button
-              class="icon-button"
-              aria-label="Dismiss saved message"
-              onclick={() => {
-                savedCard = null;
-              }}>{@render icon('close', 14)}</button
-            >
-          </div>{/if}
         {#if !selectedFolder && !query}
           <section class="library-heading">
             <div>
-              <p class="eyebrow">YOUR SPACE</p>
-              <h1>Your folders</h1>
-              <p>A home for the things you want to remember.</p>
+              <p class="eyebrow">{$l.t('workspace.your_space')}</p>
+              <h1>{$l.t('workspace.your_folders')}</h1>
+              <p>{$l.t('workspace.a_home_for_the_things_you_want_to_remember')}</p>
             </div>
-            <button class="primary-button" onclick={openFolder}>{@render icon('plus', 17)} New folder</button>
+            <div class="heading-actions">
+              <button class="primary-button" disabled={saving} onclick={openFolder}
+                >{@render icon('plus', 17)} {$l.t('workspace.new_folder')}</button
+              >
+            </div>
           </section>
-          <div class="folder-controls" aria-label="Folder controls">
+          <div class="folder-controls" aria-label={$l.t('workspace.folder_controls')}>
             <div class="folder-toolbar">
               <ChoiceMenu
-                label="Sort"
+                label={$l.t('workspace.sort')}
                 options={folderSortOptions}
                 selected={[folderSort]}
                 onselect={(value) => {
@@ -599,12 +833,12 @@
                 }}
               />
               <ChoiceMenu
-                label="Tags"
+                label={$l.t('workspace.tags')}
                 options={tagOptions}
                 selected={folderTags}
                 multiple
                 searchable
-                hint="Folders must match every selected tag."
+                hint={$l.t('workspace.folders_must_match_every_selected_tag')}
                 onselect={(tag) => {
                   folderTags = folderTags.includes(tag)
                     ? folderTags.filter((value) => value !== tag)
@@ -616,68 +850,88 @@
               />
             </div>
             <span class="folder-result-count" role="status"
-              >{filteredFolders.length}
-              {filteredFolders.length === 1 ? 'folder' : 'folders'}{folderTags.length
-                ? ` of ${workspace.folders.length}`
+              >{$l.t('common.folders', { count: filteredFolders.length })}{folderTags.length
+                ? $l.t('common.ofTotal', { count: workspace.folders.length })
                 : ''}</span
             >
           </div>
-          {#if folderTags.length}<div class="active-folder-tags" aria-label="Selected tag filters">
+          {#if folderTags.length}<div class="active-folder-tags" aria-label={$l.t('workspace.selected_tag_filters')}>
               {#each folderTags as tag (tag)}<button
                   type="button"
                   class="filter-chip"
-                  aria-label={`Remove tag filter ${tag}`}
+                  aria-label={$l.t('workspace.removeTag', { name: tag })}
                   onclick={() => {
                     folderTags = folderTags.filter((value) => value !== tag);
                   }}
                 >
-                  <span>{tag}</span>{@render icon('close', 12)}
+                  <span><bdi>{tag}</bdi></span>{@render icon('close', 12)}
                 </button>{/each}
               <button
                 class="clear-folder-tags"
                 type="button"
                 onclick={() => {
                   folderTags = [];
-                }}>Clear all</button
+                }}>{$l.t('workspace.clear_all')}</button
               >
             </div>{/if}
           {#if folderTags.length && !filteredFolders.length}<p class="folder-filter-empty">
-              No folders match all selected tags.
+              {$l.t('workspace.no_folders_match_all_selected_tags')}
             </p>{/if}
-          <ul class="folder-grid" aria-label="Your folders">
+          <ul class="folder-grid" aria-label={$l.t('workspace.your_folders')}>
             {#each filteredFolders as folder (folder.id)}
               <li class="folder-tile">
-                <button class="folder-card" onclick={() => navigate(folder.id)}>
-                  <h3>{folder.title}</h3>
-                  <p>{folder.description || 'A collection of things worth remembering.'}</p>
-                  <span class="folder-card-bottom">
-                    {#if folder.tags.length}<span class="folder-tags"
-                        >{#each folder.tags as tag (tag)}<span class="folder-tag">{tag}</span>{/each}</span
-                      >{/if}
-                    <span
-                      >{cardsInFolder(folder.id).length}
-                      {cardsInFolder(folder.id).length === 1 ? 'card' : 'cards'}</span
+                <FolderTile papers={selectFolderPapers(cards, folder.id)}>
+                  {#snippet children(illustration)}
+                    <button class="folder-card" onclick={() => navigate(folder.id)}>
+                      {@render illustration()}
+                      <h3><bdi>{folder.title}</bdi></h3>
+                      <p dir="auto">
+                        {folder.description || $l.t('workspace.a_collection_of_things_worth_remembering')}
+                      </p>
+                      <span class="folder-card-bottom">
+                        {#if folder.tags.length}<span class="folder-tags"
+                            >{#each folder.tags as tag (tag)}<span class="folder-tag"><bdi>{tag}</bdi></span
+                              >{/each}</span
+                          >{/if}
+                        <span>{$l.t('common.cards', { count: cardsInFolder(folder.id).length })}</span>
+                        {#if scheduledItems.some((entry) => entry.card.folderId === folder.id && entry.dueAt <= now)}<span
+                            class="due-dot">{$l.t('workspace.ready_to_review')}</span
+                          >{/if}
+                      </span>
+                    </button>
+                    <span class="tile-actions"
+                      ><ActionMenu
+                        label={$l.t('workspace.folderOptions', { name: folder.title })}
+                        disabled={saving}
+                        actions={[
+                          ...(scheduledItems.some((entry) => entry.card.folderId === folder.id)
+                            ? [
+                                {
+                                  label: $l.t('workspace.full_review'),
+                                  onselect: (opener: HTMLButtonElement) => startFolderReview(opener, folder.id),
+                                },
+                              ]
+                            : []),
+                          {
+                            label: $l.t('workspace.export_folder'),
+                            onselect: (opener) => exportSingleFolder(opener, folder.id),
+                          },
+                          { label: $l.t('workspace.edit_folder'), onselect: (opener) => editFolder(opener, folder) },
+                          {
+                            label: $l.t('workspace.delete_folder'),
+                            onselect: (opener) => confirmDelete(opener, folder.id),
+                          },
+                        ]}
+                      /></span
                     >
-                    {#if scheduledItems.some((entry) => entry.card.folderId === folder.id && entry.dueAt <= now)}<span
-                        class="due-dot">Ready to review</span
-                      >{/if}
-                  </span>
-                </button>
-                <span class="tile-actions"
-                  ><ActionMenu
-                    label={`Options for folder ${folder.title}`}
-                    disabled={saving}
-                    actions={[
-                      { label: 'Edit folder', onselect: (opener) => editFolder(opener, folder) },
-                      { label: 'Delete folder', onselect: (opener) => confirmDelete(opener, folder.id) },
-                    ]}
-                  /></span
-                >
+                  {/snippet}
+                </FolderTile>
               </li>
             {/each}
             <li class="new-folder-tile">
               <button class="new-folder-card" onclick={openFolder}
-                ><span>{@render icon('plus', 22)}</span><strong>A new curiosity?</strong><span>Give it a folder.</span
+                ><span>{@render icon('plus', 22)}</span><strong>{$l.t('workspace.a_new_curiosity')}</strong><span
+                  >{$l.t('workspace.give_it_a_folder')}</span
                 ></button
               >
             </li>
@@ -686,65 +940,179 @@
           <section class="library-heading">
             <div>
               <p class="eyebrow">
-                {query ? 'A LITTLE HELP FINDING IT' : selectedFolder ? 'YOUR COLLECTION' : 'THINGS WORTH REMEMBERING'}
+                {query
+                  ? $l.t('workspace.a_little_help_finding_it')
+                  : selectedFolder
+                    ? $l.t('workspace.your_collection')
+                    : $l.t('workspace.things_worth_remembering')}
               </p>
-              <h1>{query ? 'Search your memories' : (selectedFolder?.title ?? 'Search your memories')}</h1>
+              <h1>
+                {query
+                  ? $l.t('workspace.search_your_memories')
+                  : (selectedFolder?.title ?? $l.t('workspace.search_your_memories'))}
+              </h1>
               <p>
                 {query
-                  ? `Results for “${search.trim()}”`
-                  : selectedFolder?.description || 'Big ideas, small details, and everything you want to keep.'}
+                  ? $l.t('workspace.searchResults', { query: search.trim() })
+                  : selectedFolder?.description ||
+                    $l.t('workspace.big_ideas_small_details_and_everything_you_want_to_keep')}
               </p>
               {#if selectedFolder?.tags.length}<div class="tags">
-                  {#each selectedFolder.tags as tag (tag)}<span>{tag}</span>{/each}
+                  {#each selectedFolder.tags as tag (tag)}<span><bdi>{tag}</bdi></span>{/each}
                 </div>{/if}
             </div>
             <div class="heading-actions">
               <button class="primary-button" onclick={(event) => openCard(event)}
-                >{@render icon('plus', 17)} New card</button
+                >{@render icon('plus', 17)} {$l.t('workspace.new_card')}</button
               >{#if selectedFolder}{@const folder = selectedFolder}<ActionMenu
-                  label={`Options for folder ${folder.title}`}
+                  label={$l.t('workspace.folderOptions', { name: folder.title })}
                   disabled={saving}
                   actions={[
-                    { label: 'Edit folder', onselect: (opener) => editFolder(opener, folder) },
-                    { label: 'Delete folder', onselect: (opener) => confirmDelete(opener, folder.id) },
+                    ...(scheduledItems.some((entry) => entry.card.folderId === folder.id)
+                      ? [
+                          {
+                            label: $l.t('workspace.full_review'),
+                            onselect: (opener: HTMLButtonElement) => startFolderReview(opener, folder.id),
+                          },
+                        ]
+                      : []),
+                    {
+                      label: $l.t('workspace.export_folder'),
+                      onselect: (opener) => exportSingleFolder(opener, folder.id),
+                    },
+                    { label: $l.t('workspace.edit_folder'), onselect: (opener) => editFolder(opener, folder) },
+                    { label: $l.t('workspace.delete_folder'), onselect: (opener) => confirmDelete(opener, folder.id) },
                   ]}
                 />{/if}
             </div>
           </section>
           {#if query && !selectedFolder && visibleFolders.length}<div class="section-heading">
-              <h2>Folders <span class="count">{visibleFolders.length}</span></h2>
+              <h2>{$l.t('workspace.folders')} <span class="count">{$l.number(visibleFolders.length)}</span></h2>
             </div>
             <div class="search-folders">
               {#each visibleFolders as folder (folder.id)}<button
                   class="secondary-button"
                   onclick={() => navigate(folder.id)}
-                  >{@render icon('folder', 16)} {folder.title} {@render icon('arrow', 15)}</button
+                  >{@render icon('folder', 16)} <bdi>{folder.title}</bdi> {@render icon('arrow', 15)}</button
                 >{/each}
             </div>{/if}
           <div class="section-heading">
-            <h2>{selectedFolder ? 'Memory cards' : 'Your cards'} <span class="count">{visibleCards.length}</span></h2>
+            <h2>
+              {selectedFolder ? $l.t('workspace.memory_cards') : $l.t('workspace.your_cards')}
+              <span class="count">{$l.number(visibleCards.length)}</span>
+            </h2>
             {#if query}<button
                 class="text-button"
                 onclick={() => {
                   search = '';
-                }}>Clear search {@render icon('close', 14)}</button
-              >{:else}<span class="section-note">Select a card to practice recall</span>{/if}
+                }}>{$l.t('workspace.clear_search')} {@render icon('close', 14)}</button
+              >{:else}<span class="section-note">{$l.t('workspace.select_a_card_to_practice_recall')}</span>{/if}
           </div>
-          <p class="sr-only" role="status">{query ? `${visibleCards.length} cards match your search.` : ''}</p>
-          {#if visibleCards.length}<ul class="memory-grid" aria-label="Memory cards">
+          <div class="folder-controls" aria-label={$l.t('workspace.card_controls')}>
+            <div class="folder-toolbar">
+              <ChoiceMenu
+                label={$l.t('workspace.sort')}
+                options={cardSortOptions}
+                selected={[cardSort]}
+                onselect={(value) => {
+                  cardSort = value;
+                }}
+              />
+              <ChoiceMenu
+                label={$l.t('workspace.content_type')}
+                options={cardKindOptions}
+                selected={cardKinds}
+                multiple
+                hint={$l.t('workspace.cards_match_any_selected_content_type_including_hints')}
+                onselect={(kind) => {
+                  cardKinds = cardKinds.includes(kind)
+                    ? cardKinds.filter((value) => value !== kind)
+                    : [...cardKinds, kind];
+                }}
+                onclear={() => {
+                  cardKinds = [];
+                }}
+              />
+              <RecallFilter
+                range={cardProgressRange}
+                onchange={(range) => {
+                  cardProgressRange = range;
+                }}
+              />
+            </div>
+            <span class="folder-result-count" role="status" aria-live="polite">
+              {$l.t('common.cardsOfTotal', { count: matchingCards.length, shown: $l.number(visibleCards.length) })}
+            </span>
+          </div>
+          {#if hasCardFilters}<div class="active-folder-tags" aria-label={$l.t('workspace.selected_card_filters')}>
+              {#each cardKinds as kind (kind)}<button
+                  type="button"
+                  class="filter-chip"
+                  aria-label={$l.t('workspace.removeKind', {
+                    kind: cardKindOptions.find((option) => option.value === kind)?.label ?? '',
+                  })}
+                  onclick={() => {
+                    cardKinds = cardKinds.filter((value) => value !== kind);
+                  }}
+                >
+                  <span>{cardKindOptions.find((option) => option.value === kind)?.label}</span>{@render icon(
+                    'close',
+                    12,
+                  )}
+                </button>{/each}
+              {#if hasRecallFilter}<button
+                  type="button"
+                  class="filter-chip"
+                  aria-label={$l.t('workspace.removeRecall')}
+                  onclick={() => {
+                    cardProgressRange = { minimum: 0, maximum: 100 };
+                  }}
+                >
+                  <span
+                    >{$l.t('workspace.recallRange', {
+                      minimum: $l.percent(cardProgressRange.minimum),
+                      maximum: $l.percent(cardProgressRange.maximum),
+                    })}</span
+                  >{@render icon('close', 12)}
+                </button>{/if}
+              <button type="button" class="clear-folder-tags" onclick={clearCardFilters}
+                >{$l.t('workspace.clear_filters')}</button
+              >
+            </div>{/if}
+          {#if visibleCards.length}<ul class="memory-grid" aria-label={$l.t('workspace.memory_cards')}>
               {#each visibleCards as card (`${card.folderId}/${card.id}`)}
+                {@const progress = cardProgress(card)}
                 <li class="memory-tile">
-                  <div class="memory-card">
-                    <div class="memory-card-preview"><CardContent {card} mediaURL={backend.mediaURL} compact /></div>
+                  <div
+                    class="memory-card"
+                    style:--progress-fill={`hsl(${progress <= 50 ? 0 : progress <= 80 ? (progress - 50) * 2 : 60 + (progress - 80) * 3} 75% 50%)`}
+                  >
+                    <span
+                      class="card-progress-percentage"
+                      aria-label={$l.t('workspace.recallSuccess', { percentage: $l.percent(progress) })}
+                      title={$l.t('workspace.recallExplanation')}>{$l.percent(progress)}</span
+                    >
+                    <div class="memory-card-preview">
+                      <CardContent
+                        {card}
+                        mediaURL={backend.mediaURL}
+                        nativeStart={backend.previewStart}
+                        compact
+                        onopen={(itemId, opener) => openPart(card, itemId, opener)}
+                      />
+                    </div>
                   </div>
                   <span class="tile-actions"
                     ><ActionMenu
-                      label={`Options for card ${cardPreview(card)}`}
+                      label={$l.t('workspace.cardOptions', { name: cardPreview(card) })}
                       disabled={saving || selectingFiles}
                       actions={[
-                        { label: 'Review card', onselect: (opener) => startReview(opener, card) },
-                        { label: 'Edit card', onselect: (opener) => editCard(opener, card) },
-                        { label: 'Delete card', onselect: (opener) => confirmDelete(opener, card.folderId, card) },
+                        { label: $l.t('workspace.reviewCard'), onselect: (opener) => startReview(opener, card) },
+                        { label: $l.t('workspace.edit_card'), onselect: (opener) => editCard(opener, card) },
+                        {
+                          label: $l.t('workspace.delete_card'),
+                          onselect: (opener) => confirmDelete(opener, card.folderId, card),
+                        },
                       ]}
                     /></span
                   >
@@ -752,20 +1120,25 @@
               {/each}
             </ul>
           {:else}<div class="empty-state">
-              <div class="empty-icon">{@render icon(query ? 'search' : 'cards', 27)}</div>
-              <h2>{query ? 'No cards found. Keep looking.' : 'Your next memory starts here.'}</h2>
+              <div class="empty-icon">{@render icon(query || hasCardFilters ? 'search' : 'cards', 27)}</div>
+              <h2>{query || hasCardFilters ? $l.t('workspace.noCardsMatch') : $l.t('workspace.nextMemory')}</h2>
               <p>
-                {query
-                  ? 'Try a word from the content, a filename, or the folder name.'
-                  : 'Add information you want to remember. Raven will bring it back for review.'}
+                {hasCardFilters
+                  ? $l.t('workspace.removeFilterHelp')
+                  : query
+                    ? $l.t('workspace.searchHelp')
+                    : $l.t('workspace.addHelp')}
               </p>
+              {#if hasCardFilters}<button class="secondary-button" onclick={clearCardFilters}
+                  >{$l.t('workspace.clear_filters')}</button
+                >{/if}
               {#if query}<button
                   class="secondary-button"
                   onclick={() => {
                     search = '';
-                  }}>Clear search</button
-                >{:else}<button class="primary-button" onclick={(event) => openCard(event)}
-                  >{@render icon('plus', 16)} Create a card</button
+                  }}>{$l.t('workspace.clear_search')}</button
+                >{:else if !hasCardFilters}<button class="primary-button" onclick={(event) => openCard(event)}
+                  >{@render icon('plus', 16)} {$l.t('workspace.createCard')}</button
                 >{/if}
             </div>{/if}
         {/if}
@@ -773,6 +1146,105 @@
     </div>
   </section>
 </main>
+
+<ArchiveDialog
+  operation={archiveOperation}
+  folders={workspace.folders}
+  busy={saving}
+  error={archiveError ? $l.t(archiveError) : ''}
+  onexport={exportSelectedFolders}
+  onimport={importArchivedFolders}
+  onclose={() => {
+    archiveOperation = null;
+    void restoreDialogFocus();
+  }}
+/>
+
+<dialog
+  class="card-dialog part-dialog"
+  bind:this={partDialog}
+  aria-label={$l.t('workspace.contentPreview')}
+  onclose={() => {
+    selectedPart = null;
+    void restoreDialogFocus();
+  }}
+  oncancel={(event) => {
+    if (saving) event.preventDefault();
+  }}
+>
+  {#if selectedPart}
+    <div class="part-toolbar" aria-busy={saving}>
+      <button
+        type="button"
+        class="icon-button"
+        disabled={saving}
+        onclick={() => {
+          partError = '';
+          partDeleteDialog?.showModal();
+        }}
+        aria-label={saving ? $l.t('workspace.removing') : $l.t('workspace.deletePart')}
+        title={$l.t('workspace.deletePart')}>{@render icon('trash')}</button
+      >
+      <button
+        type="button"
+        class="icon-button"
+        disabled={saving}
+        onclick={() => partDialog?.close()}
+        aria-label={$l.t('cards.cancel')}
+        title={$l.t('cards.cancel')}>{@render icon('close')}</button
+      >
+    </div>
+    <div class="part-body">
+      <CardContent
+        card={{
+          ...selectedPart.card,
+          items: selectedPart.card.items.filter((item) => item.id === selectedPart?.itemId),
+        }}
+        mediaURL={backend.mediaURL}
+      />
+      {#if selectedPart.card.items.length === 1}
+        <p class="field-hint">{$l.t('workspace.lastPartHelp')}</p>
+      {/if}
+      {#if partError}<p class="error" role="alert">{partError ? $l.t(partError) : ''}</p>{/if}
+    </div>
+  {/if}
+</dialog>
+
+<dialog
+  bind:this={partDeleteDialog}
+  aria-labelledby="part-delete-title"
+  aria-describedby="part-delete-description"
+  oncancel={(event) => {
+    if (saving) event.preventDefault();
+  }}
+>
+  <form
+    onsubmit={(event) => {
+      event.preventDefault();
+      void removePart();
+    }}
+    aria-busy={saving}
+  >
+    <h2 id="part-delete-title">
+      {$l.t('workspace.deleteTitle', {
+        kind: $l.t(selectedPart?.card.items.length === 1 ? 'cards.card' : 'cards.part'),
+      })}
+    </h2>
+    <p id="part-delete-description" class="dialog-description">
+      {selectedPart?.card.items.length === 1 ? $l.t('workspace.lastPartDelete') : $l.t('workspace.partDelete')}
+      {$l.t('workspace.this_cannot_be_undone')}
+    </p>
+    {#if partError}<p class="error" role="alert">{partError ? $l.t(partError) : ''}</p>{/if}
+    <div class="dialog-actions">
+      <button type="button" class="secondary-button" disabled={saving} onclick={() => partDeleteDialog?.close()}
+        >{$l.t('cards.cancel')}</button
+      >
+      <button type="submit" class="primary-button" disabled={saving}
+        >{saving ? $l.t('workspace.deleting') : $l.t('workspace.delete_permanently')}</button
+      >
+    </div>
+  </form>
+</dialog>
 
 <dialog
   bind:this={folderDialog}
@@ -787,43 +1259,53 @@
       <span class="empty-icon">{@render icon('folder', 24)}</span><button
         type="button"
         class="icon-button"
-        aria-label={editingFolder ? 'Close edit folder' : 'Close new folder'}
+        aria-label={editingFolder ? $l.t('workspace.closeEditFolder') : $l.t('workspace.closeNewFolder')}
         disabled={saving}
         onclick={() => folderDialog?.close()}>{@render icon('close')}</button
       >
     </div>
-    <p class="eyebrow">{editingFolder ? 'YOUR COLLECTION' : 'MAKE ROOM FOR A CURIOSITY'}</p>
+    <p class="eyebrow">{editingFolder ? $l.t('workspace.your_collection') : 'MAKE ROOM FOR A CURIOSITY'}</p>
     <h2 id="folder-dialog-title">{editingFolder ? 'Edit folder info.' : 'A home for related memories.'}</h2>
-    <p class="dialog-description">Keep cards about the same topic together.</p>
-    <label for="folder-title">Folder name <span>Required</span></label><input
+    <p class="dialog-description">{$l.t('workspace.topicHelp')}</p>
+    <label for="folder-title">{$l.t('workspace.folder_name')} <span>{$l.t('workspace.required')}</span></label><input
+      dir="auto"
       id="folder-title"
       bind:this={titleInput}
       bind:value={title}
-      placeholder="e.g. Everyday Spanish"
+      placeholder={$l.t('workspace.e_g_everyday_spanish')}
       disabled={saving}
       required
       aria-invalid={!!formError && !title.trim()}
     />
-    <label for="folder-description">A little context <span>Optional</span></label><textarea
+    <label for="folder-description"
+      >{$l.t('workspace.a_little_context')} <span>{$l.t('workspace.optional')}</span></label
+    ><textarea
+      dir="auto"
       id="folder-description"
       bind:value={description}
       rows="2"
-      placeholder="What would you like to remember?"
+      placeholder={$l.t('workspace.what_would_you_like_to_remember')}
       disabled={saving}></textarea>
-    <label for="folder-tags">Tags <span>Optional</span></label><input
+    <label for="folder-tags">{$l.t('workspace.tags')} <span>{$l.t('workspace.optional')}</span></label><input
+      dir="auto"
       id="folder-tags"
       bind:value={tags}
-      placeholder="language, travel, learning"
+      placeholder={$l.t('workspace.language_travel_learning')}
       aria-describedby="tags-hint"
       disabled={saving}
     />
-    <p class="field-hint" id="tags-hint">Separate tags with commas.</p>
-    {#if formError}<p class="error" role="alert">{formError}</p>{/if}
+    <p class="field-hint" id="tags-hint">{$l.t('workspace.separate_tags_with_commas')}</p>
+    {#if formError}<p class="error" role="alert">{formError ? $l.t(formError) : ''}</p>{/if}
     <div class="dialog-actions">
       <button type="button" class="secondary-button" disabled={saving} onclick={() => folderDialog?.close()}
-        >Cancel</button
+        >{$l.t('cards.cancel')}</button
       ><button type="submit" class="primary-button" disabled={saving}
-        >{saving ? 'Saving…' : editingFolder ? 'Save changes' : 'Create folder'} {@render icon('arrow', 16)}</button
+        >{saving
+          ? $l.t('workspace.saving')
+          : editingFolder
+            ? $l.t('workspace.save_changes')
+            : $l.t('workspace.create_folder')}
+        {@render icon('arrow', 16)}</button
       >
     </div>
   </form>
@@ -838,19 +1320,22 @@
   }}
 >
   <form onsubmit={removeSelection} aria-busy={saving}>
-    <h2 id="delete-title">Delete {deletion?.cardId ? 'card' : 'folder'}?</h2>
+    <h2 id="delete-title">
+      {$l.t('workspace.deleteTitle', { kind: $l.t(deletion?.cardId ? 'cards.card' : 'cards.folder') })}
+    </h2>
     <p class="dialog-description">
-      “{deletion?.title}” will be permanently deleted. {deletion?.cardId
-        ? 'Its content and review history will be removed.'
-        : `All ${cardsInFolder(deletion?.folderId ?? '').length} cards in this folder, including their content and review history, will be removed.`}
-      This cannot be undone.
+      {$l.t('workspace.deleteNamed', { name: deletion?.title ?? '' })}
+      {deletion?.cardId
+        ? $l.t('workspace.its_content_and_review_history_will_be_removed')
+        : $l.t('workspace.folderDeleted')}
+      {$l.t('workspace.this_cannot_be_undone')}
     </p>
-    {#if deleteError}<p class="error" role="alert">{deleteError}</p>{/if}
+    {#if deleteError}<p class="error" role="alert">{deleteError ? $l.t(deleteError) : ''}</p>{/if}
     <div class="dialog-actions">
       <button type="button" class="secondary-button" disabled={saving} onclick={() => deleteDialog?.close()}
-        >Cancel</button
+        >{$l.t('cards.cancel')}</button
       ><button type="submit" class="primary-button" disabled={saving}
-        >{saving ? 'Deleting…' : 'Delete permanently'}</button
+        >{saving ? $l.t('workspace.deleting') : $l.t('workspace.delete_permanently')}</button
       >
     </div>
   </form>
@@ -870,14 +1355,16 @@
       <span class="empty-icon">{@render icon('cards', 24)}</span><button
         type="button"
         class="icon-button"
-        aria-label="Close card editor"
+        aria-label={$l.t('workspace.close_card_editor')}
         disabled={saving || selectingFiles}
         onclick={() => cardDialog?.close()}>{@render icon('close')}</button
       >
     </div>
-    <p class="eyebrow">A NOTE TO YOUR FUTURE SELF</p>
-    <h2 id="card-dialog-title">{editingCard ? 'Edit your memory.' : 'What’s worth remembering?'}</h2>
-    <p class="dialog-description">Keep information together with text, images, audio, and video.</p>
+    <p class="eyebrow">{$l.t('workspace.a_note_to_your_future_self')}</p>
+    <h2 id="card-dialog-title">
+      {editingCard ? $l.t('workspace.edit_your_memory') : $l.t('workspace.what_s_worth_remembering')}
+    </h2>
+    <p class="dialog-description">{$l.t('workspace.keep_information_together_with_text_images_audio_and_video')}</p>
     <CardEditor
       media={backend}
       bind:items={editorItems}
@@ -885,27 +1372,35 @@
       disabled={saving}
       onerror={(message) => (formError = message)}
     />
-    {#if cardFolder === '__new'}<label for="card-new-folder">New folder name</label><input
+    {#if cardFolder === '__new'}<label for="card-new-folder">{$l.t('workspace.new_folder_name')}</label><input
+        dir="auto"
         id="card-new-folder"
         bind:value={newFolderTitle}
-        placeholder="e.g. Everyday Spanish"
+        placeholder={$l.t('workspace.e_g_everyday_spanish')}
         disabled={saving}
         required
         aria-invalid={!!formError && !newFolderTitle.trim()}
       />{/if}
     <p class="save-note">
       {@render icon('clock', 15)}
-      {editingCard ? 'Your review schedule stays the same.' : 'Ready for your first review as soon as you save.'}
+      {editingCard
+        ? $l.t('workspace.your_review_schedule_stays_the_same')
+        : $l.t('workspace.ready_for_your_first_review_as_soon_as_you_save')}
     </p>
-    {#if formError}<p class="error" role="alert">{formError}</p>{/if}
+    {#if formError}<p class="error" role="alert">{formError ? $l.t(formError) : ''}</p>{/if}
     <div class="dialog-actions">
       <button
         type="button"
         class="secondary-button"
         disabled={saving || selectingFiles}
-        onclick={() => cardDialog?.close()}>Cancel</button
+        onclick={() => cardDialog?.close()}>{$l.t('cards.cancel')}</button
       ><button type="submit" class="primary-button" disabled={saving || selectingFiles}
-        >{saving ? 'Saving…' : editingCard ? 'Save changes' : 'Save memory'} {@render icon('arrow', 16)}</button
+        >{saving
+          ? $l.t('workspace.saving')
+          : editingCard
+            ? $l.t('workspace.save_changes')
+            : $l.t('workspace.save_memory')}
+        {@render icon('arrow', 16)}</button
       >
     </div>
   </form>
@@ -914,7 +1409,7 @@
 <dialog
   class="review-dialog"
   bind:this={reviewDialog}
-  aria-label="Review"
+  aria-label={$l.t('workspace.review')}
   onclose={closeReview}
   oncancel={(event) => {
     if (reviewSaving) event.preventDefault();
@@ -924,6 +1419,7 @@
       review={backend}
       mediaURL={backend.mediaURL}
       entries={reviewQueue}
+      nativeStart={backend.previewStart}
       folders={workspace.folders}
       bind:saving={reviewSaving}
       onsaved={reviewSaved}
@@ -1004,13 +1500,6 @@
     font-size: 12px;
   }
 
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
   .app-shell {
     display: flex;
     height: 100svh;
@@ -1052,7 +1541,7 @@
     width: 224px;
     min-height: 0;
     padding: 28px 17px 20px;
-    border-right: 1px solid #ffffff14;
+    border-inline-end: 1px solid #ffffff14;
     background: var(--sidebar);
     transition:
       width var(--sidebar-motion),
@@ -1077,7 +1566,8 @@
     background: none;
     color: var(--ink);
     font-size: 25px;
-    font-family: var(--font-display);
+    font-family: 'Fredericka the Great', Georgia, 'Times New Roman', serif;
+    direction: ltr;
     font-weight: 400;
     letter-spacing: 0;
   }
@@ -1165,7 +1655,7 @@
     background: transparent;
     color: var(--ink);
     font-size: 12px;
-    text-align: left;
+    text-align: start;
   }
   .nav-item > svg {
     flex-shrink: 0;
@@ -1179,8 +1669,79 @@
     background: var(--selected);
     border-color: var(--line) fff1a;
   }
+  .sidebar-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex-shrink: 0;
+    margin-top: 16px;
+    padding-top: 12px;
+  }
+  .sidebar-transfers {
+    display: flex;
+    gap: 12px;
+  }
+  .footer-action {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+  }
+  .footer-action:hover:not(:disabled),
+  .footer-action:focus-visible {
+    border-color: var(--line-strong);
+    background: var(--hover);
+    color: var(--ink);
+  }
+  .footer-action:active:not(:disabled) {
+    background: var(--selected);
+  }
+  .footer-action::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    z-index: 6;
+    inset-block-end: calc(100% + 8px);
+    inset-inline-start: 0;
+    width: max-content;
+    max-width: 180px;
+    padding: 7px 9px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--paper);
+    color: var(--ink);
+    font-size: 11px;
+    line-height: 1.4;
+    text-align: start;
+    pointer-events: none;
+    visibility: hidden;
+  }
+  .footer-action:hover::after,
+  .footer-action:focus-visible::after {
+    visibility: visible;
+  }
+  .collapsed .sidebar-footer,
+  .collapsed .sidebar-transfers {
+    flex-direction: column;
+  }
+  .collapsed .footer-language {
+    --language-tip-start: 0;
+    --language-tip-end: auto;
+  }
+  @media (pointer: coarse) {
+    .footer-action {
+      width: 44px;
+      height: 44px;
+    }
+  }
   .nav-total {
-    margin-left: auto;
+    margin-inline-start: auto;
     font-size: 10px;
   }
   .nav-total {
@@ -1205,8 +1766,8 @@
   .all-folders {
     flex: 1;
     min-width: 0;
-    padding-left: 6px;
-    padding-right: 6px;
+    padding-inline-start: 6px;
+    padding-inline-end: 6px;
     gap: 8px;
   }
   .all-folders:hover {
@@ -1216,9 +1777,10 @@
     color: var(--muted);
   }
   .folder-navigation {
-    margin: 4px 0 0 13px;
-    padding-left: 12px;
-    border-left: 1px solid var(--line);
+    margin: 4px 0 0;
+    margin-inline-start: 13px;
+    padding-inline-start: 12px;
+    border-inline-start: 1px solid var(--line);
   }
   .folder-link {
     font-size: 11px;
@@ -1239,8 +1801,8 @@
   aside.collapsed {
     width: 64px;
     flex-basis: 64px;
-    padding-left: 10px;
-    padding-right: 10px;
+    padding-inline-start: 10px;
+    padding-inline-end: 10px;
   }
   .collapsed .sidebar-label {
     display: none;
@@ -1269,7 +1831,6 @@
     --selected: #ffffff14;
     --focus: #bdbdbd;
   }
-  .content .icon-button:hover,
   dialog .icon-button:hover {
     color: var(--ink);
   }
@@ -1277,7 +1838,7 @@
     flex: 1;
     min-width: 0;
     overflow: auto;
-    padding: 0 38px;
+    padding: 0 38px 38px;
   }
   .page-container {
     display: flex;
@@ -1380,7 +1941,7 @@
     color: var(--ink);
     font-size: 10px;
     line-height: 1.6;
-    text-align: left;
+    text-align: start;
   }
   .text-button:hover {
     color: var(--ink);
@@ -1406,16 +1967,14 @@
   .memory-tile {
     position: relative;
   }
-  .folder-tile,
   .new-folder-tile {
     padding-top: 15px;
   }
-  .folder-tile::before,
   .new-folder-tile::before {
     content: '';
     position: absolute;
     top: 0;
-    left: 0;
+    inset-inline-start: 0;
     width: 39%;
     height: 25px;
     border: 1px solid var(--line);
@@ -1428,20 +1987,21 @@
     border-style: dashed;
   }
   .new-folder-tile:hover::before,
-  .new-folder-tile:focus-within::before,
-  .folder-tile:hover::before,
-  .folder-tile:focus-within::before {
+  .new-folder-tile:focus-within::before {
     border-color: var(--line-strong);
   }
   .tile-actions {
     position: absolute;
     top: 10px;
-    right: 10px;
+    inset-inline-end: 10px;
   }
   .folder-tile .tile-actions {
-    top: 25px;
+    top: 10px;
   }
-  .folder-card,
+  .memory-tile .tile-actions {
+    inset-inline-end: auto;
+    inset-inline-start: 10px;
+  }
   .new-folder-card {
     width: 100%;
     height: 100%;
@@ -1451,7 +2011,7 @@
     border-radius: 9px;
     background: var(--paper);
     color: var(--ink);
-    text-align: left;
+    text-align: start;
   }
   .folder-card,
   .new-folder-card {
@@ -1459,26 +2019,41 @@
     display: flex;
     flex-direction: column;
     min-height: 190px;
-    border-top-left-radius: 0;
+    border-start-start-radius: 0;
   }
-  .folder-card::before,
   .new-folder-card::before {
     content: '';
     position: absolute;
     top: -1px;
-    left: 0;
+    inset-inline-start: 0;
     width: 39%;
     height: 1px;
     background: var(--paper);
   }
   .folder-tile:hover .folder-card,
-  .folder-tile:focus-within .folder-card,
-  .memory-tile:hover .memory-card {
+  .folder-tile:focus-within .folder-card {
     border-color: var(--line-strong);
+  }
+  .folder-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    padding: 0 12px 12px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: #000;
+    color: var(--ink);
+    text-align: start;
+  }
+  .folder-card:focus-visible {
+    outline: 1px solid var(--line-strong);
+    outline-offset: 3px;
   }
   .folder-card h3 {
     margin: 0 0 8px;
-    padding-right: 40px;
+    padding-inline-end: 40px;
     font-size: 14px;
     font-weight: 550;
     line-height: 1.5;
@@ -1635,18 +2210,19 @@
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
   }
   .memory-card {
+    position: relative;
     display: flex;
     flex-direction: column;
     width: 100%;
     aspect-ratio: 4 / 5;
     min-height: 0;
     overflow: hidden;
-    padding: 14px;
-    border: 1px solid var(--line);
+    padding: 44px 14px 14px;
+    border: 1px solid color-mix(in srgb, var(--progress-fill) 35%, transparent);
     border-radius: 9px;
     background: var(--paper);
     color: var(--ink);
-    text-align: left;
+    text-align: start;
   }
   .memory-grid li {
     display: flex;
@@ -1658,11 +2234,108 @@
     overflow: hidden;
     margin: 0 -10px;
   }
+  .card-progress-percentage {
+    position: absolute;
+    top: 14px;
+    inset-inline-end: 14px;
+    color: color-mix(in srgb, var(--progress-fill) 70%, transparent);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    line-height: 18px;
+  }
   .card-dialog {
     width: min(620px, calc(100vw - 36px));
   }
-  .empty-state,
-  .loading-state {
+  .part-dialog {
+    padding: 0;
+    overflow: hidden;
+  }
+  .part-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px;
+    border-bottom: 1px solid var(--line);
+    background: #000;
+  }
+  .part-toolbar .icon-button {
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+  }
+  .part-toolbar .icon-button:hover {
+    border-color: var(--line-strong);
+  }
+  .part-toolbar .icon-button:focus-visible {
+    outline: 2px solid var(--muted);
+    outline-offset: 2px;
+  }
+  .part-body {
+    max-height: calc(100svh - 98px);
+    overflow-y: auto;
+    padding: 24px;
+  }
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  .sidebar-skeleton {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 35px;
+    padding-inline: 12px;
+  }
+  .skeleton-heading-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .skeleton-tile {
+    display: flex;
+    flex-direction: column;
+    min-height: 190px;
+  }
+  .skeleton-folder-figure {
+    aspect-ratio: 5 / 4;
+    margin-inline: 12px;
+  }
+  .skeleton-folder-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+  }
+  .skeleton-folder-count {
+    margin-top: 16px;
+  }
+  .skeleton-memory {
+    aspect-ratio: 4 / 5;
+    min-height: 0;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+  }
+  .skeleton-progress {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 19px;
+  }
+  .skeleton-preview {
+    flex: 1;
+    min-height: 0;
+  }
+  .empty-state {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1674,28 +2347,18 @@
     border-radius: 12px;
   }
   .empty-state h1,
-  .empty-state h2,
-  .loading-state h1 {
+  .empty-state h2 {
     margin: 20px 0 10px;
     font:
       26px/1.3 Georgia,
       serif;
     color: var(--ink);
   }
-  .empty-state p,
-  .loading-state p {
+  .empty-state p {
     margin: 0 0 22px;
     color: var(--ink);
     font-size: 11px;
     line-height: 1.8;
-  }
-  .loading-state {
-    margin-top: 35px;
-    border: 0;
-  }
-  .loading-mark {
-    color: var(--ink);
-    font-size: 35px;
   }
   .error {
     padding: 12px;
@@ -1706,27 +2369,6 @@
     color: var(--ink);
     font-size: 11px;
     line-height: 1.7;
-  }
-  .saved-notice {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    margin-top: 15px;
-    border: 1px solid var(--line);
-    border-radius: 7px;
-    background: var(--paper);
-    color: var(--ink);
-    font-size: 11px;
-  }
-  .saved-notice > span {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
-  .saved-notice > .text-button {
-    margin-left: auto;
-    flex-shrink: 0;
   }
   dialog {
     width: min(500px, calc(100vw - 36px));
@@ -1836,7 +2478,7 @@
   }
   @media (min-width: 1250px) {
     .content {
-      padding: 0 55px;
+      padding: 0 55px 38px;
     }
     .folder-grid {
       grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -1849,7 +2491,7 @@
       padding: 25px 12px 18px;
     }
     .content {
-      padding: 0 25px;
+      padding: 0 25px 38px;
     }
     h1 {
       font-size: 36px;
@@ -1859,7 +2501,9 @@
     aside {
       position: absolute;
       z-index: 5;
-      inset: 0 auto 0 0;
+      inset-block: 0;
+      inset-inline-start: 0;
+      inset-inline-end: auto;
       width: min(250px, calc(100vw - 45px));
       box-shadow: 15px 0 50px #00000055;
     }
@@ -1881,8 +2525,8 @@
       pointer-events: auto;
     }
     .content {
-      margin-left: 64px;
-      padding: 0 18px;
+      margin-inline-start: 64px;
+      padding: 0 18px 38px;
     }
     h1 {
       font-size: 34px;
@@ -1909,7 +2553,7 @@
     }
     .section-note {
       max-width: 90px;
-      text-align: right;
+      text-align: end;
       font-size: 8px;
     }
     dialog {
@@ -1923,11 +2567,6 @@
     }
   }
 
-  @media (max-width: 600px) {
-    .saved-notice {
-      flex-wrap: wrap;
-    }
-  }
   @media (max-width: 600px) {
     .heading-actions {
       margin-top: 18px;
@@ -1949,6 +2588,18 @@
     dialog::backdrop {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
+    }
+  }
+  :global([dir='rtl']) .folder-disclosure:not(.expanded) {
+    transform: scaleX(-1);
+  }
+  :global([dir='rtl']) .sidebar-toggle svg,
+  :global([dir='rtl']) .directional-icon {
+    transform: scaleX(-1);
+  }
+  @media (max-width: 600px) {
+    :global([dir='rtl']) aside:not(.collapsed) {
+      box-shadow: -15px 0 50px #00000055;
     }
   }
 </style>

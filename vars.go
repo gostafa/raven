@@ -13,10 +13,12 @@ import (
 	configurationcomposition "raven/internal/features/configuration/composition"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopcomposition "raven/internal/features/desktop/composition"
+	archivecomposition "raven/internal/features/folderarchive/composition"
 	remindercomposition "raven/internal/features/reminders/composition"
 	storecomposition "raven/internal/shared/boltstore/composition"
 	batchcomposition "raven/internal/shared/cffbatch/composition"
 	mediacomposition "raven/internal/shared/desktopmedia/composition"
+	localizationcomposition "raven/internal/shared/localization/composition"
 	schedulingcomposition "raven/internal/shared/scheduling/composition"
 )
 
@@ -35,6 +37,8 @@ var (
 			fx.Provide(newService, fx.Annotate(desktopRuntime, fx.As(new(desktopRunner)))),
 			configurationcomposition.Module,
 			storecomposition.Module,
+			localizationcomposition.Module,
+			archivecomposition.Module,
 			mediacomposition.Module,
 			schedulingcomposition.Module,
 			batchcomposition.Module,

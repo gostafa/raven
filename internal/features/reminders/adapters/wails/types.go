@@ -9,9 +9,15 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+
+	"raven/internal/features/reminders/ports"
 )
 
 type (
+	reminderDelivery = struct {
+		messages []ports.Messages
+		count    int
+	}
 
 	// SoundPlayer plays one complete reminder sound.
 	SoundPlayer struct{ play func() error }

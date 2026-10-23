@@ -13,6 +13,7 @@ import (
 	reminders "raven/internal/features/reminders/application"
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
 	libraryports "raven/internal/shared/boltstore/ports"
+	localizationports "raven/internal/shared/localization/ports"
 )
 
 type (
@@ -30,6 +31,7 @@ type (
 	storeResult struct {
 		fx.Out
 
+		Languages  localizationports.Preferences
 		Store      *boltstore.Store
 		Repository libraryports.Repository
 		Reminders  reminders.Source

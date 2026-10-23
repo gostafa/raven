@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
@@ -17,19 +18,26 @@ import (
 	"go.uber.org/multierr"
 
 	configurationapi "raven/api/configuration"
+	localizationapi "raven/api/localization"
 	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopcomposition "raven/internal/features/desktop/composition"
+	archive "raven/internal/features/folderarchive/domain"
 	libraryports "raven/internal/shared/boltstore/ports"
+	localization "raven/internal/shared/localization/application"
+	localizationdomain "raven/internal/shared/localization/domain"
 )
 
 func newService(deps serviceParams, settings configuration.Settings) *RavenService {
 	operations := libraryOperations(deps.Repository)
+	bindLocalizationOperations(operations, deps.Localization)
+
 	changed := func() { schedulesChanged(deps, settings) }
 	bindCardOperations(operations, deps.Repository, changed)
 	bindFolderMutations(operations, deps.Repository)
 	bindWindowOperations(operations, deps)
 	bindAuxiliaryOperations(operations, deps, settings)
+	bindArchiveOperations(operations, deps, changed)
 
 	return &RavenService{operations: operations}
 }
@@ -67,7 +75,10 @@ func bindFolderMutations(
 
 func createFolder(repository libraryports.Repository, input string) serviceResult[string] {
 	if repository == nil {
-		return publicResult("", &ServiceError{Message: folderStorageIsUnavailable})
+		return publicResult(
+			"",
+			&ServiceError{Message: folderStorageIsUnavailable, Code: actionFailedCode},
+		)
 	}
 
 	return publicResult(repository.CreateFolder(input))
@@ -101,7 +112,10 @@ func editLibrary(
 	edit func(libraryports.Repository, string) (string, error),
 ) serviceResult[string] {
 	if repository == nil {
-		return publicResult("", &ServiceError{Message: cardStorageIsUnavailable})
+		return publicResult(
+			"",
+			&ServiceError{Message: cardStorageIsUnavailable, Code: actionFailedCode},
+		)
 	}
 
 	return publicResult(edit(repository, input))
@@ -156,7 +170,7 @@ func deleteLibrary(
 	remove func(libraryports.Repository) error,
 ) serviceResult[string] {
 	if repository == nil {
-		return publicResult("", &ServiceError{Message: unavailable})
+		return publicResult("", &ServiceError{Message: unavailable, Code: actionFailedCode})
 	}
 
 	return publicResult("", remove(repository))
@@ -244,7 +258,10 @@ func refreshReminders(deps serviceParams) {
 
 func selectMedia(deps serviceParams, kind string) serviceResult[string] {
 	if deps.Media == nil {
-		return publicResult("", &ServiceError{Message: "file selection is unavailable"})
+		return publicResult(
+			"",
+			&ServiceError{Message: "file selection is unavailable", Code: actionFailedCode},
+		)
 	}
 
 	return publicResult(deps.Media.Select(kind))
@@ -318,7 +335,12 @@ func runDesktop(
 	service *RavenService,
 ) error {
 	desktop.Register(application.NewService(bridge))
-	desktop.Register(application.NewService(service))
+	desktop.Register(
+		application.NewServiceWithOptions(
+			service,
+			serviceOptions(),
+		),
+	)
 
 	err := multierr.Append(desktop.Run(), bridge.ServiceShutdown())
 	if err != nil {
@@ -429,7 +451,10 @@ func publicResult[Value any](value Value, err error) serviceResult[Value] {
 	result := serviceResult[Value]{value: value, failure: nil}
 
 	if err != nil {
-		result.failure = &ServiceError{Message: err.Error()}
+		result.failure = &ServiceError{
+			Message: err.Error(),
+			Code:    actionFailedCode,
+		}
 	}
 
 	return result
@@ -443,7 +468,7 @@ func readLibrary[Value any](
 	if repository == nil {
 		var empty Value
 
-		return publicResult(empty, &ServiceError{Message: unavailable})
+		return publicResult(empty, &ServiceError{Message: unavailable, Code: actionFailedCode})
 	}
 
 	return publicResult(read(repository))
@@ -451,6 +476,7 @@ func readLibrary[Value any](
 
 func configurationSnapshot(settings configuration.Settings) configurationapi.Settings {
 	return configurationapi.Settings{
+		LocalizationChanged:   "raven:localization-changed",
 		PreferencesStorageKey: settings.PreferencesStorageKey(),
 		MediaRoutePrefix:      settings.MediaRoutePrefix(),
 		TextKind:              configuration.Library(settings).TextKind,
@@ -466,4 +492,142 @@ func (service *RavenService) UpdateFolder(input string) (string, error) {
 	result := service.operations["UpdateFolder"](input, "")
 
 	return result.value, result.failure
+}
+
+func bindArchiveOperations(
+	operations map[string]func(string, string) serviceResult[string],
+	deps serviceParams,
+	changed func(),
+) {
+	operations["ExportFolders"] = func(input, _ string) serviceResult[string] {
+		if deps.Archives == nil {
+			return publicResult(
+				"",
+				&ServiceError{Message: folderArchivesUnavailable, Code: actionFailedCode},
+			)
+		}
+
+		result, err := deps.Archives.ExportFolders(input)
+
+		return archiveResult(&result, err)
+	}
+	operations["ImportFolders"] = func(mode, _ string) serviceResult[string] {
+		return importArchive(deps, mode, changed)
+	}
+}
+
+func importArchive(deps serviceParams, mode string, changed func()) serviceResult[string] {
+	if deps.Archives == nil {
+		return publicResult(
+			"",
+			&ServiceError{Message: folderArchivesUnavailable, Code: actionFailedCode},
+		)
+	}
+
+	result, err := deps.Archives.ImportFolders(mode)
+	if err == nil && !result.Canceled {
+		changed()
+	}
+
+	return archiveResult(&result, err)
+}
+
+func archiveResult(result *archive.Result, err error) serviceResult[string] {
+	if err != nil {
+		return publicResult("", err)
+	}
+
+	return encodePublic(result)
+}
+
+// ExportFolders exports selected folders to a portable archive using a native save dialog.
+func (service *RavenService) ExportFolders(input string) (string, error) {
+	result := service.operations["ExportFolders"](input, "")
+
+	return result.value, result.failure
+}
+
+// ImportFolders imports folder copies using fresh or resume review scheduling.
+func (service *RavenService) ImportFolders(mode string) (string, error) {
+	result := service.operations["ImportFolders"](mode, "")
+
+	return result.value, result.failure
+}
+
+func bindLocalizationOperations(
+	operations map[string]func(string, string) serviceResult[string],
+	service *localization.Service,
+) {
+	operations["GetLocalization"] = func(string, string) serviceResult[string] {
+		return encodePublic(localizationSnapshot(service.Current()))
+	}
+	operations["SetLanguagePreference"] = func(preference, _ string) serviceResult[string] {
+		return setLanguagePreference(service, preference)
+	}
+}
+
+func setLanguagePreference(service *localization.Service, preference string) serviceResult[string] {
+	state, err := service.Set(preference)
+	if err != nil {
+		return serviceResult[string]{value: "", failure: languageFailure(err)}
+	}
+
+	return encodePublic(localizationSnapshot(state))
+}
+
+func languageFailure(err error) *ServiceError {
+	code := "language_save_failed"
+
+	if errors.Is(err, localization.ErrInvalidPreference) {
+		code = "invalid_language"
+	}
+
+	return &ServiceError{Code: code, Message: "Language preference could not be updated."}
+}
+
+func localizationSnapshot(state localizationdomain.State) localizationapi.State {
+	return localizationapi.State{
+		Preference: state.Preference,
+		Locale:     state.Locale,
+		Direction:  state.Direction,
+		Revision:   state.Revision,
+	}
+}
+
+// GetLocalization returns the saved language and its resolved presentation as JSON.
+func (service *RavenService) GetLocalization() (string, error) {
+	result := service.operations["GetLocalization"]("", "")
+
+	return result.value, result.failure
+}
+
+// SetLanguagePreference persists system, en, or ar before publishing a language change.
+func (service *RavenService) SetLanguagePreference(preference string) (string, error) {
+	result := service.operations["SetLanguagePreference"](preference, "")
+
+	return result.value, result.failure
+}
+
+func marshalServiceError(err error) []byte {
+	code := actionFailedCode
+
+	var failure *ServiceError
+
+	if errors.As(err, &failure) && failure.Code != "" {
+		code = failure.Code
+	}
+
+	return []byte(
+		`{"code":` + strconv.Quote(
+			code,
+		) + `,"message":"Raven could not complete that action. Please try again."}`,
+	)
+}
+
+func serviceOptions() application.ServiceOptions {
+	var options application.ServiceOptions
+
+	options.MarshalError = marshalServiceError
+
+	return options
 }

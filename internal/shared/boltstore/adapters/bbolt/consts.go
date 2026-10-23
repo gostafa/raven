@@ -4,6 +4,10 @@
 package bbolt
 
 const (
+	defaultLanguagePreference = "system"
+	languagePreferenceKey     = "language_preference"
+	mediaStagingPattern       = ".import-*"
+
 	legacyPromptSide        = "prompt"
 	legacyAnswerSide        = "answer"
 	isoMediaSignature       = "ftyp"

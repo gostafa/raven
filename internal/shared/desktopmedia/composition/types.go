@@ -27,6 +27,7 @@ type (
 	mediaParams struct {
 		fx.In
 
+		Messages mediaports.Messages
 		App      *application.App
 		Handles  companionwails.WindowSet
 		Registry *desktopmedia.Registry

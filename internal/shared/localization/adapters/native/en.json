@@ -1,0 +1,19 @@
+{
+  "open": { "other": "Open Raven" },
+  "reset": { "other": "Reset widget position" },
+  "startup": { "other": "Start at login" },
+  "quit": { "other": "Quit Raven" },
+  "startupError": { "other": "Raven could not update login startup. You can try again from the Raven menu." },
+  "widgetTitle": { "other": "Raven widget" },
+  "reviewTitle": { "other": "Raven review" },
+  "reminderTitle": { "other": "Time to review" },
+  "reminderBody": {
+    "one": "{{.Count}} item is ready to review in Raven.",
+    "other": "{{.Count}} items are ready to review in Raven."
+  },
+  "archive": { "other": "Raven folder archive" },
+  "imageFiles": { "other": "Image files" },
+  "audioFiles": { "other": "Audio files" },
+  "videoFiles": { "other": "Video files" },
+  "actionFailed": { "other": "Raven could not complete that action. Please try again." }
+}

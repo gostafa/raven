@@ -24,4 +24,16 @@ type (
 		RequestOpen()
 		SecondInstance(args []string)
 	}
+
+	// Messages supplies localized native text without exposing a translation library.
+	Messages interface {
+		Text(key string, count int) string
+	}
+
+	// Localization observes language changes and follows changed OS preferences.
+	Localization interface {
+		Messages
+		Subscribe(listener func()) func()
+		Refresh()
+	}
 )

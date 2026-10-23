@@ -10,6 +10,8 @@ export default tseslint.config(
       'taskotter/**',
       'frontend/bindings/**',
       'frontend/dist/**',
+      'frontend/public/hairline/kernel.js',
+      'design/hairline/folder.js',
       '**/node_modules/**',
       'build/**',
       '.cache/**',

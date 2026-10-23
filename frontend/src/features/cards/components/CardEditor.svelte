@@ -1,9 +1,18 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { useLocalization, type MessageKey } from '../../localization';
+  const l = useLocalization();
+  const kindKeys: Record<string, MessageKey> = {
+    text: 'workspace.text',
+    image: 'workspace.image',
+    audio: 'cards.audio',
+    video: 'cards.video',
+  };
+  import { onDestroy, tick } from 'svelte';
   import { stopMedia } from '../../ui';
   import { moveItem, textDraft } from '../domain/funcs';
   import { selectMedia } from '../application/funcs';
   import type { EditorItem, MediaKind, MediaPort } from '../domain/types';
+  import AudioPlayer from './AudioPlayer.svelte';
 
   let {
     media,
@@ -16,11 +25,13 @@
     items: EditorItem[];
     selecting?: boolean;
     disabled?: boolean;
-    onerror: (message: string) => void;
+    onerror: (message: MessageKey | '') => void;
   } = $props();
   const kinds: MediaKind[] = ['image', 'audio', 'video'];
   let root: HTMLFieldSetElement;
   let failed = $state<string[]>([]);
+  let removeDialog = $state<HTMLDialogElement>();
+  let removal = $state<EditorItem | null>(null);
   onDestroy(() => stopMedia(root));
 
   $effect(() => {
@@ -36,8 +47,8 @@
       const previous = items.length;
       items = await selectMedia(media, kind, items);
       if (items.length > previous) onerror('');
-    } catch (error) {
-      onerror(`Files could not be selected. ${error instanceof Error ? error.message : 'Try again.'}`);
+    } catch {
+      onerror('cards.files_could_not_be_selected_try_again');
     } finally {
       selecting = false;
     }
@@ -45,29 +56,32 @@
 </script>
 
 <fieldset bind:this={root} disabled={disabled || selecting}>
-  <legend>What you want to remember</legend>
-  <ol aria-label="Card content">
+  <legend>{$l.t('cards.what_you_want_to_remember')}</legend>
+  <ol aria-label={$l.t('cards.card_content')}>
     {#each items as item, index (item.key)}
       <li>
         <div class="item-header">
-          <span>{index + 1} · {item.kind}</span>
+          <span>{$l.number(index + 1)} · {$l.t(kindKeys[item.kind])}</span>
           <div class="item-actions">
             <button
               type="button"
-              aria-label={`Move item ${index + 1} up`}
+              aria-label={$l.t('cards.moveUp', { count: index + 1 })}
               disabled={index === 0}
               onclick={() => (items = moveItem(items, item.key, -1))}>↑</button
             >
             <button
               type="button"
-              aria-label={`Move item ${index + 1} down`}
+              aria-label={$l.t('cards.moveDown', { count: index + 1 })}
               disabled={index === items.length - 1}
               onclick={() => (items = moveItem(items, item.key, 1))}>↓</button
             >
             <button
               type="button"
-              aria-label={`Remove item ${index + 1}`}
-              onclick={() => (items = items.filter((candidate) => candidate.key !== item.key))}>Remove</button
+              aria-label={$l.t('cards.removeItem', { count: index + 1 })}
+              onclick={() => {
+                removal = item;
+                removeDialog?.showModal();
+              }}>{$l.t('cards.remove')}</button
             >
           </div>
         </div>
@@ -75,38 +89,42 @@
           <input
             type="checkbox"
             role="switch"
-            aria-label={`Remember item ${index + 1}`}
+            aria-label={$l.t('cards.rememberItem', { count: index + 1 })}
             checked={!item.hint}
             onchange={(event) => (item.hint = !event.currentTarget.checked)}
           />
-          <span>Remember this <small>{item.hint ? 'Hint for other items' : 'Included in reviews'}</small></span>
+          <span
+            >{$l.t('cards.remember_this')}
+            <small>{item.hint ? $l.t('cards.hint_for_other_items') : $l.t('cards.included_in_reviews')}</small></span
+          >
         </label>
         {#if item.kind === 'text'}<textarea
-            aria-label={`Card text ${index + 1}`}
+            dir="auto"
+            aria-label={$l.t('cards.textNumber', { count: index + 1 })}
             bind:value={item.text}
             rows="3"
-            placeholder="What do you want to remember?"></textarea>
+            placeholder={$l.t('cards.what_do_you_want_to_remember')}></textarea>
         {:else}
           {#if failed.includes(item.key)}<p class="hint" role="status">
-              This file could not be loaded or played. Check that it is available and its format is supported on this
-              device.
+              {$l.t(
+                'cards.this_file_could_not_be_loaded_or_played_check_that_it_is_available_and_its_format_is_supported_on_this_device',
+              )}
             </p>
           {:else if item.previewURL}
             {#if item.kind === 'image'}<img
                 src={item.previewURL}
-                alt={item.originalName || 'Card image'}
+                alt={item.originalName || $l.t('cards.card_image')}
                 onerror={() => (failed = [...failed, item.key])}
               />
-            {:else if item.kind === 'audio'}<audio
-                controls
-                preload="metadata"
+            {:else if item.kind === 'audio'}<AudioPlayer
                 src={item.previewURL}
-                aria-label={item.originalName}
+                filename={item.originalName}
                 onerror={() => (failed = [...failed, item.key])}
-              ></audio>
+              />
             {:else if item.kind === 'video'}
               <!-- svelte-ignore a11y_media_has_caption (Imported videos do not include separate caption files.) -->
               <video
+                dir="ltr"
                 controls
                 playsinline
                 preload="metadata"
@@ -117,23 +135,94 @@
             {/if}
           {/if}
           <p class="filename">
-            {item.originalName}<span>{item.id ? 'Saved file' : 'Will be copied when you save'}</span>
+            <bdi>{item.originalName}</bdi><span
+              >{item.id ? $l.t('cards.saved_file') : $l.t('cards.will_be_copied_when_you_save')}</span
+            >
           </p>
         {/if}
       </li>
     {/each}
   </ol>
   <div class="add-actions">
-    <button type="button" onclick={() => (items = [...items, textDraft('', media.newKey())])}>+ Text</button
+    <button type="button" onclick={() => (items = [...items, textDraft('', media.newKey())])}
+      >{$l.t('cards.text')}</button
     >{#each kinds as kind (kind)}<button type="button" onclick={() => addFiles(kind)}
-        >+ {kind === 'image' ? 'Images' : kind === 'audio' ? 'Audio' : 'Videos'}</button
+        >+ {kind === 'image'
+          ? $l.t('cards.images')
+          : kind === 'audio'
+            ? $l.t('cards.audio')
+            : $l.t('cards.videos')}</button
       >{/each}
   </div>
 </fieldset>
-<p class="hint">Mix text and files in any order. Empty text blocks are skipped.</p>
-{#if selecting}<p class="hint" role="status">Choosing files…</p>{/if}
+<p class="hint">{$l.t('cards.mix_text_and_files_in_any_order_empty_text_blocks_are_skipped')}</p>
+{#if selecting}<p class="hint" role="status">{$l.t('cards.choosing_files')}</p>{/if}
+
+<dialog bind:this={removeDialog} aria-labelledby="remove-item-title" onclose={() => (removal = null)}>
+  <h2 id="remove-item-title">{$l.t('cards.remove_item')}</h2>
+  <p>{$l.t('cards.removeDescription')}</p>
+  <div class="dialog-actions">
+    <button type="button" onclick={() => removeDialog?.close()}>{$l.t('cards.cancel')}</button>
+    <button
+      type="button"
+      class="confirm-button"
+      disabled={disabled || selecting || !removal}
+      onclick={async () => {
+        if (disabled || selecting || !removal) return;
+        items = items.filter((candidate) => candidate.key !== removal?.key);
+        removeDialog?.close();
+        await tick();
+        root?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+      }}>{$l.t('cards.remove_item')}</button
+    >
+  </div>
+</dialog>
 
 <style>
+  dialog {
+    width: min(500px, calc(100vw - 36px));
+    max-height: calc(100svh - 36px);
+    box-sizing: border-box;
+    margin: auto;
+    padding: 28px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: 15px;
+    background: #000;
+    color: #fff;
+    box-shadow: 0 30px 100px #00000055;
+  }
+  dialog::backdrop {
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    background: transparent;
+  }
+  dialog h2 {
+    margin: 0 0 10px;
+    font:
+      28px/1.2 Georgia,
+      serif;
+  }
+  dialog p {
+    font-size: 12px;
+    line-height: 1.8;
+  }
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 9px;
+    margin-top: 25px;
+  }
+  .dialog-actions button {
+    padding: 11px 16px;
+  }
+  .confirm-button {
+    background: #fff;
+    color: #000;
+  }
+  .confirm-button:hover {
+    color: #fff;
+  }
   .remember-switch {
     display: flex;
     align-items: center;
@@ -266,11 +355,6 @@
     background: #000;
     margin-bottom: 8px;
   }
-  audio {
-    display: block;
-    width: 100%;
-    margin-bottom: 8px;
-  }
   .filename span {
     display: block;
     font-size: 10px;
@@ -281,5 +365,8 @@
     font-size: 10px;
     color: var(--muted);
     line-height: 1.6;
+  }
+  :global([dir='rtl']) .remember-switch input:checked::before {
+    transform: translateX(-12px);
   }
 </style>

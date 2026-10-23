@@ -1,4 +1,41 @@
-import type { Card, ContentItem, ItemDraft, EditorItem } from './types';
+import type { Card, CardSelection, ContentItem, ItemDraft, EditorItem } from './types';
+
+export function selectCards(cards: readonly Card[], selection: CardSelection): Card[] {
+  const { minimum = 0, maximum = 100 } = selection.progressRange ?? {};
+  const entries = cards.map((card) => {
+    const items = card.items.filter((item) => item.hint !== true);
+    const dates = items.map((item) => new Date(item.schedule.Due).getTime()).filter(Number.isFinite);
+    return {
+      card,
+      nextReview: dates.length ? Math.min(...dates) : null,
+      progress: cardProgress(card),
+    };
+  });
+  return entries
+    .filter(
+      ({ card, progress }) =>
+        (!selection.kinds.length || card.items.some((item) => selection.kinds.some((kind) => kind === item.kind))) &&
+        progress >= minimum &&
+        progress <= maximum,
+    )
+    .sort((a, b) => {
+      let difference = 0;
+      if (selection.sort.startsWith('review-')) {
+        if (a.nextReview === null || b.nextReview === null) {
+          if (a.nextReview !== b.nextReview) return a.nextReview === null ? 1 : -1;
+        } else difference = a.nextReview - b.nextReview;
+      } else if (selection.sort.startsWith('progress-')) difference = a.progress - b.progress;
+      else difference = a.card.createdAt - b.card.createdAt;
+      if (selection.sort.endsWith('-desc')) difference = -difference;
+      return (
+        difference ||
+        b.card.createdAt - a.card.createdAt ||
+        a.card.folderId.localeCompare(b.card.folderId) ||
+        a.card.id.localeCompare(b.card.id)
+      );
+    })
+    .map(({ card }) => card);
+}
 
 export function textDraft(text = '', key: string): EditorItem {
   return { key, kind: 'text', text };
@@ -45,6 +82,20 @@ export function moveItem(items: EditorItem[], key: string, direction: -1 | 1): E
 
 export function orderedItems(card: Card): ContentItem[] {
   return card.items.toSorted((a, b) => a.position - b.position);
+}
+
+export function cardProgress(card: Card): number {
+  const items = card.items.filter((item) => item.hint !== true);
+  if (!items.length) return 0;
+  const total = items.reduce((sum, item) => {
+    const reviews = item.reviews.filter(
+      (review) =>
+        !review.automatic && Number.isInteger(review.log.Rating) && review.log.Rating >= 1 && review.log.Rating <= 4,
+    );
+    if (!reviews.length) return sum;
+    return sum + reviews.filter((review) => review.log.Rating > 1).length / reviews.length;
+  }, 0);
+  return Math.round((total / items.length) * 100);
 }
 
 export function cardPreview(card: Card): string {

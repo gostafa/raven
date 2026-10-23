@@ -64,6 +64,7 @@ export function selectFolders(
   tags: string[],
   sort: FolderSort,
   metrics: ReadonlyMap<string, FolderMetrics>,
+  compare: (left: string, right: string) => number = (left, right) => left.localeCompare(right),
 ): Folder[] {
   const selected = folders.filter((folder) =>
     tags.every((tag) => folder.tags.some((value) => value.toLowerCase() === tag.toLowerCase())),
@@ -79,14 +80,10 @@ export function selectFolders(
       const leftReview = left?.nextReview ?? null;
       const rightReview = right?.nextReview ?? null;
       if (leftReview === null || rightReview === null) {
-        return leftReview === null && rightReview === null
-          ? a.title.localeCompare(b.title)
-          : leftReview === null
-            ? 1
-            : -1;
+        return leftReview === null && rightReview === null ? compare(a.title, b.title) : leftReview === null ? 1 : -1;
       }
       difference = leftReview - rightReview;
     }
-    return (sort.endsWith('-desc') ? -difference : difference) || a.title.localeCompare(b.title);
+    return (sort.endsWith('-desc') ? -difference : difference) || compare(a.title, b.title);
   });
 }

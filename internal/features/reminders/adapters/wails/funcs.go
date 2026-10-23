@@ -23,14 +23,23 @@ func NewRuntime(
 	sound ports.Sound,
 	warn func(context.Context, error),
 ) *Runtime {
+	return NewLocalizedRuntime(native, sound, NewRuntimeOptions(warn, nil))
+}
+
+// NewLocalizedRuntime constructs notification delivery with live localized messages.
+func NewLocalizedRuntime(
+	native NativeRuntime,
+	sound ports.Sound,
+	options *ports.RuntimeOptions,
+) *Runtime {
 	available := new(atomic.Bool)
-	operations := New(native, sound).operations
+	operations := New(native, sound, options.Messages).operations
 
 	operations["start"] = func(ctx context.Context, _ int, _ func()) notificationResult {
 		startNativeNotifications(
 			ctx,
 			native,
-			notificationWarning(warn, available),
+			notificationWarning(options.Warn, available),
 		)
 
 		return notificationResult{allowed: available.Load(), failure: nil}
@@ -153,12 +162,19 @@ func (runtime *Runtime) Send(count int) error {
 }
 
 // New constructs the adapter with its required runtime dependencies.
-func New(native NativeNotifications, sound ports.Sound) Notifier {
+func New(native NativeNotifications, sound ports.Sound, messages ...ports.Messages) Notifier {
 	return Notifier{operations: map[string]func(context.Context, int, func()) notificationResult{
 		"check":   func(context.Context, int, func()) notificationResult { return checkAuthorization(native) },
 		"request": func(context.Context, int, func()) notificationResult { return requestAuthorization(native) },
 		"send": func(_ context.Context, count int, _ func()) notificationResult {
-			return notificationResult{allowed: false, failure: sendReminder(native, sound, count)}
+			return notificationResult{
+				allowed: false,
+				failure: sendReminder(
+					native,
+					sound,
+					&reminderDelivery{count: count, messages: messages},
+				),
+			}
 		},
 	}}
 }
@@ -206,13 +222,13 @@ func requestAuthorization(native NativeNotifications) notificationResult {
 	return notificationResult{allowed: allowed, failure: nil}
 }
 
-func sendReminder(native NativeNotifications, sound ports.Sound, count int) error {
+func sendReminder(native NativeNotifications, sound ports.Sound, delivery *reminderDelivery) error {
 	err := sound.Play()
 	if err != nil {
 		return fmt.Errorf("play reminder sound: %w", err)
 	}
 
-	err = native.SendNotification(reminderOptions(count))
+	err = native.SendNotification(reminderOptions(delivery.count, delivery.messages...))
 	if err != nil {
 		return fmt.Errorf("send reminder: %w", err)
 	}
@@ -220,13 +236,19 @@ func sendReminder(native NativeNotifications, sound ports.Sound, count int) erro
 	return nil
 }
 
-func reminderOptions(count int) notifications.NotificationOptions {
+func reminderOptions(count int, messages ...ports.Messages) notifications.NotificationOptions {
 	var options notifications.NotificationOptions
 
 	options.Sound = reminderSound()
 	options.ID = "raven-due-" + rand.Text()
 	options.Title = "Time to review"
 	options.Body = fmt.Sprintf("%d items are ready to review in Raven.", count)
+
+	if len(messages) > zero && messages[zero] != nil {
+		options.Title = messages[zero].Text("reminderTitle", count)
+		options.Body = messages[zero].Text("reminderBody", count)
+	}
+
 	options.ThreadID = "raven-reviews"
 
 	return options
@@ -239,3 +261,11 @@ func NewSound(ctx context.Context) SoundPlayer {
 
 // Play waits for one playback to finish so simultaneous cards do not overlap.
 func (player SoundPlayer) Play() error { return errors.Join(player.play()) }
+
+// NewRuntimeOptions combines localized messages and notification diagnostics.
+func NewRuntimeOptions(
+	warn func(context.Context, error),
+	messages ports.Messages,
+) *ports.RuntimeOptions {
+	return &ports.RuntimeOptions{Warn: warn, Messages: messages}
+}

@@ -8,6 +8,8 @@ type (
 	// Settings contains only the shared values used by frontend consumers.
 	Settings struct {
 		// PreferencesStorageKey identifies the frontend's persisted preferences.
+		LocalizationChanged string `json:"localization_changed"`
+		// PreferencesStorageKey identifies saved navigation settings.
 		PreferencesStorageKey string `json:"preferences_storage_key"`
 		// MediaRoutePrefix is the route used to serve persisted media.
 		MediaRoutePrefix string `json:"media_route_prefix"`

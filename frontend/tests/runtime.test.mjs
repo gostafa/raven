@@ -30,6 +30,8 @@ const hooks = registerHooks({
         async ListFolders() { return transport('ListFolders'); },
         async CreateFolder(input) { return transport('CreateFolder', [input]); },
         async UpdateFolder(input) { return transport('UpdateFolder', [input]); },
+        async ExportFolders(input) { return transport('ExportFolders', [input]); },
+        async ImportFolders(mode) { return transport('ImportFolders', [mode]); },
         async ListCards() { return transport('ListCards'); },
         async CreateCard(input) { return transport('CreateCard', [input]); },
         async UpdateCard(input) { return transport('UpdateCard', [input]); },
@@ -95,9 +97,39 @@ test('runtime JSON transport preserves requests, records, nullable lists, and pa
   globalThis.ravenRuntime.responses.SelectMediaFiles = 'null';
   assert.deepEqual(await runtime.SelectMediaFiles('image'), []);
   globalThis.ravenRuntime.responses.ListCards = '{invalid';
-  await assert.rejects(runtime.ListCards(), /JSON/);
+  await assert.rejects(runtime.ListCards(), /action_failed/);
 });
 after(() => hooks.deregister());
+
+test('folder archive transport sends complete selections and preserves import modes and cancellation', async (t) => {
+  const response = {
+    canceled: false,
+    filename: 'folders.raven.zip',
+    folder_ids: ['new'],
+    folder_count: 2,
+    card_count: 4,
+    media_count: 3,
+  };
+  globalThis.ravenRuntime = {
+    calls: [],
+    responses: { ExportFolders: JSON.stringify(response), ImportFolders: JSON.stringify(response) },
+  };
+  t.after(() => {
+    delete globalThis.ravenRuntime;
+  });
+  const { createRuntime } = await import('../src/features/workspace/adapters/funcs.ts');
+  const runtime = createRuntime({ mediaRoutePrefix: '/media/', textKind: 'plain' });
+  const exported = await runtime.ExportFolders(['first', 'second']);
+  assert.equal(exported.folderCount, 2);
+  assert.deepEqual(JSON.parse(globalThis.ravenRuntime.calls[0].args[0]), { folder_ids: ['first', 'second'] });
+  for (const mode of ['fresh', 'resume']) assert.deepEqual((await runtime.ImportFolders(mode)).folderIds, ['new']);
+  assert.deepEqual(
+    globalThis.ravenRuntime.calls.slice(1).map((call) => call.args),
+    [['fresh'], ['resume']],
+  );
+  globalThis.ravenRuntime.responses.ImportFolders = JSON.stringify({ ...response, canceled: true, folder_ids: null });
+  assert.equal((await runtime.ImportFolders('fresh')).canceled, true);
+});
 
 test('runtime consumes configured event names and media routes and releases subscriptions', async (t) => {
   globalThis.ravenRuntime = {
@@ -136,5 +168,5 @@ test('runtime consumes configured event names and media routes and releases subs
   dispose.forEach((unsubscribe) => unsubscribe());
   assert.equal(globalThis.ravenRuntime.unsubscribed, 4);
   globalThis.ravenRuntime.failure = new Error('configuration unavailable');
-  await assert.rejects(loadConfiguration(), /configuration unavailable/);
+  await assert.rejects(loadConfiguration(), /action_failed/);
 });

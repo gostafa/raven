@@ -10,6 +10,13 @@ const hooks = registerHooks({
       ['svelte', 'export function mount(component, options) { globalThis.ravenBootstrap.mounts.push(options); }'],
       ['./App.svelte', 'export default {};'],
       [
+        './features/localization',
+        `export function configurationFailure() { return {locale:'en',direction:'ltr',message:'Raven could not load its configuration. Please restart the app.'}; }
+ export function createLocalization(port, environment) {
+        return { async start() { globalThis.ravenBootstrap.localizationStarted = true; environment.apply({locale:'ar',direction:'rtl'}); }, dispose() {} };
+      }`,
+      ],
+      [
         './features/workspace/adapters',
         `
         export function loadConfiguration() { return globalThis.ravenBootstrap.loading; }
@@ -46,6 +53,7 @@ function environment(t) {
   };
   globalThis.ravenBootstrap = state;
   globalThis.document = {
+    documentElement: {},
     getElementById: () => target,
     createElement: () => ({ textContent: '', style: {} }),
   };
@@ -65,6 +73,8 @@ test('each window waits for configuration before constructing its runtime and mo
   resolve(settings);
   await new Promise(setImmediate);
   assert.deepEqual(state.runtimes, [settings]);
+  assert.equal(state.localizationStarted, true);
+  assert.equal(globalThis.document.documentElement.dir, 'rtl');
   assert.equal(state.mounts[0].target, target);
   assert.equal(state.mounts[0].props.backend, settings);
 });

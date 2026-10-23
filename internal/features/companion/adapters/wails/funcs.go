@@ -9,6 +9,7 @@ import (
 	"log/slog"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 
 	companion "raven/internal/features/companion/domain"
 )
@@ -24,6 +25,7 @@ func newWindowState(deps *Dependencies, settings *Settings) *windowState {
 	var state windowState
 
 	bindMainWindow(&state, deps.Main)
+	bindMainFullscreen(&state, deps.Main)
 	bindWidgetWindow(&state, deps.Widget)
 	bindWindowRuntime(&state, deps)
 	bindWindowSettings(&state, settings)
@@ -35,6 +37,32 @@ func newWindowState(deps *Dependencies, settings *Settings) *windowState {
 func bindMainWindow(state *windowState, window mainWindow) {
 	state.showMain, state.hideMain = window.Show, window.Hide
 	state.restoreMain, state.focusMain = window.Restore, window.Focus
+}
+
+func bindMainFullscreen(state *windowState, window mainFullscreenWindow) {
+	state.mainFullscreen, state.exitMainFullscreen = window.IsFullscreen, window.UnFullscreen
+	state.observeMainExit = func(callback func(*application.WindowEvent)) func() {
+		return window.OnWindowEvent(events.Common.WindowUnFullscreen, callback)
+	}
+}
+
+func observeMainFullscreenExit(state *windowState) {
+	if state.mainExitObserved {
+		return
+	}
+
+	state.mainExitObserved = true
+	// This listener shares the native window's lifetime. Wait for the Space
+	// transition to finish before ordering the window out on macOS.
+	state.observeMainExit(func(*application.WindowEvent) {
+		state.invoke(func() {
+			if state.hideMainPending {
+				state.hideMainPending = false
+				state.showWidget()
+				state.hideMain()
+			}
+		})
+	})
 }
 
 func bindWidgetWindow(state *windowState, window widgetSurface) {
@@ -129,15 +157,33 @@ func ConfigureWidget(windows *windowState) {
 
 // ShowMain shows, restores, and focuses the main library window.
 func ShowMain(windows *windowState) {
-	windows.showMain()
-	windows.restoreMain()
-	windows.focusMain()
+	windows.invoke(func() {
+		windows.hideMainPending = false
+		windows.showMain()
+		windows.restoreMain()
+		windows.focusMain()
+	})
 }
 
 // HideMain hides the library and keeps the widget visible.
 func HideMain(windows *windowState) {
-	windows.showWidget()
-	windows.hideMain()
+	windows.invoke(func() {
+		if windows.hideMainPending {
+			return
+		}
+
+		if windows.mainFullscreen() {
+			observeMainFullscreenExit(windows)
+
+			windows.hideMainPending = true
+			windows.exitMainFullscreen()
+
+			return
+		}
+
+		windows.showWidget()
+		windows.hideMain()
+	})
 }
 
 // ResetWidget repositions the widget within the primary screen.

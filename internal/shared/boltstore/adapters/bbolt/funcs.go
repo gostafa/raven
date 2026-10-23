@@ -28,6 +28,8 @@ import (
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	reviewapi "raven/api/reviews"
+	archive "raven/internal/features/folderarchive/domain"
+	archiveports "raven/internal/features/folderarchive/ports"
 	library "raven/internal/shared/boltstore/domain"
 	"raven/internal/shared/boltstore/ports"
 	localfiles "raven/internal/shared/filesystem"
@@ -53,6 +55,74 @@ func (storage *Store) Start() error { return errors.Join(storeStart(storage.stat
 
 // Close releases the database after active media operations finish.
 func (storage *Store) Close() error { return errors.Join(storeClose(storage.state)) }
+
+// LoadLanguagePreference reads the device language independently of library content.
+func (storage *Store) LoadLanguagePreference() (string, error) {
+	preference, err := loadLanguagePreference(storage.state)
+
+	return preference, errors.Join(err)
+}
+
+// SaveLanguagePreference persists the device language independently of library exports.
+func (storage *Store) SaveLanguagePreference(preference string) error {
+	return errors.Join(saveLanguagePreference(storage.state, preference))
+}
+
+func loadLanguagePreference(storage *persistence) (string, error) {
+	preference := defaultLanguagePreference
+
+	err := storage.view(
+		func(transaction *bolt.Tx) error {
+			preference = readLanguagePreference(transaction)
+
+			return nil
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("load language preference: %w", err)
+	}
+
+	return preference, nil
+}
+
+func readLanguagePreference(transaction *bolt.Tx) string {
+	settings := transaction.Bucket([]byte(settingsBucket))
+	if settings == nil {
+		return defaultLanguagePreference
+	}
+
+	saved := settings.Get([]byte(languagePreferenceKey))
+	if saved == nil {
+		return defaultLanguagePreference
+	}
+
+	return string(saved)
+}
+
+func saveLanguagePreference(storage *persistence, preference string) error {
+	err := storage.update(
+		func(transaction *bolt.Tx) error { return writeLanguagePreference(transaction, preference) },
+	)
+	if err != nil {
+		return fmt.Errorf("save language preference: %w", err)
+	}
+
+	return nil
+}
+
+func writeLanguagePreference(transaction *bolt.Tx, preference string) error {
+	settings, err := transaction.CreateBucketIfNotExists([]byte(settingsBucket))
+	if err != nil {
+		return fmt.Errorf("open language settings: %w", err)
+	}
+
+	err = settings.Put([]byte(languagePreferenceKey), []byte(preference))
+	if err != nil {
+		return fmt.Errorf("write language preference: %w", err)
+	}
+
+	return nil
+}
 
 // ListFolders returns folder metadata as a JSON array in creation order.
 func (storage *Store) ListFolders() (string, error) {
@@ -1371,7 +1441,7 @@ func regularMediaSize(file *os.File) (int64, error) {
 }
 
 func storePersistMedia(storage *persistence, media *mediaImport) (string, error) {
-	temp, err := os.CreateTemp(storage.mediaDir, ".import-*")
+	temp, err := os.CreateTemp(storage.mediaDir, mediaStagingPattern)
 	if err != nil {
 		return "", fmt.Errorf("create media staging file: %w", err)
 	}
@@ -3551,5 +3621,651 @@ func folderUpdateInput(input *folderapi.UpdateInput) folderapi.CreateInput {
 		Title:       input.Title,
 		Description: input.Description,
 		Tags:        input.Tags,
+	}
+}
+
+// SnapshotFolders holds media ownership stable around a single database snapshot.
+func (storage *Store) SnapshotFolders(ids []string, consume archiveports.Consume) error {
+	return errors.Join(snapshotFolders(storage.state, ids, consume))
+}
+
+func snapshotFolders(storage *persistence, ids []string, consume archiveports.Consume) error {
+	storage.mediaMu.Lock()
+	defer storage.mediaMu.Unlock()
+
+	document := newArchiveDocument()
+
+	err := storage.view(func(transaction *bolt.Tx) error {
+		return archiveSnapshot(
+			storage,
+			transaction,
+			&archiveSnapshotRequest{ids: ids, document: document},
+		)
+	})
+	if err != nil {
+		return fmt.Errorf("snapshot folders: %w", err)
+	}
+
+	return errors.Join(consumeFolderSnapshot(storage, document, consume))
+}
+
+func consumeFolderSnapshot(
+	storage *persistence,
+	document *archive.Document,
+	consume archiveports.Consume,
+) error {
+	manifest, err := archive.Encode(document)
+	if err != nil {
+		return fmt.Errorf("encode folder snapshot: %w", err)
+	}
+
+	return errors.Join(consume(manifest, func(name string) (io.ReadCloser, error) {
+		file, failure := openArchiveMedia(storage, name)
+
+		return file, errors.Join(failure)
+	}))
+}
+
+func archiveSnapshot(
+	storage *persistence,
+	transaction *bolt.Tx,
+	request *archiveSnapshotRequest,
+) error {
+	err := validateArchiveSelection(request.ids)
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	for index := range request.ids {
+		folder, failure := readArchiveFolder(storage, transaction, request.ids[index])
+		if failure != nil {
+			return errors.Join(failure)
+		}
+
+		request.document.Folders = append(request.document.Folders, folder)
+	}
+
+	return errors.Join(archive.ValidateEnvelope(request.document))
+}
+
+func validateArchiveSelection(ids []string) error {
+	seen := make(map[string]bool)
+
+	for index := range ids {
+		if ids[index] == "" || seen[ids[index]] {
+			return archive.ErrInvalidArchive
+		}
+
+		seen[ids[index]] = true
+	}
+
+	return nil
+}
+
+func readArchiveFolder(
+	storage *persistence,
+	transaction *bolt.Tx,
+	id string,
+) (archive.Folder, error) {
+	folder, err := readFolder(transaction.Bucket([]byte(foldersBucket)), []byte(id), nil)
+	if err != nil {
+		return archive.Folder{}, fmt.Errorf("read exported folder: %w", err)
+	}
+
+	cards, err := readArchiveCards(storage, transaction, id)
+	if err != nil {
+		return archive.Folder{}, errors.Join(err)
+	}
+
+	return archive.Folder{Metadata: folder, Cards: cards}, nil
+}
+
+func readArchiveCards(
+	storage *persistence,
+	transaction *bolt.Tx,
+	id string,
+) ([]cardapi.Card, error) {
+	reader := cardListing{
+		root:     transaction.Bucket([]byte(foldersBucket)),
+		schema:   readSchemaVersion(transaction),
+		cards:    []cardapi.Card{},
+		items:    nil,
+		folderID: "",
+	}
+
+	err := cardListingAppendFolder(storage, &reader, &[two][]byte{[]byte(id), nil})
+	if err != nil {
+		return nil, fmt.Errorf("read exported cards: %w", err)
+	}
+
+	return cardRecords(reader.cards), nil
+}
+
+func openArchiveMedia(storage *persistence, name string) (*os.File, error) {
+	if !archive.MediaName(name) {
+		return nil, archive.ErrInvalidArchive
+	}
+
+	file, err := os.OpenInRoot(storage.mediaDir, filepath.Base(name))
+	if err != nil {
+		return nil, fmt.Errorf("open archive media: %w", err)
+	}
+
+	return file, nil
+}
+
+// ImportFolderCopies validates and stages all media before one atomic database commit.
+func (storage *Store) ImportFolderCopies(
+	manifest, mode string,
+	open archiveports.OpenMedia,
+) ([]string, error) {
+	ids, err := importFolderCopies(
+		storage.state,
+		&archiveImportRequest{manifest: manifest, mode: mode, open: open},
+	)
+
+	return ids, errors.Join(err)
+}
+
+func importFolderCopies(storage *persistence, request *archiveImportRequest) ([]string, error) {
+	storage.mediaMu.Lock()
+	defer storage.mediaMu.Unlock()
+
+	transfer := newFolderImport(storage, request)
+
+	err := folderImportPrepare(transfer, request.manifest)
+	if err != nil {
+		return nil, errors.Join(err)
+	}
+
+	ids, err := folderImportCommit(transfer)
+
+	return ids, errors.Join(err)
+}
+
+func folderImportPrepare(transfer *folderImport, manifest string) error {
+	document, err := archive.Decode(manifest)
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	err = archive.ValidateMode(transfer.mode)
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	transfer.document = document
+
+	return errors.Join(folderImportValidate(transfer))
+}
+
+func folderImportValidate(transfer *folderImport) error {
+	seen := make(map[string]bool)
+
+	for index := range transfer.document.Folders {
+		err := folderImportValidateFolder(transfer, &transfer.document.Folders[index], seen)
+		if err != nil {
+			return fmt.Errorf("validate archived folder: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func folderImportValidateFolder(
+	transfer *folderImport,
+	folder *archive.Folder,
+	seen map[string]bool,
+) error {
+	if folder.Metadata.ID == "" || seen[folder.Metadata.ID] {
+		return archive.ErrInvalidArchive
+	}
+
+	seen[folder.Metadata.ID] = true
+
+	normalized, err := library.NormalizeFolder(new(folderUpdateInput(&folder.Metadata)))
+	if err != nil {
+		return fmt.Errorf("validate imported folder metadata: %w", err)
+	}
+
+	normalized.ID = folder.Metadata.ID
+	folder.Metadata = normalized
+
+	return errors.Join(folderImportValidateCards(transfer, folder))
+}
+
+func folderImportValidateCards(transfer *folderImport, folder *archive.Folder) error {
+	seen := make(map[string]bool)
+
+	for index := range folder.Cards {
+		card := &folder.Cards[index]
+		if !validArchiveCard(card, folder.Metadata.ID, seen) {
+			return archive.ErrInvalidArchive
+		}
+
+		seen[card.ID] = true
+
+		err := folderImportValidateCard(transfer, card)
+		if err != nil {
+			return errors.Join(err)
+		}
+	}
+
+	return nil
+}
+
+func folderImportValidateCard(transfer *folderImport, card *cardapi.Card) error {
+	items, err := contentapi.Decode[[]contentapi.Item](card.Items)
+	if err != nil {
+		return fmt.Errorf("decode imported card: %w", err)
+	}
+
+	card.Items = items
+
+	err = folderImportValidateItems(transfer, card)
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	hydrated, err := library.Hydrate(card)
+
+	*card = hydrated
+
+	return errors.Join(err)
+}
+
+func folderImportValidateItems(transfer *folderImport, card *cardapi.Card) error {
+	seen := make(map[string]bool)
+
+	for index := range contentapi.Items(card.Items) {
+		item := &contentapi.Items(card.Items)[index]
+		if !validArchiveItem(card, item, seen) {
+			return archive.ErrInvalidArchive
+		}
+
+		seen[item.ID] = true
+
+		err := folderImportValidateItem(transfer, item)
+		if err != nil {
+			return errors.Join(err)
+		}
+	}
+
+	return nil
+}
+
+func folderImportValidateItem(transfer *folderImport, item *contentapi.Item) error {
+	err := library.ValidateItem(
+		rulesValue(settingsValue(transfer.storage.settings).Rules),
+		item,
+	)
+	if err != nil {
+		return fmt.Errorf("validate imported item: %w", err)
+	}
+
+	if item.ByteSize > archive.MaximumMediaSize {
+		return archive.ErrInvalidArchive
+	}
+
+	return errors.Join(folderImportValidateReviews(transfer, item))
+}
+
+func folderImportValidateReviews(transfer *folderImport, item *contentapi.Item) error {
+	schedule, err := contentapi.Decode[reviewapi.Schedule](item.Schedule)
+	if err != nil {
+		return fmt.Errorf("decode imported schedule: %w", err)
+	}
+
+	err = transfer.storage.validateSchedule(&schedule)
+	if err != nil {
+		return fmt.Errorf("validate imported schedule: %w", err)
+	}
+
+	item.Schedule = schedule
+
+	return errors.Join(validateArchiveHistory(item))
+}
+
+func validateArchiveHistory(item *contentapi.Item) error {
+	reviews, err := contentapi.Decode[[]contentapi.Review](item.Reviews)
+	if err != nil {
+		return fmt.Errorf("decode imported reviews: %w", err)
+	}
+
+	err = validateArchiveReviews(reviews)
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	item.Reviews = reviews
+
+	return errors.Join(requireArchiveSchedule(item))
+}
+
+func validateArchiveReviews(reviews []contentapi.Review) error {
+	for index := range reviews {
+		err := validateArchiveLog(&reviews[index])
+		if err != nil {
+			return errors.Join(err)
+		}
+	}
+
+	return nil
+}
+
+func requireArchiveSchedule(item *contentapi.Item) error {
+	if missingItemSchedule(item) {
+		return errMissingItemSchedule
+	}
+
+	return nil
+}
+
+func validArchiveCard(card *cardapi.Card, folderID string, seen map[string]bool) bool {
+	return card.ID != "" && !seen[card.ID] && validCardMetadata(card, folderID, card.ID)
+}
+
+func validArchiveItem(card *cardapi.Card, item *contentapi.Item, seen map[string]bool) bool {
+	return !seen[item.ID] && contentBelongsTo(card, item, item.ID)
+}
+
+func validateArchiveLog(review *contentapi.Review) error {
+	log, err := contentapi.Decode[reviewapi.Log](review.Log)
+	if err != nil {
+		return fmt.Errorf("decode imported review log: %w", err)
+	}
+
+	if !validArchiveLog(&log) {
+		return archive.ErrInvalidArchive
+	}
+
+	review.Log = log
+
+	return nil
+}
+
+func folderImportCommit(transfer *folderImport) ([]string, error) {
+	err := folderImportStage(transfer)
+	if err != nil {
+		folderImportDiscard(transfer)
+
+		return nil, errors.Join(err)
+	}
+
+	err = transfer.storage.update(
+		func(transaction *bolt.Tx) error { return folderImportWrite(transfer, transaction) },
+	)
+	if err != nil {
+		folderImportDiscard(transfer)
+
+		return nil, fmt.Errorf("commit imported folders: %w", err)
+	}
+
+	return transfer.folderIDs, nil
+}
+
+func folderImportStage(transfer *folderImport) error {
+	for index := range transfer.document.Folders {
+		err := folderImportStageFolder(transfer, &transfer.document.Folders[index])
+		if err != nil {
+			return fmt.Errorf("stage imported folder: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func folderImportStageFolder(transfer *folderImport, folder *archive.Folder) error {
+	for index := range folder.Cards {
+		err := folderImportStageCard(transfer, &folder.Cards[index])
+		if err != nil {
+			return errors.Join(err)
+		}
+	}
+
+	return nil
+}
+
+func folderImportStageCard(transfer *folderImport, card *cardapi.Card) error {
+	for index := range contentapi.Items(card.Items) {
+		err := folderImportStageItem(transfer, &contentapi.Items(card.Items)[index])
+		if err != nil {
+			return errors.Join(err)
+		}
+	}
+
+	return nil
+}
+
+func folderImportStageItem(transfer *folderImport, item *contentapi.Item) error {
+	id, err := newItemID()
+	if err != nil {
+		return fmt.Errorf("allocate imported item: %w", err)
+	}
+
+	previous := item.RelativePath
+
+	item.ID = id
+	item.LastNotifiedDue = zero
+
+	err = folderImportInitializeItem(transfer, item)
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	return errors.Join(folderImportStageItemMedia(transfer, item, previous))
+}
+
+func folderImportInitializeItem(transfer *folderImport, item *contentapi.Item) error {
+	if transfer.mode == archive.Fresh {
+		return errors.Join(
+			library.InitializeItem(item, transfer.now, transfer.storage.initializeSchedule),
+		)
+	}
+
+	return nil
+}
+
+func folderImportStageItemMedia(
+	transfer *folderImport,
+	item *contentapi.Item,
+	previous string,
+) error {
+	if previous == "" {
+		return nil
+	}
+
+	source, err := transfer.open(previous)
+	if err != nil {
+		return fmt.Errorf("open imported media: %w", err)
+	}
+
+	failure := folderImportCopyMedia(transfer, item, source)
+
+	return errors.Join(failure, source.Close())
+}
+
+func folderImportCopyMedia(transfer *folderImport, item *contentapi.Item, source io.Reader) error {
+	file, err := os.CreateTemp(transfer.storage.mediaDir, mediaStagingPattern)
+	if err != nil {
+		return fmt.Errorf("stage archived media: %w", err)
+	}
+	defer storeRemoveMediaFile(transfer.storage, file.Name())
+
+	err = copyArchiveMedia(file, source, item.ByteSize)
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	return errors.Join(folderImportPersistMedia(transfer, item, file.Name()))
+}
+
+func copyArchiveMedia(target *os.File, source io.Reader, size int64) error {
+	count, failure := io.Copy(target, io.LimitReader(source, size+1))
+
+	failure = errors.Join(failure, target.Sync(), target.Close())
+
+	if count != size {
+		failure = errors.Join(failure, archive.ErrInvalidArchive)
+	}
+
+	return errors.Join(failure)
+}
+
+func folderImportPersistMedia(transfer *folderImport, item *contentapi.Item, staged string) error {
+	file, err := localfiles.OpenSelected(staged)
+	if err != nil {
+		return fmt.Errorf("inspect staged archive media: %w", err)
+	}
+
+	failure := folderImportInspectMedia(transfer, item, file)
+
+	err = errors.Join(failure, file.Close())
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	return errors.Join(folderImportCommitMedia(transfer, item, staged))
+}
+
+func folderImportInspectMedia(transfer *folderImport, item *contentapi.Item, file *os.File) error {
+	mimeType, err := settingsInspectMedia(settingsValue(transfer.storage.settings), &mediaImport{
+		item: item, file: file, source: item.RelativePath,
+	})
+	if err != nil {
+		return fmt.Errorf("validate archived media content: %w", err)
+	}
+
+	if item.MIMEType != mimeType {
+		return errMediaContentTypeMismatch
+	}
+
+	return nil
+}
+
+func folderImportCommitMedia(transfer *folderImport, item *contentapi.Item, staged string) error {
+	item.RelativePath = "media/" + item.ID + filepath.Ext(item.RelativePath)
+
+	path, err := storeCommitMedia(
+		transfer.storage,
+		staged,
+		storeMediaPath(transfer.storage, item.RelativePath),
+	)
+	if err != nil {
+		return fmt.Errorf("persist archived media: %w", err)
+	}
+
+	transfer.imported = append(transfer.imported, path)
+
+	return nil
+}
+
+func folderImportDiscard(transfer *folderImport) {
+	for index := range transfer.imported {
+		storeRemoveMediaFile(transfer.storage, transfer.imported[index])
+	}
+}
+
+func folderImportWrite(transfer *folderImport, transaction *bolt.Tx) error {
+	for index := range transfer.document.Folders {
+		err := folderImportWriteFolder(transfer, transaction, &transfer.document.Folders[index])
+		if err != nil {
+			return errors.Join(err)
+		}
+	}
+
+	return nil
+}
+
+func folderImportWriteFolder(
+	transfer *folderImport,
+	transaction *bolt.Tx,
+	folder *archive.Folder,
+) error {
+	err := allocateArchiveFolder(transaction, &folder.Metadata)
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	transfer.folderIDs = append(transfer.folderIDs, folder.Metadata.ID)
+
+	return errors.Join(folderImportWriteCards(transaction, folder))
+}
+
+func allocateArchiveFolder(transaction *bolt.Tx, folder *folderapi.Folder) error {
+	id, err := newItemID()
+	if err != nil {
+		return fmt.Errorf("allocate imported folder: %w", err)
+	}
+
+	folder.ID = id
+
+	return errors.Join(createFolderBucket(transaction.Bucket([]byte(foldersBucket)), folder))
+}
+
+func folderImportWriteCards(
+	transaction *bolt.Tx,
+	folder *archive.Folder,
+) error {
+	for index := range folder.Cards {
+		folder.Cards[index].FolderID = folder.Metadata.ID
+
+		err := writeArchiveCard(transaction, &folder.Cards[index])
+		if err != nil {
+			return errors.Join(err)
+		}
+	}
+
+	return nil
+}
+
+func writeArchiveCard(transaction *bolt.Tx, card *cardapi.Card) error {
+	id, err := newItemID()
+	if err != nil {
+		return fmt.Errorf("allocate imported card: %w", err)
+	}
+
+	card.ID = id
+	assignContentOwnership(card)
+
+	hydrated, err := library.Hydrate(card)
+	if err != nil {
+		return fmt.Errorf("hydrate imported card: %w", err)
+	}
+
+	return errors.Join(writeArchiveCardRecords(transaction, &hydrated))
+}
+
+func writeArchiveCardRecords(transaction *bolt.Tx, card *cardapi.Card) error {
+	bucket, err := cardBucket(transaction, card.FolderID)
+	if err != nil {
+		return errors.Join(err)
+	}
+
+	return errors.Join(writeCardRecords(transaction, bucket, card))
+}
+
+func validArchiveLog(log *reviewapi.Log) bool {
+	return !log.Review.IsZero() && !log.Due.IsZero() && log.Rating >= one &&
+		log.Rating <= four
+}
+
+func newArchiveDocument() *archive.Document {
+	return &archive.Document{
+		Version:    archive.Version,
+		ExportedAt: time.Now(),
+		Folders:    []archive.Folder{},
+	}
+}
+
+func newFolderImport(storage *persistence, request *archiveImportRequest) *folderImport {
+	return &folderImport{
+		storage:   storage,
+		open:      request.open,
+		mode:      request.mode,
+		now:       time.Now(),
+		document:  nil,
+		imported:  nil,
+		folderIDs: nil,
 	}
 }

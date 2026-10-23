@@ -33,6 +33,7 @@ type (
 	desktopParams struct {
 		fx.In
 
+		Localization  ports.Localization
 		Handles       companionwails.WindowSet
 		Reminders     reminderports.Control
 		Lifecycle     fx.Lifecycle

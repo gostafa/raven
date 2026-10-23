@@ -1,6 +1,14 @@
 <script lang="ts">
+  import { useLocalization, type MessageKey } from '../../localization';
+  const l = useLocalization();
+  const kindKeys: Record<string, MessageKey> = {
+    text: 'workspace.text',
+    image: 'workspace.image',
+    audio: 'cards.audio',
+    video: 'cards.video',
+  } as const;
   import { onDestroy, onMount, tick } from 'svelte';
-  import type { Card, MediaURLPort } from '../../cards';
+  import type { Card, MediaURLPort, PreviewStartPort } from '../../cards';
   import type { Folder } from '../../folders';
   import type { ReviewPort } from '../domain/types';
   import { saveReview } from '../application/funcs';
@@ -11,6 +19,7 @@
   let {
     review,
     mediaURL,
+    nativeStart,
     entries,
     folders,
     floating = false,
@@ -21,6 +30,7 @@
   }: {
     review: ReviewPort;
     mediaURL: MediaURLPort;
+    nativeStart?: PreviewStartPort;
     entries: ReviewItem[];
     folders: Pick<Folder, 'id' | 'title'>[];
     floating?: boolean;
@@ -30,7 +40,7 @@
     onclose: () => void;
   } = $props();
   let index = $state(0);
-  let error = $state('');
+  let error = $state<MessageKey | ''>('');
   let root: HTMLDivElement;
   let hintDialog = $state<HTMLDialogElement>();
   let hintsVisible = $state(false);
@@ -39,6 +49,7 @@
   let completionButton = $state<HTMLButtonElement>();
   const entry = $derived(entries.at(index));
   const card = $derived(entry ? { ...entry.card, items: [entry.item] } : undefined);
+  const hints = $derived(entry?.card.items.filter((item) => item.id !== entry.item.id) ?? []);
 
   $effect(() => {
     if (entry || saving || disabled) return;
@@ -70,7 +81,7 @@
       selectedHint = undefined;
       index += 1;
     } catch {
-      error = 'Your review could not be saved. Try again before moving on.';
+      error = 'reviews.your_review_could_not_be_saved_try_again_before_moving_on';
     } finally {
       saving = false;
       await tick();
@@ -101,23 +112,26 @@
         >
           <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
         </svg>
-        <span>{folders.find((folder) => folder.id === card.folderId)?.title ?? 'Folder'}</span>
-      {:else}Review complete{/if}
-    </span><button class="close-button" aria-label="Close review" disabled={saving || disabled} onclick={close}
-      >✕</button
+        <span>{folders.find((folder) => folder.id === card.folderId)?.title ?? $l.t('workspace.folder')}</span>
+      {:else}{$l.t('reviews.review_complete')}{/if}
+    </span><button
+      class="close-button"
+      aria-label={$l.t('reviews.close_review')}
+      disabled={saving || disabled}
+      onclick={close}>✕</button
     >
   </header>
   {#if card && entry}
     <div class="review-content">
       {#key `${card.folderId}/${card.id}/${entry.item.id}`}
         <div class="review-item">
-          <CardContent {card} {mediaURL} />
+          <CardContent {card} {mediaURL} {nativeStart} reviewing />
         </div>
-        {#if entry.card.items.some((item) => item.hint)}
+        {#if hints.length}
           <button
             class="hint-button"
-            aria-label={hintsVisible ? 'Hide hints' : 'Show hints'}
-            title={hintsVisible ? 'Hide hints' : 'Show hints'}
+            aria-label={hintsVisible ? $l.t('reviews.hide_hints') : $l.t('reviews.show_hints')}
+            title={hintsVisible ? $l.t('reviews.hide_hints') : $l.t('reviews.show_hints')}
             aria-expanded={hintsVisible}
             disabled={saving || disabled}
             onclick={() => (hintsVisible = !hintsVisible)}
@@ -138,22 +152,28 @@
             </svg>
           </button>
           {#if hintsVisible}
-            <div class="hint-grid" role="group" aria-label="Choose a hint">
-              {#each entry.card.items.filter((item) => item.hint) as hint, hintIndex (hint.id)}
+            <div class="hint-grid" role="group" aria-label={$l.t('reviews.choose_a_hint')}>
+              {#each hints as hint, hintIndex (hint.id)}
                 <button
                   class="hint-tile"
-                  aria-label={`Open hint ${hintIndex + 1}: ${hint.kind === 'text' ? hint.text : hint.originalName || hint.kind}`}
+                  aria-label={$l.t('reviews.openHint', {
+                    count: hintIndex + 1,
+                    name: hint.kind === 'text' ? (hint.text ?? '') : hint.originalName || $l.t(kindKeys[hint.kind]),
+                  })}
                   aria-haspopup="dialog"
                   disabled={saving || disabled}
                   onclick={() => showHint(hint)}
                 >
                   {#if hint.kind === 'image'}
-                    <img src={mediaURL(hint)} alt={hint.originalName || `Hint ${hintIndex + 1}`} />
+                    <img
+                      src={mediaURL(hint)}
+                      alt={hint.originalName || $l.t('reviews.hintNumber', { count: hintIndex + 1 })}
+                    />
                   {:else if hint.kind === 'text'}
                     <span class="hint-preview">{hint.text}</span>
                   {:else}
                     <span class="hint-media-icon" aria-hidden="true">{hint.kind === 'audio' ? '♪' : '▶'}</span>
-                    <span class="hint-media-name">{hint.originalName || hint.kind}</span>
+                    <bdi class="hint-media-name">{hint.originalName || $l.t(kindKeys[hint.kind])}</bdi>
                   {/if}
                 </button>
               {/each}
@@ -161,7 +181,7 @@
           {/if}
           <dialog
             class="hint-dialog"
-            aria-label="Hint"
+            aria-label={$l.t('reviews.hint')}
             bind:this={hintDialog}
             onclose={() => {
               if (hintDialog) stopMedia(hintDialog);
@@ -171,12 +191,14 @@
             }}
           >
             <header>
-              <h2 class="hint-title">Hint</h2>
-              <button class="close-button" aria-label="Close hint" onclick={() => hintDialog?.close()}>✕</button>
+              <h2 class="hint-title">{$l.t('reviews.hint')}</h2>
+              <button class="close-button" aria-label={$l.t('reviews.close_hint')} onclick={() => hintDialog?.close()}
+                >✕</button
+              >
             </header>
             <div class="hint-content">
               {#if selectedHint}
-                <CardContent card={{ ...entry.card, items: [selectedHint] }} {mediaURL} />
+                <CardContent card={{ ...entry.card, items: [selectedHint] }} {mediaURL} {nativeStart} reviewing />
               {/if}
             </div>
           </dialog>
@@ -184,29 +206,35 @@
       {/key}
     </div>
     <footer>
-      <p class="review-question">How familiar does this feel?</p>
+      <p class="review-question">{$l.t('reviews.how_familiar_does_this_feel')}</p>
       <div class="rating-actions">
         <button class="secondary-button" bind:this={ratingButton} disabled={saving || disabled} onclick={() => rate(1)}
-          >Again</button
+          >{$l.t('reviews.again')}</button
         >
-        <button class="secondary-button" disabled={saving || disabled} onclick={() => rate(2)}>Hard</button>
-        <button class="primary-button" disabled={saving || disabled} onclick={() => rate(3)}>Good</button>
-        <button class="secondary-button" disabled={saving || disabled} onclick={() => rate(4)}>Easy</button>
+        <button class="secondary-button" disabled={saving || disabled} onclick={() => rate(2)}
+          >{$l.t('reviews.hard')}</button
+        >
+        <button class="primary-button" disabled={saving || disabled} onclick={() => rate(3)}
+          >{$l.t('reviews.good')}</button
+        >
+        <button class="secondary-button" disabled={saving || disabled} onclick={() => rate(4)}
+          >{$l.t('reviews.easy')}</button
+        >
       </div>
-      {#if error}<p class="error" role="alert">{error}</p>{/if}
+      {#if error}<p class="error" role="alert">{error ? $l.t(error) : ''}</p>{/if}
     </footer>
   {:else}
     <div class="review-complete">
       <div class="complete-icon" aria-hidden="true">✓</div>
-      <p class="eyebrow">A LITTLE MORE REMEMBERED</p>
-      <h2>{index ? 'Look at you, showing up.' : 'All caught up'}</h2>
+      <p class="eyebrow">{$l.t('reviews.a_little_more_remembered')}</p>
+      <h2>{index ? $l.t('reviews.look_at_you_showing_up') : $l.t('reviews.all_caught_up')}</h2>
       <p>
-        {#if index}You practiced {index}
-          {index === 1 ? 'item' : 'items'}. Your next reviews are scheduled.{:else}There’s nothing due right now. Your
-          next reviews will appear here.{/if}
+        {#if index}{$l.t('reviews.practiced', { items: $l.t('common.items', { count: index }) })}{:else}{$l.t(
+            'reviews.there_s_nothing_due_right_now_your_next_reviews_will_appear_here',
+          )}{/if}
       </p>
       <button class="primary-button" bind:this={completionButton} {disabled} onclick={close}
-        >{floating ? 'Done' : 'Back to your space'}</button
+        >{floating ? $l.t('reviews.done') : $l.t('reviews.back_to_your_space')}</button
       >
     </div>
   {/if}
@@ -314,7 +342,7 @@
   .hint-button {
     position: absolute;
     top: 62px;
-    right: 21px;
+    inset-inline-end: 21px;
     z-index: 1;
     display: grid;
     place-items: center;
@@ -334,7 +362,7 @@
   .hint-grid {
     position: absolute;
     top: 106px;
-    right: 21px;
+    inset-inline-end: 21px;
     z-index: 2;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

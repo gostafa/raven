@@ -50,6 +50,7 @@ func newDesktopState(deps *Dependencies) *Dependencies {
 
 	state.run = deps.App.Run
 	state.invoke = application.InvokeSync
+	state.post = application.InvokeAsync
 	state.showDialog = (*application.MessageDialog).Show
 
 	return &state
@@ -120,7 +121,7 @@ func Configure(desktop *Dependencies) {
 	configureWidgetEvents(desktop, desktop.Widget)
 	configureClosingHooks(desktop)
 	configureLifecycleEvents(desktop, desktop.App.Event, desktop.Main)
-	configureMenus(desktop)
+	observeNativeLanguage(desktop, configureMenus(desktop))
 	desktop.OnReview(func() { showReviews(desktop) })
 }
 
@@ -184,7 +185,7 @@ func mainWindowOptions(configuration *Configuration) application.WebviewWindowOp
 	options.Name = appName
 	options.Title = appTitle
 	options.Hidden = true
-	options.BackgroundColour = application.NewRGB(blackChannel, blackChannel, blackChannel)
+	options.BackgroundColour = application.NewRGB(zero, zero, zero)
 	options.URL = "/"
 	options.Mac = mainMacWindowOptions()
 
@@ -196,6 +197,7 @@ func mainMacWindowOptions() application.MacWindow {
 
 	options.Appearance = application.NSAppearanceNameDarkAqua
 	options.Backdrop = application.MacBackdropTranslucent
+	options.WebviewPreferences.EnableAutoplayWithoutUserAction.Set(true)
 
 	return options
 }
@@ -236,7 +238,7 @@ func widgetWindowOptions(configuration *Configuration) application.WebviewWindow
 		whiteChannel,
 		whiteChannel,
 		whiteChannel,
-		blackChannel,
+		zero,
 	)
 	options.URL = "/?view=widget"
 	options.Mac = widgetMacWindowOptions()
@@ -291,7 +293,7 @@ func reviewWindowOptions(configuration *Configuration) application.WebviewWindow
 	options.Width = configuration.ReviewWidth
 	options.Height = configuration.ReviewHeight
 	options.Hidden = true
-	options.BackgroundColour = application.NewRGB(blackChannel, blackChannel, blackChannel)
+	options.BackgroundColour = application.NewRGB(zero, zero, zero)
 	options.URL = "/?view=review"
 	options.Mac = reviewMacWindowOptions()
 
@@ -370,6 +372,7 @@ func configureFocusEvents(
 
 func applicationStarted(desktop *Dependencies, _ *application.ApplicationEvent) {
 	service := desktop
+	refreshNativeLanguage(desktop)
 	service.ConfigureWidget()
 	service.ResetWidget()
 	service.StartReminders()
@@ -390,8 +393,8 @@ func reportStartupError(desktop *Dependencies, err error) {
 		slog.Any(desktop.LogErrorKey, err),
 	)
 	desktop.showDialog(app.Dialog.Error().
-		SetTitle(startupMenuTitle).
-		SetMessage(startupErrorMessage + err.Error()))
+		SetTitle(nativeText(desktop, startupMessage, startupMenuTitle)).
+		SetMessage(nativeText(desktop, "startupError", startupErrorMessage)))
 }
 
 func refreshStartup(desktop *Dependencies) {
@@ -410,39 +413,115 @@ func toggleStartup(desktop *Dependencies, _ *application.Context) {
 	go func() { reportStartupError(desktop, desktop.ToggleStartup()) }()
 }
 
-func populateMenu(desktop *Dependencies, menu *application.Menu) *application.MenuItem {
-	service := desktop
-
-	menu.Add(openMenuTitle).OnClick(menuHandler(service, openClicked))
-	menu.Add(resetMenuTitle).OnClick(menuHandler(service, resetClicked))
+func populateMenu(
+	desktop *Dependencies,
+	menu *application.Menu,
+) (startupItem *application.MenuItem, refreshLabels func()) {
+	labels := map[string]*application.MenuItem{
+		openMessage:  addWindowMenuItem(desktop, menu, openMessage),
+		resetMessage: addWindowMenuItem(desktop, menu, resetMessage),
+	}
 	menu.AddSeparator()
 
-	startup := menu.AddCheckbox(startupMenuTitle, false).SetEnabled(false)
-	startup.OnClick(menuHandler(desktop, toggleStartup))
-	menu.AddSeparator()
-	menu.Add(quitMenuTitle).OnClick(menuHandler(service, quitClicked))
+	startup := startupMenuItem(desktop, menu)
 
-	return startup
+	labels[startupMessage] = startup
+
+	menu.AddSeparator()
+
+	labels[quitMessage] = addWindowMenuItem(desktop, menu, quitMessage)
+
+	return startup, func() { translateMenu(desktop, labels) }
 }
 
-func configureMenus(desktop *Dependencies) {
-	app := desktop.App
-	menu := app.ContextMenu.New()
-	widgetStartup := populateMenu(desktop, menu.Menu)
-	app.ContextMenu.Add(appName, menu)
+func addWindowMenuItem(
+	desktop *Dependencies,
+	menu *application.Menu,
+	key string,
+) *application.MenuItem {
+	titles := map[string]string{
+		openMessage:  openMenuTitle,
+		resetMessage: resetMenuTitle,
+		quitMessage:  quitMenuTitle,
+	}
+	handlers := map[string]func(*Dependencies, *application.Context){
+		openMessage:  openClicked,
+		resetMessage: resetClicked,
+		quitMessage:  quitClicked,
+	}
 
-	trayMenu := app.Menu.New()
-	trayStartup := populateMenu(desktop, trayMenu)
-	tray := app.SystemTray.New().SetIcon(desktop.Icon).SetMenu(trayMenu)
-	tray.SetTooltip(appTitle)
+	return menu.Add(nativeText(desktop, key, titles[key])).
+		OnClick(menuHandler(desktop, handlers[key]))
+}
+
+func startupMenuItem(desktop *Dependencies, menu *application.Menu) *application.MenuItem {
+	return menu.AddCheckbox(nativeText(desktop, startupMessage, startupMenuTitle), false).
+		SetEnabled(false).
+		OnClick(menuHandler(desktop, toggleStartup))
+}
+
+func translateMenu(desktop *Dependencies, labels map[string]*application.MenuItem) {
+	if desktop.Localization == nil {
+		return
+	}
+
+	for key := range labels {
+		labels[key].SetLabel(desktop.Localization.Text(key, zero))
+	}
+}
+
+func configureMenus(desktop *Dependencies) func() {
+	contextMenu := desktop.App.ContextMenu.New()
+	widget, widgetLabels := populateMenu(desktop, contextMenu.Menu)
+	desktop.App.ContextMenu.Add(appName, contextMenu)
+
+	trayMenu := desktop.App.Menu.New()
+	trayCheck, trayLabels := populateMenu(desktop, trayMenu)
+	tray := newTray(desktop.App, trayMenu, desktop.Icon)
+	refresh := menuRefresh(contextMenu, tray, trayMenu)
+	bindStartupChecks(desktop, []*application.MenuItem{widget, trayCheck}, refresh)
+
+	return func() { widgetLabels(); trayLabels(); refresh() }
+}
+
+func menuRefresh(
+	contextMenu *application.ContextMenu,
+	tray *application.SystemTray,
+	menu *application.Menu,
+) func() {
+	return func() { contextMenu.Update(); tray.SetMenu(menu) }
+}
+
+func bindStartupChecks(desktop *Dependencies, items []*application.MenuItem, refresh func()) {
 	desktop.SetStartupPublisher(func(checked, available bool) {
 		desktop.invoke(func() {
-			widgetStartup.SetChecked(checked).SetEnabled(available)
-			trayStartup.SetChecked(checked).SetEnabled(available)
-			menu.Update()
-			tray.SetMenu(trayMenu)
+			for index := range items {
+				items[index].SetChecked(checked).SetEnabled(available)
+			}
+
+			refresh()
 		})
 	})
+}
+
+func newTray(app *application.App, menu *application.Menu, icon []byte) *application.SystemTray {
+	tray := app.SystemTray.New().SetIcon(icon).SetMenu(menu)
+	tray.SetTooltip(appTitle)
+
+	return tray
+}
+
+func observeNativeLanguage(desktop *Dependencies, refresh func()) {
+	if desktop.Localization == nil {
+		return
+	}
+
+	track(
+		desktop,
+		desktop.Localization.Subscribe(
+			func() { desktop.post(func() { refresh(); refreshNativeLanguage(desktop) }) },
+		),
+	)
 }
 
 func widgetShown(desktop *Dependencies,
@@ -466,7 +545,16 @@ func mainClosing(desktop *Dependencies, event *application.WindowEvent) {
 }
 func cancelClosing(event *application.WindowEvent) { event.Cancel() }
 func systemWoke(desktop *Dependencies, _ *application.ApplicationEvent) {
+	if desktop.Localization != nil {
+		desktop.Localization.Refresh()
+	}
+
 	desktop.WakeReminders()
+
+	if desktop.Localization != nil {
+		desktop.Localization.Refresh()
+	}
+
 	refreshStartup(desktop)
 }
 
@@ -480,6 +568,10 @@ func becameActive(
 	desktop *Dependencies,
 	_ *application.ApplicationEvent,
 ) {
+	if desktop.Localization != nil {
+		desktop.Localization.Refresh()
+	}
+
 	refreshStartup(desktop)
 }
 
@@ -536,4 +628,21 @@ func menuHandler(
 	handle func(*Dependencies, *application.Context),
 ) func(*application.Context) {
 	return func(event *application.Context) { handle(state, event) }
+}
+
+func nativeText(desktop *Dependencies, key, fallback string) string {
+	if desktop.Localization == nil {
+		return fallback
+	}
+
+	return desktop.Localization.Text(key, zero)
+}
+
+func refreshNativeLanguage(desktop *Dependencies) {
+	if desktop.Localization == nil {
+		return
+	}
+
+	desktop.Widget.SetTitle(desktop.Localization.Text("widgetTitle", zero))
+	desktop.Review.SetTitle(desktop.Localization.Text("reviewTitle", zero))
 }

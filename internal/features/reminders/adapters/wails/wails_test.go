@@ -197,3 +197,14 @@ func TestPlayerReportsPlaybackResult(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type reminderMessages struct{}
+
+func (reminderMessages) Text(key string, count int) string { return key + ":ar" }
+
+func TestLocalizedReminderOptions(t *testing.T) {
+	options := reminderOptions(3, reminderMessages{})
+	if options.Title != "reminderTitle:ar" || options.Body != "reminderBody:ar" {
+		t.Fatal(options)
+	}
+}

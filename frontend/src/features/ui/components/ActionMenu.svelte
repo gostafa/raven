@@ -1,4 +1,11 @@
 <script lang="ts">
+  import { useLocalization } from '../../localization';
+  const l = useLocalization();
+  import { onDestroy } from 'svelte';
+  import { positionPopover } from '../adapters/positioning/funcs';
+  let releasePosition = () => {};
+  onDestroy(() => releasePosition());
+
   let {
     label,
     actions,
@@ -15,6 +22,7 @@
   let expanded = $state(false);
 
   function close(restoreFocus = false) {
+    releasePosition();
     menu.hidePopover();
     if (restoreFocus) trigger.focus();
   }
@@ -25,13 +33,8 @@
 
   function open(last = false) {
     menu.showPopover();
-    const anchor = trigger.getBoundingClientRect();
-    const bounds = menu.getBoundingClientRect();
-    const padding = 8;
-    menu.style.left = `${Math.max(padding, Math.min(anchor.right - bounds.width, window.innerWidth - bounds.width - padding))}px`;
-    const below = anchor.bottom + 6;
-    const top = below + bounds.height <= window.innerHeight - padding ? below : anchor.top - bounds.height - 6;
-    menu.style.top = `${Math.max(padding, Math.min(top, window.innerHeight - bounds.height - padding))}px`;
+    releasePosition();
+    releasePosition = positionPopover(trigger, menu, 'end');
     const buttons = items();
     buttons[last ? buttons.length - 1 : 0]?.focus();
   }
@@ -65,7 +68,12 @@
   }
 
   $effect(() => {
+    const direction = $l.direction;
     if (!expanded) return;
+    if (direction) {
+      releasePosition();
+      releasePosition = positionPopover(trigger, menu, 'end');
+    }
     // Fixed popovers must close when their anchor moves inside the scrolling content.
     const dismiss = () => close();
     window.addEventListener('scroll', dismiss, true);
@@ -181,7 +189,7 @@
     border-radius: 5px;
     background: transparent;
     color: inherit;
-    text-align: left;
+    text-align: start;
     font-size: 12px;
   }
   .menu button:hover,

@@ -6,6 +6,7 @@ package composition
 import (
 	"go.uber.org/fx"
 
+	archiveports "raven/internal/features/folderarchive/ports"
 	mediaports "raven/internal/shared/desktopmedia/ports"
 )
 
@@ -15,6 +16,7 @@ import (
 var Module = fx.Module(
 	"desktopmedia",
 	fx.Provide(
+		fx.Annotate(newArchiveDialogs, fx.As(new(archiveports.Dialogs))),
 		fx.Annotate(newRegistry, fx.As(new(mediaports.MediaRoutes)), fx.As(fx.Self())),
 		fx.Annotate(newSelection, fx.As(new(mediaports.Selection))),
 	),

@@ -21,6 +21,7 @@ type (
 		fx.In
 
 		Lifecycle fx.Lifecycle
+		Messages  ports.Messages
 		Source    reminders.Source
 		Native    reminderwails.NativeRuntime
 		Sound     ports.Sound

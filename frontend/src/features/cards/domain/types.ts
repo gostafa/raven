@@ -1,4 +1,15 @@
 export type MediaKind = 'image' | 'audio' | 'video';
+export type CardContentKind = 'text' | MediaKind;
+export interface CardProgressRange {
+  minimum: number;
+  maximum: number;
+}
+export type CardSort = 'created-desc' | 'created-asc' | 'review-asc' | 'review-desc' | 'progress-asc' | 'progress-desc';
+export interface CardSelection {
+  sort: CardSort;
+  kinds: readonly CardContentKind[];
+  progressRange?: CardProgressRange;
+}
 interface Schedule {
   Due: string;
   Stability: number;

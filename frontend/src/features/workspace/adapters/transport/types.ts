@@ -1,4 +1,5 @@
 export interface TransportConfiguration {
+  localization_changed: string;
   preferences_storage_key: string;
   media_route_prefix: string;
   text_kind: string;
@@ -6,6 +7,15 @@ export interface TransportConfiguration {
   show_reviews: string;
   open_floating_review: string;
   close_floating_review: string;
+}
+
+export interface TransportArchiveResult {
+  canceled: boolean;
+  filename: string;
+  folder_ids: string[] | null;
+  folder_count: number;
+  card_count: number;
+  media_count: number;
 }
 
 export interface TransportFolder {

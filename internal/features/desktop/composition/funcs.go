@@ -41,6 +41,8 @@ func newDesktop(params desktopParams, settings configuration.Settings) *desktopw
 func desktopDependencies(params desktopParams) *desktopwails.Dependencies {
 	var deps desktopwails.Dependencies
 
+	deps.Localization = params.Localization
+
 	deps.App, deps.Main = params.App, params.Handles.Main
 	deps.Widget, deps.Review = params.Handles.Widget, params.Handles.Review
 	deps.OnReview, deps.Icon = params.Notifications.OnReview, params.Assets.Icon

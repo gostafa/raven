@@ -33,6 +33,10 @@ import (
 	reviewapi "raven/api/reviews"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
+	archivezip "raven/internal/features/folderarchive/adapters/zipfile"
+	archive "raven/internal/features/folderarchive/domain"
+	archiveports "raven/internal/features/folderarchive/ports"
+	library "raven/internal/shared/boltstore/domain"
 	libraryports "raven/internal/shared/boltstore/ports"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
@@ -157,6 +161,485 @@ func TestJSONRepositoryRoundTripAndLifecycle(t *testing.T) {
 	}
 	if folders, err := reopened.ListFolders(); err != nil || folders != "[]" {
 		t.Fatalf("empty array compatibility: %s %v", folders, err)
+	}
+}
+
+func archiveFixture(t *testing.T) (*Store, *archive.Document, string) {
+	t.Helper()
+	state := openTestStore(t)
+	store := &Store{state: state}
+	folder, err := storeCreateFolder(
+		state,
+		&folderapi.CreateInput{
+			Title:       "Memories 世界",
+			Description: "Portable",
+			Tags:        []string{"study"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := storeCreateFolder(state, &folderapi.CreateInput{Title: "Empty"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drafts := []contentapi.Draft{
+		{Kind: "text", Text: "مرحبا 🌍"},
+		{Kind: "text", Text: "Hint", Hint: true},
+	}
+	for _, media := range []struct{ kind, ext string }{{"image", ".png"}, {"image", ".png"}, {"audio", ".wav"}, {"video", ".mp4"}} {
+		filename, _ := mediaFixture(t, media.ext)
+		drafts = append(drafts, contentapi.Draft{Kind: media.kind, SourcePath: filename})
+	}
+	card, err := storeCreateCard(state, &cardapi.CreateInput{FolderID: folder.ID, Items: drafts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-7 * 24 * time.Hour)
+	for index := range contentapi.Items(card.Items) {
+		if err = library.InitializeItem(
+			&contentapi.Items(card.Items)[index],
+			past,
+			state.initializeSchedule,
+		); err != nil {
+			t.Fatal(err)
+		}
+		contentapi.Items(card.Items)[index].LastNotifiedDue = 123
+	}
+	if err = library.ApplyReview(
+		&contentapi.Items(card.Items)[0],
+		&reviewapi.Attempt{At: past.Add(time.Hour), Rating: 3},
+		&library.ReviewDependencies{
+			Rules: settingsValue(state.settings).Rules,
+			Next:  state.nextSchedule,
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	err = state.update(func(tx *bolt.Tx) error {
+		bucket, failure := cardBucket(tx, folder.ID)
+		if failure != nil {
+			return failure
+		}
+		return writeCardRecords(tx, bucket, &card)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(t.TempDir(), "folders.raven.zip")
+	var document *archive.Document
+	err = store.SnapshotFolders(
+		[]string{folder.ID, empty.ID},
+		func(manifest string, open archiveports.OpenMedia) error {
+			value, decodeErr := archive.Decode(manifest)
+			if decodeErr != nil {
+				return decodeErr
+			}
+			document = value
+			items, err := contentapi.Decode[[]contentapi.Item](document.Folders[0].Cards[0].Items)
+			if err != nil {
+				return err
+			}
+			for index := range items {
+				if err = contentapi.NormalizeItem(&items[index]); err != nil {
+					return err
+				}
+			}
+			document.Folders[0].Cards[0].Items = items
+			return archivezip.New().Write(filename, manifest, open)
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, document, filename
+}
+
+func TestFolderArchiveRoundTripFreshAndResume(t *testing.T) {
+	store, document, filename := archiveFixture(t)
+	before, err := store.ListCards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := document.Folders[0].Cards[0]
+	originalItems := contentapi.Items(original.Items)
+	for _, mode := range []string{archive.Resume, archive.Fresh, archive.Resume} {
+		started := time.Now().UnixMilli()
+		var ids []string
+		err = archivezip.New().
+			Read(filename, func(manifest string, open archiveports.OpenMedia) error {
+				var failure error
+				ids, failure = store.ImportFolderCopies(manifest, mode, open)
+				return failure
+			})
+		if err != nil || len(ids) != 2 {
+			t.Fatalf("%s import: %v %v", mode, ids, err)
+		}
+		cards, err := storeListCards(store.state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var imported cardapi.Card
+		for _, card := range cards {
+			if card.FolderID == ids[0] {
+				imported = card
+			}
+		}
+		if imported.ID == original.ID || imported.CreatedAt != original.CreatedAt {
+			t.Fatal("card identity or creation time", imported)
+		}
+		if mode == archive.Resume &&
+			(imported.DueAt != original.DueAt || imported.LastReviewed != original.LastReviewed || imported.DueAt >= started) {
+			t.Fatal("review aggregates changed", imported)
+		}
+		if mode == archive.Fresh && (imported.LastReviewed != 0 || imported.DueAt < started) {
+			t.Fatal("fresh review aggregates", imported)
+		}
+		for index, item := range contentapi.Items(imported.Items) {
+			previous := originalItems[index]
+			if item.ID == previous.ID || item.CardID != imported.ID || item.FolderID != ids[0] ||
+				item.LastNotifiedDue != 0 ||
+				item.Hint != previous.Hint ||
+				item.Text != previous.Text ||
+				item.OriginalName != previous.OriginalName {
+				t.Fatal("content ownership or metadata", item)
+			}
+			if mode == archive.Resume {
+				if !reflect.DeepEqual(
+					contentapi.Schedule(item.Schedule),
+					contentapi.Schedule(previous.Schedule),
+				) ||
+					!reflect.DeepEqual(
+						contentapi.Reviews(item.Reviews),
+						contentapi.Reviews(previous.Reviews),
+					) {
+					t.Fatal("resume state changed", item)
+				}
+			} else if history := contentapi.Reviews(item.Reviews); len(history) != 1 || !history[0].Automatic || contentapi.Schedule(item.Schedule).LastReview.UnixMilli() < started {
+				t.Fatal("fresh state retained manual reviews", item)
+			}
+			if item.RelativePath != "" {
+				oldBytes, failure := os.ReadFile(storeMediaPath(store.state, previous.RelativePath))
+				if failure != nil {
+					t.Fatal(failure)
+				}
+				newBytes, failure := os.ReadFile(storeMediaPath(store.state, item.RelativePath))
+				if failure != nil || !bytes.Equal(newBytes, oldBytes) ||
+					item.RelativePath == previous.RelativePath {
+					t.Fatal("media copy", failure)
+				}
+			}
+		}
+	}
+	current, err := storeListCards(store.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, card := range current {
+		if card.FolderID == original.FolderID && "["+string(encodeFixture(t, &card))+"]" != before {
+			t.Fatal("original card changed")
+		}
+	}
+	if folders, err := storeListFolders(store.state); err != nil || len(folders) != 8 {
+		t.Fatalf("copy imports: %d %v", len(folders), err)
+	}
+}
+
+func TestFolderArchiveValidationAndRollback(t *testing.T) {
+	store, document, filename := archiveFixture(t)
+	before, _ := store.ListFolders()
+	entries, err := os.ReadDir(store.state.mediaDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("archive media failed")
+	for _, mode := range []string{"unknown", archive.Resume, archive.Fresh} {
+		if _, err = store.ImportFolderCopies(
+			string(encodeFixture(t, document)),
+			mode,
+			func(string) (io.ReadCloser, error) { return nil, failure },
+		); err == nil {
+			t.Fatal("accepted failed import")
+		}
+	}
+	originalUpdate := store.state.update
+	store.state.update = func(func(*bolt.Tx) error) error { return failure }
+	err = archivezip.New().
+		Read(filename, func(manifest string, open archiveports.OpenMedia) error {
+			_, err := store.ImportFolderCopies(manifest, archive.Resume, open)
+			return err
+		})
+	store.state.update = originalUpdate
+	if !errors.Is(err, failure) {
+		t.Fatal("lost database failure", err)
+	}
+	after, _ := store.ListFolders()
+	remaining, err := os.ReadDir(store.state.mediaDir)
+	if err != nil || before != after || len(remaining) != len(entries) {
+		t.Fatal("partial import survived", err)
+	}
+	for _, mutate := range []func(*archive.Document){
+		func(value *archive.Document) { value.Version = 9 },
+		func(value *archive.Document) { value.Folders[0].Metadata.Title = "" },
+		func(value *archive.Document) { value.Folders = append(value.Folders, value.Folders[0]) },
+		func(value *archive.Document) { value.Folders[0].Cards[0].FolderID = "wrong" },
+		func(value *archive.Document) { value.Folders[0].Cards[0].Items = "bad" },
+		func(value *archive.Document) { value.Folders[0].Cards[0].Items = []contentapi.Item{} },
+	} {
+		copyDocument, err := archive.Decode(string(encodeFixture(t, document)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mutate(copyDocument)
+		if _, err = store.ImportFolderCopies(
+			string(encodeFixture(t, copyDocument)),
+			archive.Resume,
+			nil,
+		); err == nil {
+			t.Fatal("accepted invalid records")
+		}
+	}
+}
+
+func TestFolderArchiveSnapshotSurvivesConcurrentReview(t *testing.T) {
+	store, document, _ := archiveFixture(t)
+	original := document.Folders[0].Cards[0]
+	err := store.SnapshotFolders(
+		[]string{original.FolderID},
+		func(manifest string, _ archiveports.OpenMedia) error {
+			value, decodeErr := archive.Decode(manifest)
+			if decodeErr != nil {
+				return decodeErr
+			}
+			_, err := store.ReviewItem(
+				string(
+					encodeFixture(
+						t,
+						&cardapi.ReviewInput{
+							FolderID: original.FolderID,
+							CardID:   original.ID,
+							ItemID:   contentapi.Items(original.Items)[0].ID,
+							Rating:   3,
+						},
+					),
+				),
+			)
+			if err != nil {
+				return err
+			}
+			if value.Folders[0].Cards[0].LastReviewed != original.LastReviewed {
+				t.Fatal("snapshot changed during review")
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ids := range [][]string{{}, {""}, {"missing"}, {original.FolderID, original.FolderID}} {
+		if err = store.SnapshotFolders(ids, func(string, archiveports.OpenMedia) error {
+			t.Fatal("invalid snapshot consumed")
+			return nil
+		}); err == nil {
+			t.Fatal("invalid selection", ids)
+		}
+	}
+}
+
+func TestFolderArchiveInvalidItemsAndHistory(t *testing.T) {
+	store, document, _ := archiveFixture(t)
+	manifest := string(encodeFixture(t, document))
+	if _, err := store.ImportFolderCopies("invalid", archive.Resume, nil); err == nil {
+		t.Fatal("invalid JSON")
+	}
+	for _, mutate := range []func(*contentapi.Item){
+		func(item *contentapi.Item) { item.Position = 99 },
+		func(item *contentapi.Item) { item.CardID = "wrong" },
+		func(item *contentapi.Item) { item.Text = "" },
+		func(item *contentapi.Item) {
+			item.ByteSize = archive.MaximumMediaSize + 1
+			item.Kind = "image"
+			item.Text = ""
+			item.OriginalName = "large.png"
+			item.MIMEType = "image/png"
+			item.RelativePath = "media/" + item.ID + ".png"
+		},
+		func(item *contentapi.Item) { item.Schedule = "invalid" },
+		func(item *contentapi.Item) { item.Reviews = "invalid" },
+		func(item *contentapi.Item) { item.Reviews = []contentapi.Review{} },
+		func(item *contentapi.Item) { item.Reviews = []contentapi.Review{{Log: "invalid"}} },
+		func(item *contentapi.Item) { item.Reviews = []contentapi.Review{{Log: reviewapi.Log{}}} },
+	} {
+		transfer := folderImport{storage: store.state, mode: archive.Resume}
+		value, err := archive.Decode(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items, err := contentapi.Decode[[]contentapi.Item](value.Folders[0].Cards[0].Items)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mutate(&items[0])
+		value.Folders[0].Cards[0].Items = items
+		if err = folderImportPrepare(&transfer, string(encodeFixture(t, value))); err == nil {
+			t.Fatal("invalid archive item accepted")
+		}
+	}
+	previous := store.state.validateSchedule
+	store.state.validateSchedule = func(any) error { return io.ErrUnexpectedEOF }
+	if _, err := store.ImportFolderCopies(
+		manifest,
+		archive.Resume,
+		nil,
+	); !errors.Is(
+		err,
+		io.ErrUnexpectedEOF,
+	) {
+		t.Fatal(err)
+	}
+	store.state.validateSchedule = previous
+	previousInitialize := store.state.initializeSchedule
+	store.state.initializeSchedule = func(time.Time) (json.RawMessage, json.RawMessage, error) { return nil, nil, io.ErrUnexpectedEOF }
+	if _, err := store.ImportFolderCopies(
+		manifest,
+		archive.Fresh,
+		nil,
+	); !errors.Is(
+		err,
+		io.ErrUnexpectedEOF,
+	) {
+		t.Fatal(err)
+	}
+	store.state.initializeSchedule = previousInitialize
+}
+
+func TestFolderArchiveMediaAndSnapshotFailures(t *testing.T) {
+	store, document, _ := archiveFixture(t)
+	for _, name := range []string{"../bad", "media/missing.png"} {
+		if _, err := openArchiveMedia(store.state, name); err == nil {
+			t.Fatal("invalid media open")
+		}
+	}
+	bad := &archive.Document{
+		Folders: []archive.Folder{{Cards: []cardapi.Card{{Items: make(chan int)}}}},
+	}
+	if err := consumeFolderSnapshot(store.state, bad, nil); err == nil {
+		t.Fatal("invalid snapshot JSON")
+	}
+	transfer := folderImport{storage: store.state}
+	media := contentapi.Items(document.Folders[0].Cards[0].Items)[2]
+	if err := folderImportPersistMedia(
+		&transfer,
+		&media,
+		filepath.Join(t.TempDir(), "missing"),
+	); err == nil {
+		t.Fatal("missing staging file")
+	}
+	badFile := filepath.Join(t.TempDir(), "bad.png")
+	if err := os.WriteFile(badFile, []byte("not a PNG"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := folderImportPersistMedia(&transfer, &media, badFile); err == nil {
+		t.Fatal("invalid media signature")
+	}
+	file, err := os.Open(storeMediaPath(store.state, media.RelativePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	media.MIMEType = "image/jpeg"
+	if err = folderImportInspectMedia(&transfer, &media, file); err == nil {
+		t.Fatal("MIME mismatch")
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = folderImportCommitMedia(&transfer, &media, "missing"); err == nil {
+		t.Fatal("missing staged media commit")
+	}
+	file, err = os.CreateTemp(t.TempDir(), "copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = copyArchiveMedia(file, strings.NewReader("short"), 99); err == nil {
+		t.Fatal("media size mismatch")
+	}
+	previousDir := store.state.mediaDir
+	store.state.mediaDir = filepath.Join(t.TempDir(), "missing")
+	if err = folderImportCopyMedia(&transfer, &media, strings.NewReader("x")); err == nil {
+		t.Fatal("missing media directory")
+	}
+	store.state.mediaDir = previousDir
+	media.ByteSize = 99
+	if err = folderImportCopyMedia(&transfer, &media, strings.NewReader("short")); err == nil {
+		t.Fatal("copy size mismatch")
+	}
+	if err = store.state.update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(foldersBucket)).
+			Bucket([]byte(document.Folders[0].Metadata.ID)).
+			DeleteBucket([]byte(itemsBucket))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SnapshotFolders(
+		[]string{document.Folders[0].Metadata.ID},
+		func(string, archiveports.OpenMedia) error { return nil },
+	); err == nil {
+		t.Fatal("corrupt folder snapshot")
+	}
+}
+
+func TestFolderArchiveAllocationAndWriteFailures(t *testing.T) {
+	store, document, _ := archiveFixture(t)
+	entropy := rand.Reader
+	rand.Reader = failedEntropy{}
+	t.Cleanup(func() { rand.Reader = entropy })
+	transfer := folderImport{storage: store.state, document: document, mode: archive.Resume}
+	if err := folderImportStageCard(
+		&transfer,
+		&document.Folders[0].Cards[0],
+	); !errors.Is(
+		err,
+		io.ErrUnexpectedEOF,
+	) {
+		t.Fatal(err)
+	}
+	err := store.state.update(func(tx *bolt.Tx) error { return folderImportWrite(&transfer, tx) })
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal(err)
+	}
+	err = store.state.update(
+		func(tx *bolt.Tx) error { return folderImportWriteCards(tx, &document.Folders[0]) },
+	)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal(err)
+	}
+	rand.Reader = entropy
+	invalid := cardapi.Card{FolderID: document.Folders[0].Metadata.ID}
+	err = store.state.update(func(tx *bolt.Tx) error { return writeArchiveCard(tx, &invalid) })
+	if err == nil {
+		t.Fatal("empty imported card persisted")
+	}
+	err = store.state.update(
+		func(tx *bolt.Tx) error { return writeArchiveCardRecords(tx, &cardapi.Card{FolderID: "missing"}) },
+	)
+	if err == nil {
+		t.Fatal("missing folder write")
+	}
+	err = store.state.view(
+		func(tx *bolt.Tx) error { return allocateArchiveFolder(tx, &folderapi.Folder{}) },
+	)
+	if err == nil {
+		t.Fatal("read-only folder allocation")
+	}
+	badDocument := archive.Document{
+		Folders: []archive.Folder{
+			{Metadata: document.Folders[0].Metadata, Cards: []cardapi.Card{invalid}},
+		},
+	}
+	transfer.document = &badDocument
+	err = store.state.update(func(tx *bolt.Tx) error { return folderImportWrite(&transfer, tx) })
+	if err == nil {
+		t.Fatal("partial folder commit")
 	}
 }
 
@@ -3786,5 +4269,60 @@ func TestConfiguredContentAndMediaRouteSurvivePersistence(t *testing.T) {
 	storeMediaHandler(reopened).ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
 	if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), contents) {
 		t.Fatalf("configured media route failed: %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestLanguagePreferencePersistenceAndFailures(t *testing.T) {
+	storage, err := openStore(filepath.Join(t.TempDir(), "language.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = storeClose(storage) }()
+	repository := &Store{state: storage}
+	if got, err := repository.LoadLanguagePreference(); err != nil || got != "system" {
+		t.Fatal(got, err)
+	}
+	if err := repository.SaveLanguagePreference("ar"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repository.LoadLanguagePreference(); err != nil || got != "ar" {
+		t.Fatal(got, err)
+	}
+	// Existing buckets with no language key retain the System default.
+	if err := storage.update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte(settingsBucket)).Delete([]byte(languagePreferenceKey))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repository.LoadLanguagePreference(); err != nil || got != "system" {
+		t.Fatal(got, err)
+	}
+	// A read-only transaction must report a failed settings commit.
+	if err := storage.view(func(tx *bolt.Tx) error {
+		if writeLanguagePreference(tx, "en") == nil {
+			t.Error("read-only write succeeded")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A bucket occupying the language key must not be overwritten by a scalar value.
+	if err := storage.update(func(tx *bolt.Tx) error {
+		_, err := tx.Bucket([]byte(settingsBucket)).CreateBucket([]byte(languagePreferenceKey))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SaveLanguagePreference("en"); err == nil {
+		t.Fatal("bucket was overwritten")
+	}
+	if err := repository.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.LoadLanguagePreference(); err == nil {
+		t.Fatal("closed read succeeded")
+	}
+	if err := repository.SaveLanguagePreference("ar"); err == nil {
+		t.Fatal("closed write succeeded")
 	}
 }

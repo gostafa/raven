@@ -6,10 +6,12 @@ package wails
 import (
 	"errors"
 
+	archiveports "raven/internal/features/folderarchive/ports"
 	libraryports "raven/internal/shared/desktopmedia/ports"
 )
 
 var (
+	_ archiveports.Dialogs     = (*ArchiveDialogs)(nil)
 	_ libraryports.Selection   = (*Picker)(nil)
 	_ libraryports.MediaRoutes = (*Registry)(nil)
 

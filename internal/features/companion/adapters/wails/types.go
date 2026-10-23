@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 type (
@@ -16,6 +17,11 @@ type (
 		Hide() application.Window
 		Restore()
 		Focus()
+	}
+	mainFullscreenWindow interface {
+		IsFullscreen() bool
+		UnFullscreen()
+		OnWindowEvent(kind events.WindowEventType, callback func(*application.WindowEvent)) func()
 	}
 	widgetSurface interface {
 		Show() application.Window
@@ -67,33 +73,38 @@ type (
 	// Windows dispatches the consumer-owned native window operations.
 	Windows     struct{ operations map[string]func() }
 	windowState struct {
-		showMain            func() application.Window
-		hideMain            func() application.Window
+		logger              *slog.Logger
+		setReviewPosition   func(int, int)
 		restoreMain         func()
 		focusMain           func()
+		mainFullscreen      func() bool
+		exitMainFullscreen  func()
+		setReviewSize       func(int, int) application.Window
 		showWidget          func() application.Window
-		widgetPosition      func() (int, int)
+		reviewVisible       func() bool
 		setWidgetPosition   func(int, int)
 		getWidgetScreen     func() (*application.Screen, error)
 		showReview          func() application.Window
 		hideReview          func() application.Window
 		focusReview         func()
-		reviewVisible       func() bool
-		dispatchReview      func(*application.CustomEvent)
-		setReviewSize       func(int, int) application.Window
-		setReviewPosition   func(int, int)
+		primaryScreen       func() *application.Screen
+		hideMain            func() application.Window
+		widgetPosition      func() (int, int)
+		showMain            func() application.Window
 		configure           func() error
 		invoke              func(func())
-		primaryScreen       func() *application.Screen
+		dispatchReview      func(*application.CustomEvent)
 		quit                func()
-		logger              *slog.Logger
-		logErrorKey         string
+		observeMainExit     func(func(*application.WindowEvent)) func()
 		openFloatingReview  string
 		closeFloatingReview string
+		logErrorKey         string
 		widgetSize          int
 		reviewWidth         int
 		reviewHeight        int
 		reviewGap           int
+		hideMainPending     bool
+		mainExitObserved    bool
 	}
 	// WindowSet contains the Wails windows controlled by this adapter.
 	WindowSet struct {

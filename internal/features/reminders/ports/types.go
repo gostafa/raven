@@ -4,7 +4,16 @@
 // Package ports defines ports contracts for reminders.
 package ports
 
+import (
+	"context"
+)
+
 type (
+	// RuntimeOptions supplies notification diagnostics and localized messages.
+	RuntimeOptions = struct {
+		Warn     func(context.Context, error)
+		Messages Messages
+	}
 	// Sound plays one complete reminder sound before returning.
 	Sound interface {
 		Play() error
@@ -24,5 +33,10 @@ type (
 		CheckNotificationAuthorization() (bool, error)
 		Send(count int) error
 		RequestAuthorization() (bool, error)
+	}
+
+	// Messages supplies localized native text without exposing a translation library.
+	Messages interface {
+		Text(key string, count int) string
 	}
 )

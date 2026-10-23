@@ -10,9 +10,27 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"raven/internal/shared/desktopmedia/ports"
 )
 
 type (
+	chooserOptions = struct {
+		prompt   func(*application.OpenFileDialogStruct) ([]string, error)
+		messages []ports.Messages
+	}
+	archiveDialogState = struct {
+		messages ports.Messages
+		app      *application.App
+		window   *application.WebviewWindow
+		save     func(*application.SaveFileDialogStruct) (string, error)
+		open     func(*application.OpenFileDialogStruct) (string, error)
+	}
+
+	// ArchiveDialogs selects portable archive files using Raven's main window.
+	ArchiveDialogs struct{ state *archiveDialogState }
 	// Dependencies supplies saved-media resolution and resource cleanup logging.
 	Dependencies struct {
 		// Saved resolves the handler for persisted library media.

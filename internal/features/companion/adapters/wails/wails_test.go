@@ -10,18 +10,75 @@ import (
 	"testing"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 )
 
 type testWindow struct {
+	fullscreen                          bool
+	exitedFullscreen                    func(*application.WindowEvent)
 	visible                             bool
 	actions                             []string
 	events                              []string
 	horizontal, vertical, width, height int
 	screen                              *application.Screen
 	screenErr                           error
+}
+
+func (window *testWindow) IsFullscreen() bool { return window.fullscreen }
+
+func (window *testWindow) UnFullscreen() { window.actions = append(window.actions, "exit-fullscreen") }
+
+func (window *testWindow) OnWindowEvent(
+	kind events.WindowEventType,
+	callback func(*application.WindowEvent),
+) func() {
+	if kind == events.Common.WindowUnFullscreen {
+		window.exitedFullscreen = callback
+	}
+	return func() {}
+}
+
+func TestClosingFullscreenMainWaitsForSpaceExit(t *testing.T) {
+	windows, main, widget, _ := testWindows()
+	main.visible, main.fullscreen = true, true
+	windows.HideMain()
+	windows.HideMain()
+	if !main.visible || !reflect.DeepEqual(main.actions, []string{"exit-fullscreen"}) {
+		t.Fatalf("hid the full-screen space before its exit completed: %+v", main)
+	}
+	main.fullscreen = false
+	main.exitedFullscreen(nil)
+	if main.visible || !widget.visible ||
+		!reflect.DeepEqual(main.actions, []string{"exit-fullscreen", "hide"}) {
+		t.Fatalf("did not finish closing after leaving full-screen: %+v", main)
+	}
+	main.exitedFullscreen(nil)
+	if len(main.actions) != 2 {
+		t.Fatal("repeated exit hid the window again")
+	}
+	windows.ShowMain()
+	main.fullscreen = true
+	windows.HideMain()
+	main.fullscreen = false
+	main.exitedFullscreen(nil)
+	if main.visible {
+		t.Fatal("a second full-screen close did not reuse the exit listener")
+	}
+}
+
+func TestReopeningCancelsPendingFullscreenClose(t *testing.T) {
+	windows, main, _, _ := testWindows()
+	main.visible, main.fullscreen = true, true
+	windows.HideMain()
+	windows.ShowMain()
+	main.fullscreen = false
+	main.exitedFullscreen(nil)
+	if !main.visible {
+		t.Fatal("late full-screen exit hid the reopened library")
+	}
 }
 
 type testConfiguration func() error
@@ -76,6 +133,7 @@ func testWindows() (*windowFixture, *testWindow, *testWindow, *testWindow) {
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	bindMainWindow(state, main)
+	bindMainFullscreen(state, main)
 	bindWidgetWindow(state, widget)
 	bindReviewSurface(state, review)
 	bindReviewFrame(state, review)

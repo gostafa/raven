@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { useLocalization, type MessageKey } from '../../localization';
+  const l = useLocalization();
   import { onMount } from 'svelte';
   import type { Folder } from '../../folders';
   import type { AppPorts } from '../../workspace';
@@ -13,7 +15,7 @@
   let folders = $state<Folder[]>([]);
   let saving = $state(false);
   let closing = $state(false);
-  let closeError = $state('');
+  let closeError = $state<MessageKey | ''>('');
   let generation = $state(0);
   let root: HTMLElement;
 
@@ -45,7 +47,7 @@
       status = 'closed';
       closeError = '';
     } catch {
-      closeError = 'Could not close this review. Please try again.';
+      closeError = 'reviews.could_not_close_this_review_please_try_again';
     } finally {
       closing = false;
     }
@@ -78,11 +80,12 @@
 </script>
 
 <svelte:window onkeydown={handleKey} />
-<main class="floating-review" aria-label="Floating review" bind:this={root}>
+<main class="floating-review" aria-label={$l.t('reviews.floating_review')} bind:this={root}>
   {#if status === 'ready'}
     {#key generation}<ReviewSession
         review={backend}
         mediaURL={backend.mediaURL}
+        nativeStart={backend.previewStart}
         {entries}
         {folders}
         floating
@@ -94,16 +97,20 @@
       />{/key}
   {:else if status !== 'closed'}
     <header>
-      <span>REVIEW</span><button aria-label="Close review" disabled={closing} onclick={() => close()}>✕</button>
+      <span>{$l.t('reviews.review')}</span><button
+        aria-label={$l.t('reviews.close_review')}
+        disabled={closing}
+        onclick={() => close()}>✕</button
+      >
     </header>
     <div class="status" role="status">
-      {#if status === 'loading'}<p>Loading your reviews…</p>
-      {:else}<h1>Could not load your reviews</h1>
-        <p>Your memories are still saved. Try again to reconnect to your local database.</p>
-        <button class="retry" onclick={() => load()}>Try again</button>{/if}
+      {#if status === 'loading'}<p>{$l.t('reviews.loading_your_reviews')}</p>
+      {:else}<h1>{$l.t('reviews.could_not_load_your_reviews')}</h1>
+        <p>{$l.t('reviews.your_memories_are_still_saved_try_again_to_reconnect_to_your_local_database')}</p>
+        <button class="retry" onclick={() => load()}>{$l.t('workspace.try_again')}</button>{/if}
     </div>
   {/if}
-  {#if closeError}<p class="error" role="alert">{closeError}</p>{/if}
+  {#if closeError}<p class="error" role="alert">{closeError ? $l.t(closeError) : ''}</p>{/if}
 </main>
 
 <style>

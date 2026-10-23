@@ -1,6 +1,7 @@
 import { Events } from '@wailsio/runtime';
+import { localizationFromTransport } from './transport/funcs';
 import { RavenService } from '../../../../bindings/raven';
-import { createMediaURL } from '../../cards';
+import { createMediaURL, createNativePreviewStarter } from '../../cards';
 import type { AppPorts, RuntimeConfiguration } from '../domain/types';
 import {
   configurationFromTransport,
@@ -9,20 +10,42 @@ import {
   cardFromTransport,
   draftToTransport,
   mediaFromTransport,
+  archiveFromTransport,
 } from './transport/funcs';
-import type { TransportFolder, TransportCard, TransportMedia, TransportConfiguration } from './transport/types';
+import type {
+  TransportFolder,
+  TransportCard,
+  TransportMedia,
+  TransportConfiguration,
+  TransportArchiveResult,
+} from './transport/types';
 async function call<T>(action: () => Promise<T>): Promise<T> {
   try {
     return await action();
   } catch (error) {
-    // eslint-disable-next-line preserve-caught-error -- The facade deliberately exposes an owned message without transport error chains.
-    throw new Error(error instanceof Error ? error.message : 'Raven could not complete that action. Please try again.');
+    const cause: unknown = error instanceof Error ? error.cause : null;
+    const code = cause !== null && typeof cause === 'object' && 'code' in cause ? String(cause.code) : 'action_failed';
+    // eslint-disable-next-line preserve-caught-error -- Keep implementation and transport details outside the frontend-owned error contract.
+    throw new Error(code);
   }
 }
 export function createRuntime(configuration: RuntimeConfiguration): AppPorts {
   return {
     configuration,
+    GetLocalization: () =>
+      call(async () => localizationFromTransport(parseTransport(await RavenService.GetLocalization()))),
+    SetLanguagePreference: (preference) =>
+      call(async () => localizationFromTransport(parseTransport(await RavenService.SetLanguagePreference(preference)))),
+    onLocalizationChanged: (callback) =>
+      Events.On(configuration.localizationChanged, (event) => {
+        callback(localizationFromTransport(event.data));
+      }),
     mediaURL: createMediaURL(configuration.mediaRoutePrefix),
+    previewStart: createNativePreviewStarter({
+      once: (name, callback) => Events.Once(name, callback),
+      emit: (name) => Events.Emit(name),
+      newKey: () => crypto.randomUUID(),
+    }),
     ListFolders: () =>
       call(async () =>
         ((parseTransport(await RavenService.ListFolders()) as TransportFolder[] | null) ?? []).map(folderFromTransport),
@@ -36,6 +59,18 @@ export function createRuntime(configuration: RuntimeConfiguration): AppPorts {
         folderFromTransport(parseTransport(await RavenService.UpdateFolder(JSON.stringify(input))) as TransportFolder),
       ),
     DeleteFolder: (id) => call(() => RavenService.DeleteFolder(id)),
+    ExportFolders: (folderIds) =>
+      call(async () =>
+        archiveFromTransport(
+          parseTransport(
+            await RavenService.ExportFolders(JSON.stringify({ folder_ids: folderIds })),
+          ) as TransportArchiveResult,
+        ),
+      ),
+    ImportFolders: (mode) =>
+      call(async () =>
+        archiveFromTransport(parseTransport(await RavenService.ImportFolders(mode)) as TransportArchiveResult),
+      ),
     ListCards: () =>
       call(async () =>
         ((parseTransport(await RavenService.ListCards()) as TransportCard[] | null) ?? []).map((card) =>

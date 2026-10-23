@@ -4,6 +4,10 @@
 package wails
 
 const (
+	openMessage    = "open"
+	resetMessage   = "reset"
+	startupMessage = "startup"
+	quitMessage    = "quit"
 	resetMenuTitle = "Reset widget position"
 
 	appTitle            = "Raven"
@@ -11,7 +15,7 @@ const (
 	startupMenuTitle    = "Start at login"
 	openMenuTitle       = "Open Raven"
 	quitMenuTitle       = "Quit Raven"
-	blackChannel        = 0
+	zero                = 0
 	whiteChannel        = 255
 	mainWindowWidth     = 960
 	mainWindowHeight    = 680

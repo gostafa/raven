@@ -64,6 +64,7 @@ func modules(path string, n *native, e *events) fx.Option {
 		mediacomposition.Module,
 		schedulingcomposition.Module,
 		batchcomposition.Module,
+		fx.Supply(fx.Annotate(messageFixture{}, fx.As(new(reminderports.Messages)))),
 		fx.Supply(fx.Annotate(configurationFixture(), fx.As(new(configuration.Settings)))),
 		composition.Module,
 		fx.Provide(
@@ -254,3 +255,7 @@ func storeSettingsFixture() *boltstore.Settings {
 		LogErrorKey:      settings.LogErrorKey(),
 	}
 }
+
+type messageFixture struct{}
+
+func (messageFixture) Text(key string, count int) string { return key }

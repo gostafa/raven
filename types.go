@@ -10,10 +10,12 @@ import (
 
 	companion "raven/internal/features/companion/domain"
 	desktopports "raven/internal/features/desktop/ports"
+	archiveports "raven/internal/features/folderarchive/ports"
 	reminderports "raven/internal/features/reminders/ports"
 	libraryports "raven/internal/shared/boltstore/ports"
 	mediaports "raven/internal/shared/desktopmedia/ports"
 	"raven/internal/shared/lifetime"
+	localization "raven/internal/shared/localization/application"
 )
 
 type (
@@ -35,11 +37,13 @@ type (
 	serviceParams struct {
 		fx.In
 
-		Repository libraryports.Repository
-		Media      mediaports.Selection
-		Windows    companion.Windows
-		Events     desktopports.Events
-		Reminders  reminderports.Control
+		Localization *localization.Service
+		Repository   libraryports.Repository
+		Media        mediaports.Selection
+		Windows      companion.Windows
+		Events       desktopports.Events
+		Reminders    reminderports.Control
+		Archives     archiveports.Transfer
 	}
 	// RavenService exposes Raven operations using injected feature ports.
 	RavenService struct {
@@ -48,6 +52,8 @@ type (
 	// ServiceError exposes a message without retaining an implementation error chain.
 	ServiceError struct {
 		// Message describes a failed frontend operation.
-		Message string
+		Message string `json:"message"`
+		// Code is a stable frontend error identifier.
+		Code string `json:"code"`
 	}
 )

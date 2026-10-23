@@ -39,10 +39,24 @@ export function DeleteFolder(folderID: string): $CancellablePromise<void> {
 }
 
 /**
+ * ExportFolders exports selected folders to a portable archive using a native save dialog.
+ */
+export function ExportFolders(input: string): $CancellablePromise<string> {
+    return $Call.ByID(3179128794, input);
+}
+
+/**
  * GetConfiguration returns the frontend configuration snapshot as JSON.
  */
 export function GetConfiguration(): $CancellablePromise<string> {
     return $Call.ByID(2073266893);
+}
+
+/**
+ * GetLocalization returns the saved language and its resolved presentation as JSON.
+ */
+export function GetLocalization(): $CancellablePromise<string> {
+    return $Call.ByID(3910742396);
 }
 
 /**
@@ -57,6 +71,13 @@ export function HideFloatingReview(): $CancellablePromise<void> {
  */
 export function HideMain(): $CancellablePromise<void> {
     return $Call.ByID(3974471318);
+}
+
+/**
+ * ImportFolders imports folder copies using fresh or resume review scheduling.
+ */
+export function ImportFolders(mode: string): $CancellablePromise<string> {
+    return $Call.ByID(880410015, mode);
 }
 
 /**
@@ -106,6 +127,13 @@ export function ReviewItem(input: string): $CancellablePromise<string> {
  */
 export function SelectMediaFiles(kind: string): $CancellablePromise<string> {
     return $Call.ByID(2266179524, kind);
+}
+
+/**
+ * SetLanguagePreference persists system, en, or ar before publishing a language change.
+ */
+export function SetLanguagePreference(preference: string): $CancellablePromise<string> {
+    return $Call.ByID(281804694, preference);
 }
 
 /**

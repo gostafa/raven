@@ -122,6 +122,7 @@ test('drafts and file selections translate across the transport boundary', () =>
 
 test('configuration mapping owns frontend names and text identifiers', () => {
   const settings = configurationFromTransport({
+    localization_changed: 'custom:language',
     preferences_storage_key: 'custom.preferences',
     media_route_prefix: '/saved/',
     text_kind: 'plain',
@@ -131,6 +132,7 @@ test('configuration mapping owns frontend names and text identifiers', () => {
     close_floating_review: 'custom:close',
   });
   assert.deepEqual(settings, {
+    localizationChanged: 'custom:language',
     preferencesStorageKey: 'custom.preferences',
     mediaRoutePrefix: '/saved/',
     textKind: 'plain',

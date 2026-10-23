@@ -22,6 +22,7 @@ import (
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
+	"raven/internal/shared/desktopmedia/ports"
 )
 
 func TestNativeChooserConfiguresDialogAndPreservesResult(t *testing.T) {
@@ -371,5 +372,63 @@ func (media *testMedia) Select(kind string) ([]mediaapi.Selection, error) {
 func TestSelectionWireRejectsUnsupportedValues(t *testing.T) {
 	if _, err := marshalSelection(func() {}); err == nil {
 		t.Fatal("encoded an unsupported media value")
+	}
+}
+
+func TestNativeArchiveDialogsAndCancellation(t *testing.T) {
+	app := application.New(application.Options{Name: "Raven archive tests"})
+	dialogs := NewArchiveDialogs(app, nil)
+	for _, name := range []string{"", "folders", "folders.raven.zip", "FOLDERS.ZIP"} {
+		dialogs.state.save = func(dialog *application.SaveFileDialogStruct) (string, error) {
+			if dialog == nil {
+				t.Fatal("missing save dialog")
+			}
+			return name, nil
+		}
+		got, err := dialogs.SaveArchive()
+		want := name
+		if name == "folders" {
+			want += archiveSuffix
+		}
+		if err != nil || got != want {
+			t.Fatalf("save %q: %q %v", name, got, err)
+		}
+		dialogs.state.open = func(dialog *application.OpenFileDialogStruct) (string, error) {
+			if dialog == nil {
+				t.Fatal("missing open dialog")
+			}
+			return name, nil
+		}
+		if got, err = dialogs.OpenArchive(); err != nil || got != name {
+			t.Fatal(got, err)
+		}
+	}
+	dialogs.state.save = func(*application.SaveFileDialogStruct) (string, error) { return "", io.ErrClosedPipe }
+	dialogs.state.open = func(*application.OpenFileDialogStruct) (string, error) { return "", io.ErrClosedPipe }
+	if _, err := dialogs.SaveArchive(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatal(err)
+	}
+	if _, err := dialogs.OpenArchive(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatal(err)
+	}
+}
+
+type mediaMessages struct{}
+
+func (mediaMessages) Text(key string, count int) string { return key + ":ar" }
+
+func TestLocalizedNativeFilters(t *testing.T) {
+	if mediaText(
+		[]ports.Messages{mediaMessages{}},
+		"imageFiles",
+		"Image files",
+	) != "imageFiles:ar" {
+		t.Fatal("untranslated native filter")
+	}
+	if NewArchiveDialogs(nil, nil, mediaMessages{}).state.messages == nil {
+		t.Fatal("missing messages")
+	}
+	if mediaText(nil, "imageFiles", "Image files") != "Image files" {
+		t.Fatal("missing fallback")
 	}
 }

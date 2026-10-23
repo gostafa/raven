@@ -5,6 +5,11 @@
 package folders
 
 type (
+	// ExportInput selects complete folders for a portable archive.
+	ExportInput struct {
+		// FolderIDs identifies the folders to export regardless of display filters.
+		FolderIDs []string `json:"folder_ids"`
+	}
 	// Folder contains the metadata of a library folder.
 	Folder struct {
 		// ID identifies this record.

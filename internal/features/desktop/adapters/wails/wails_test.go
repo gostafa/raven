@@ -120,7 +120,7 @@ func TestDesktopLifecycleAndNativeRegistrations(t *testing.T) {
 	dialogs := 0
 	desktop.showDialog = func(dialog *application.MessageDialog) {
 		dialogs++
-		if dialog.Title != startupMenuTitle || !strings.Contains(dialog.Message, "startup failed") {
+		if dialog.Title != startupMenuTitle || dialog.Message != startupErrorMessage {
 			t.Errorf("wrong startup dialog: %+v", dialog)
 		}
 	}
@@ -298,6 +298,14 @@ func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 	}
 }
 
+func TestMainWindowAllowsVideoHoverPlaybackWithoutClick(t *testing.T) {
+	main := mainWindowOptions(nativeConfigurationFixture())
+	preference := main.Mac.WebviewPreferences.EnableAutoplayWithoutUserAction
+	if !preference.IsSet() || !preference.Get() {
+		t.Fatal("main webview requires a click before video hover playback")
+	}
+}
+
 func configurationFixture() configuration.Settings {
 	settings, err := configyaml.Load()
 	if err != nil {
@@ -371,5 +379,62 @@ func TestNativeEventPortsReleaseEveryOwnedSubscription(t *testing.T) {
 	Dispose(state)
 	if windows.stopped != 4 || applications.stopped != 4 || state.subscriptions != nil {
 		t.Fatal("disposing native events retained subscriptions")
+	}
+}
+
+type languageMessages struct {
+	changed   func()
+	refreshes int
+	disposed  bool
+}
+
+func (*languageMessages) Text(key string, count int) string { return "ar:" + key }
+func (messages *languageMessages) Subscribe(listener func()) func() {
+	messages.changed = listener
+	return func() { messages.disposed = true }
+}
+func (messages *languageMessages) Refresh() { messages.refreshes++ }
+
+func TestNativeLanguageRefreshPreservesMenuStateAndDisposes(t *testing.T) {
+	app := application.New(application.Options{})
+	handles := NewWindows(app, nativeConfigurationFixture())
+	messages := &languageMessages{}
+	desktop := &Dependencies{
+		App:          app,
+		Widget:       handles.Widget,
+		Review:       handles.Review,
+		Localization: messages,
+		post:         func(callback func()) { callback() },
+		invoke:       func(callback func()) { callback() },
+	}
+	desktop.SetStartupPublisher = func(func(bool, bool)) {}
+	refreshMenus := configureMenus(desktop)
+	refreshMenus()
+	translateMenu(&Dependencies{}, nil)
+	startup, labels := populateMenu(desktop, app.Menu.New())
+	startup.SetChecked(true).SetEnabled(true)
+	labels()
+	if startup.Label() != "ar:startup" || !startup.Checked() {
+		t.Fatal("lost startup state")
+	}
+	refreshed := 0
+	observeNativeLanguage(desktop, func() { refreshed++ })
+	messages.changed()
+	if refreshed != 1 {
+		t.Fatal("language observer did not refresh")
+	}
+	if nativeText(desktop, "open", "") != "ar:open" {
+		t.Fatal("untranslated native label")
+	}
+	Dispose(desktop)
+	if !messages.disposed {
+		t.Fatal("language observer retained")
+	}
+	desktop.RefreshStartup = func() error { return nil }
+	desktop.WakeReminders = func() {}
+	systemWoke(desktop, nil)
+	becameActive(desktop, nil)
+	if messages.refreshes < 2 {
+		t.Fatal("OS language was not refreshed")
 	}
 }

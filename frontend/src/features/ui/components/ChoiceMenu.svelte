@@ -1,4 +1,11 @@
 <script lang="ts" generics="Value extends string">
+  import { onDestroy } from 'svelte';
+  import { positionPopover } from '../adapters/positioning/funcs';
+  let releasePosition = () => {};
+  onDestroy(() => releasePosition());
+
+  import { useLocalization } from '../../localization';
+  const l = useLocalization();
   import { tick } from 'svelte';
   import type { ChoiceOption } from '../types';
 
@@ -36,6 +43,7 @@
   const currentLabel = $derived(options.find((option) => selected.includes(option.value))?.label);
 
   function close(restoreFocus = false) {
+    releasePosition();
     panel.hidePopover();
     if (restoreFocus) trigger.focus();
   }
@@ -48,13 +56,8 @@
     search = '';
     await tick();
     panel.showPopover();
-    const anchor = trigger.getBoundingClientRect();
-    const bounds = panel.getBoundingClientRect();
-    const padding = 8;
-    panel.style.left = `${Math.max(padding, Math.min(anchor.left, window.innerWidth - bounds.width - padding))}px`;
-    const below = anchor.bottom + 8;
-    const top = below + bounds.height <= window.innerHeight - padding ? below : anchor.top - bounds.height - 8;
-    panel.style.top = `${Math.max(padding, Math.min(top, window.innerHeight - bounds.height - padding))}px`;
+    releasePosition();
+    releasePosition = positionPopover(trigger, panel, 'start');
     if (searchable && !focusChoice) searchInput?.focus();
     else {
       const buttons = items();
@@ -97,7 +100,12 @@
   }
 
   $effect(() => {
+    const direction = $l.direction;
     if (!expanded) return;
+    if (direction) {
+      releasePosition();
+      releasePosition = positionPopover(trigger, panel, 'start');
+    }
     const dismiss = (event: Event) => {
       if (event.target instanceof Node && panel.contains(event.target)) return;
       close();
@@ -122,8 +130,8 @@
     type="button"
     class="choice-trigger"
     aria-label={multiple
-      ? `${label}${selected.length ? `, ${selected.length} selected` : ''}`
-      : `${label}: ${currentLabel ?? ''}`}
+      ? $l.t('common.selection', { label, selected: $l.t('common.selected', { count: selected.length }) })
+      : $l.t('common.choice', { label, value: currentLabel ?? '' })}
     aria-haspopup="dialog"
     aria-expanded={expanded}
     aria-controls={id}
@@ -151,7 +159,7 @@
     </svg>
     <span class="trigger-label">{label}</span>
     {#if multiple}
-      {#if selected.length}<span class="selection-count">{selected.length}</span>{/if}
+      {#if selected.length}<span class="selection-count">{$l.number(selected.length)}</span>{/if}
     {:else if currentLabel}<span class="current-choice">{currentLabel}</span>{/if}
     <svg
       class="chevron"
@@ -183,7 +191,7 @@
           class="clear-button"
           type="button"
           disabled={!selected.length}
-          onclick={() => onclear?.()}>Clear</button
+          onclick={() => onclear?.()}>{$l.t('ui.clear')}</button
         >{/if}
     </div>
     {#if searchable}<div class="choice-search">
@@ -200,8 +208,8 @@
           bind:this={searchInput}
           bind:value={search}
           type="search"
-          aria-label={`Search ${label.toLowerCase()}`}
-          placeholder={`Search ${label.toLowerCase()}…`}
+          aria-label={$l.t('common.search', { name: label })}
+          placeholder={$l.t('common.search', { name: label })}
         />
       </div>{/if}
     <div class="choices" role="menu" aria-label={label}>
@@ -241,7 +249,7 @@
       {/each}
     </div>
     {#if !visibleOptions.length}<p class="empty-choices" role="status">
-        {search ? 'No matches found.' : 'No options available.'}
+        {search ? $l.t('ui.no_matches_found') : $l.t('ui.no_options_available')}
       </p>{/if}
     {#if hint}<p class="panel-note">{hint}</p>{/if}
   </div>
@@ -300,7 +308,7 @@
     font-size: 10px;
   }
   .chevron {
-    margin-left: 3px;
+    margin-inline-start: 3px;
     transition: transform 0.15s;
   }
   [aria-expanded='true'] .chevron {
@@ -389,7 +397,7 @@
     border-radius: 5px;
     background: transparent;
     color: inherit;
-    text-align: left;
+    text-align: start;
     font-size: 11px;
   }
   .choices button:hover,

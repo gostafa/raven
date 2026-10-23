@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,11 +30,13 @@ import (
 	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopports "raven/internal/features/desktop/ports"
+	archive "raven/internal/features/folderarchive/domain"
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
 	"raven/internal/shared/boltstore/ports"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
 	desktopmedia "raven/internal/shared/desktopmedia/adapters/wails"
 	"raven/internal/shared/lifetime"
+	localization "raven/internal/shared/localization/application"
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
 
@@ -46,6 +49,60 @@ func TestExecutableModuleResolvesFeaturePorts(t *testing.T) {
 	) {
 	})); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type facadeArchives struct {
+	result  archive.Result
+	failure error
+}
+
+func (archives *facadeArchives) ExportFolders(string) (archive.Result, error) {
+	return archives.result, archives.failure
+}
+
+func (archives *facadeArchives) ImportFolders(string) (archive.Result, error) {
+	return archives.result, archives.failure
+}
+
+func TestFacadeFolderArchives(t *testing.T) {
+	missing := newService(serviceParams{}, configurationFixture())
+	if _, err := missing.ExportFolders(`{"folder_ids":["folder"]}`); err == nil {
+		t.Fatal("missing exporter")
+	}
+	if _, err := missing.ImportFolders(archive.Fresh); err == nil {
+		t.Fatal("missing importer")
+	}
+	archives := &facadeArchives{result: archive.Result{FolderCount: 1}}
+	events := &facadeEvents{}
+	reminders := &facadeReminders{}
+	service := newService(
+		serviceParams{Archives: archives, Events: events, Reminders: reminders},
+		configurationFixture(),
+	)
+	if result, err := service.ExportFolders(
+		`{"folder_ids":["folder"]}`,
+	); err != nil ||
+		!bytes.Contains([]byte(result), []byte(`"folder_count":1`)) {
+		t.Fatal(result, err)
+	}
+	if _, err := service.ImportFolders(
+		archive.Resume,
+	); err != nil || len(events.names) != 1 ||
+		reminders.wakes != 1 {
+		t.Fatal(err, events.names)
+	}
+	archives.result.Canceled = true
+	if _, err := service.ImportFolders(archive.Fresh); err != nil || len(events.names) != 1 {
+		t.Fatal("canceled import published changes", err)
+	}
+	archives.failure = errors.New("internal archive failure")
+	for _, operation := range []func() (string, error){func() (string, error) { return service.ExportFolders("{}") }, func() (string, error) { return service.ImportFolders(archive.Resume) }} {
+		_, err := operation()
+		var public *ServiceError
+		if !errors.As(err, &public) || errors.Is(err, archives.failure) {
+			t.Fatal("internal error escaped", err)
+		}
 	}
 }
 
@@ -595,5 +652,67 @@ func TestFacadeUpdatesFolderAndTranslatesErrors(t *testing.T) {
 	service = newService(serviceParams{}, configurationFixture())
 	if _, err := service.UpdateFolder(input); err == nil {
 		t.Fatal("updated folder without storage")
+	}
+}
+
+type languagePreferenceFixture struct {
+	value   string
+	failure error
+}
+
+func (fixture *languagePreferenceFixture) LoadLanguagePreference() (string, error) {
+	return fixture.value, nil
+}
+
+func (fixture *languagePreferenceFixture) SaveLanguagePreference(value string) error {
+	if fixture.failure != nil {
+		return fixture.failure
+	}
+	fixture.value = value
+	return nil
+}
+
+type systemLanguageFixture struct{}
+
+func (systemLanguageFixture) Locales() ([]string, error) { return []string{"en-US"}, nil }
+
+func TestLocalizationFacadeAndSafeErrors(t *testing.T) {
+	preferences := &languagePreferenceFixture{value: "system"}
+	var warnings []error
+	languages := localization.New(
+		preferences,
+		systemLanguageFixture{},
+		func(err error) { warnings = append(warnings, err) },
+	)
+	languages.Initialize()
+	operations := make(map[string]func(string, string) serviceResult[string])
+	bindLocalizationOperations(operations, languages)
+	service := &RavenService{operations: operations}
+	state, err := service.GetLocalization()
+	if err != nil || !strings.Contains(state, `"locale":"en"`) {
+		t.Fatal(state, err)
+	}
+	state, err = service.SetLanguagePreference("ar")
+	if err != nil || !strings.Contains(state, `"direction":"rtl"`) {
+		t.Fatal(state, err)
+	}
+	if _, err = service.SetLanguagePreference("unsupported"); err == nil {
+		t.Fatal("accepted invalid language")
+	}
+	preferences.failure = errors.New("private disk details")
+	if _, err = service.SetLanguagePreference("en"); err == nil {
+		t.Fatal("ignored persistence failure")
+	}
+	if len(warnings) != 1 || !errors.Is(warnings[0], preferences.failure) {
+		t.Fatal("missing private diagnostic", warnings)
+	}
+	for _, failure := range []error{errors.New("private"), &ServiceError{Message: "private"}, &ServiceError{Code: "language_save_failed", Message: "private"}} {
+		payload := string(marshalServiceError(failure))
+		if strings.Contains(payload, "private") || !json.Valid([]byte(payload)) {
+			t.Fatal(payload)
+		}
+	}
+	if serviceOptions().MarshalError == nil {
+		t.Fatal("missing error serializer")
 	}
 }

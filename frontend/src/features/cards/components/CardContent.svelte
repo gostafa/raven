@@ -1,10 +1,36 @@
 <script lang="ts">
+  import { useLocalization, type MessageKey } from '../../localization';
+  const l = useLocalization();
+  const kindKeys: Record<string, MessageKey> = {
+    text: 'workspace.text',
+    image: 'workspace.image',
+    audio: 'cards.audio',
+    video: 'cards.video',
+  } as const;
   import { onDestroy } from 'svelte';
   import type { Card, MediaURLPort } from '../domain/types';
   import { orderedItems } from '../domain/funcs';
   import { stopMedia } from '../../ui';
+  import AudioPlayer from './AudioPlayer.svelte';
+  import VideoPreview from './VideoPreview.svelte';
+  import ImagePreview from './ImagePreview.svelte';
+  import type { PreviewStartPort } from '../ports/types';
 
-  let { card, mediaURL, compact = false }: { card: Card; mediaURL: MediaURLPort; compact?: boolean } = $props();
+  let {
+    card,
+    mediaURL,
+    compact = false,
+    reviewing = false,
+    nativeStart,
+    onopen,
+  }: {
+    card: Card;
+    mediaURL: MediaURLPort;
+    compact?: boolean;
+    reviewing?: boolean;
+    nativeStart?: PreviewStartPort;
+    onopen?: (itemId: string, opener: HTMLElement) => void;
+  } = $props();
   let root: HTMLDivElement;
   let failed = $state<string[]>([]);
   let hovered = $state<number | null>(null);
@@ -26,10 +52,10 @@
   );
   function reviewTime(due: string): string {
     const date = new Date(due);
-    if (!Number.isFinite(date.getTime())) return 'Review time unavailable';
+    if (!Number.isFinite(date.getTime())) return $l.t('cards.review_time_unavailable');
     return date.getTime() <= Date.now()
-      ? 'Ready to review now'
-      : `Next review: ${date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+      ? $l.t('cards.ready_to_review_now')
+      : $l.t('cards.nextReview', { date: $l.date(date) });
   }
   onDestroy(() => stopMedia(root));
 </script>
@@ -46,12 +72,20 @@
     <div
       class="content-item"
       class:media-item={item.kind !== 'text'}
+      class:audio-item={item.kind === 'audio'}
+      class:video-item={item.kind === 'video'}
       class:active={compact && active === index}
       role="group"
-      aria-label={`${item.kind} content`}
+      aria-label={$l.t('cards.content', { kind: $l.t(kindKeys[item.kind]) })}
       tabindex={compact ? 0 : undefined}
       onpointerenter={(event) => {
         if (compact && event.pointerType === 'mouse') hovered = index;
+      }}
+      onmouseenter={() => {
+        if (compact) hovered = index;
+      }}
+      onmouseleave={() => {
+        hovered = null;
       }}
       onpointerleave={() => {
         hovered = null;
@@ -63,36 +97,54 @@
         if (!event.currentTarget.contains(event.relatedTarget as Node)) focused = null;
       }}
     >
-      {#if item.kind === 'text'}<p>{item.text}</p>
+      {#if item.kind === 'text'}<p dir="auto">{item.text}</p>
+      {:else if item.kind === 'image'}
+        {#key mediaURL(item)}<ImagePreview src={mediaURL(item)} filename={item.originalName} {compact} />{/key}
+      {:else if item.kind === 'video' && compact}<div class="video-slot">
+          {#key mediaURL(item)}<VideoPreview
+              src={mediaURL(item)}
+              filename={item.originalName}
+              hovered={hovered === index}
+              {nativeStart}
+            />{/key}
+        </div>
       {:else if failed.includes(item.id)}<p class="media-error" role="status">
-          “{item.originalName}” could not be loaded or played. Check that the file is available and its format is
-          supported on this device.
+          {$l.t('cards.mediaFailed', { name: item.originalName ?? '' })}
         </p>
-      {:else if item.kind === 'image'}<img
+      {:else if item.kind === 'audio'}<AudioPlayer
+          filename={item.originalName}
+          {compact}
+          autoplay={reviewing}
+          hideFilename={reviewing}
+          hovered={compact && hovered === index}
+          {nativeStart}
           src={mediaURL(item)}
-          alt={item.originalName || 'Card image'}
           onerror={() => (failed = [...failed, item.id])}
         />
-      {:else if item.kind === 'audio'}<audio
-          controls
-          preload="none"
-          aria-label={item.originalName}
-          src={mediaURL(item)}
-          onerror={() => (failed = [...failed, item.id])}
-        ></audio>{#if !compact}<span class="media-name">{item.originalName}</span>{/if}
       {:else if item.kind === 'video'}
-        <!-- svelte-ignore a11y_media_has_caption (Imported videos do not currently include separate caption files.) -->
         <video
+          dir="ltr"
           controls
+          autoplay={reviewing}
+          muted={reviewing}
           playsinline
-          preload={compact ? 'metadata' : 'none'}
+          preload={reviewing ? 'auto' : 'none'}
           aria-label={item.originalName}
           src={mediaURL(item)}
           onerror={() => (failed = [...failed, item.id])}
-        ></video>{#if !compact}<span class="media-name">{item.originalName}</span>{/if}
+        ></video>{#if !reviewing}<span class="media-name">{item.originalName}</span>{/if}
       {/if}
-      {#if compact}<span class="review-time">{item.hint ? 'Hint for other items' : reviewTime(item.schedule.Due)}</span
+      {#if compact}<span class="review-time"
+          >{item.hint ? $l.t('cards.hint_for_other_items') : reviewTime(item.schedule.Due)}</span
         >{/if}
+      {#if onopen}
+        <button
+          class="open-part"
+          type="button"
+          aria-label={$l.t('cards.openPart', { kind: $l.t(kindKeys[item.kind]), count: index + 1 })}
+          onclick={(event) => onopen?.(item.id, event.currentTarget)}
+        ></button>
+      {/if}
     </div>
   {/each}
 </div>
@@ -103,7 +155,26 @@
     gap: 18px;
   }
   .content-item {
+    position: relative;
     min-width: 0;
+  }
+  .open-part {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .open-part:focus-visible {
+    outline: 2px solid var(--muted);
+    outline-offset: -2px;
+  }
+  .audio-item :global(.play),
+  .audio-item :global(input) {
+    position: relative;
+    z-index: 1;
   }
   .media-item {
     padding: 0;
@@ -117,7 +188,6 @@
     line-height: 1.8;
     color: var(--ink);
   }
-  img,
   video {
     display: block;
     width: 100%;
@@ -125,10 +195,6 @@
     object-fit: contain;
     border-radius: 5px;
     background: #000;
-  }
-  audio {
-    width: 100%;
-    display: block;
   }
   .compact {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -166,18 +232,18 @@
     font-size: 14px;
     line-height: 1.6;
   }
-  .compact img,
   .compact video {
     height: 100%;
     border-radius: 5px;
     object-fit: cover;
   }
-  .compact audio {
+  .video-slot {
     height: 100%;
-    min-height: 32px;
+    min-height: 0;
   }
   .compact .content-item:focus-visible {
-    outline: none;
+    outline: 2px solid #a3a3a3;
+    outline-offset: -2px;
   }
   .review-time {
     position: absolute;
@@ -197,9 +263,11 @@
   .compact .active:not(.media-item) {
     padding-bottom: 44px;
   }
-  .compact .active audio,
-  .compact .active video {
-    height: calc(100% - 44px);
+  .compact .active.video-item {
+    padding-bottom: 44px;
+  }
+  .compact .audio-item {
+    padding-bottom: 44px;
   }
   @media (prefers-reduced-motion: reduce) {
     .compact {

@@ -41,6 +41,7 @@ func TestModuleSharesRegistryAndWiresSavedMedia(t *testing.T) {
 		storecomposition.Module,
 		batchcomposition.Module,
 		schedulingcomposition.Module,
+		fx.Supply(fx.Annotate(messageFixture{}, fx.As(new(mediaports.Messages)))),
 		fx.Supply(
 			fx.Annotate(settings, fx.As(new(configuration.Settings))),
 			slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -81,3 +82,7 @@ func TestModuleSharesRegistryAndWiresSavedMedia(t *testing.T) {
 		t.Fatalf("saved media status = %d", response.Code)
 	}
 }
+
+type messageFixture struct{}
+
+func (messageFixture) Text(key string, count int) string { return key }

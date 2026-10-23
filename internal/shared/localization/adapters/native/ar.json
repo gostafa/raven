@@ -1,0 +1,23 @@
+{
+  "open": { "other": "فتح Raven" },
+  "reset": { "other": "إعادة تعيين موضع الأداة" },
+  "startup": { "other": "التشغيل عند تسجيل الدخول" },
+  "quit": { "other": "إنهاء Raven" },
+  "startupError": { "other": "تعذّر على Raven تحديث التشغيل عند تسجيل الدخول. يمكنك المحاولة مجددًا من قائمة Raven." },
+  "widgetTitle": { "other": "أداة Raven" },
+  "reviewTitle": { "other": "مراجعة Raven" },
+  "reminderTitle": { "other": "حان وقت المراجعة" },
+  "reminderBody": {
+    "zero": "لا توجد عناصر جاهزة للمراجعة في Raven.",
+    "one": "عنصر واحد جاهز للمراجعة في Raven.",
+    "two": "عنصران جاهزان للمراجعة في Raven.",
+    "few": "{{.Count}} عناصر جاهزة للمراجعة في Raven.",
+    "many": "{{.Count}} عنصرًا جاهزًا للمراجعة في Raven.",
+    "other": "{{.Count}} عنصر جاهز للمراجعة في Raven."
+  },
+  "archive": { "other": "أرشيف مجلدات Raven" },
+  "imageFiles": { "other": "ملفات الصور" },
+  "audioFiles": { "other": "الملفات الصوتية" },
+  "videoFiles": { "other": "ملفات الفيديو" },
+  "actionFailed": { "other": "تعذّر على Raven إكمال هذا الإجراء. يُرجى المحاولة مجددًا." }
+}

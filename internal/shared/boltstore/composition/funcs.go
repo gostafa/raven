@@ -22,6 +22,7 @@ func newStore(params storeParams, settings configuration.Settings) storeResult {
 
 	return storeResult{
 		Out:        fx.Out{},
+		Languages:  store,
 		Store:      store,
 		Repository: store,
 		Reminders:  store,

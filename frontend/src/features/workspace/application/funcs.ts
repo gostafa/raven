@@ -1,8 +1,22 @@
 import type { Card, ItemDraft } from '../../cards';
 import { hasContent } from '../../cards/domain';
-import type { Workspace } from '../../folders';
+import type { PreferencesStorage, Workspace } from '../../folders';
 import { reconcileFolders } from '../../folders';
-import type { AppPorts } from '../domain/types';
+import type { AppPorts, ViewPreferences } from '../domain/types';
+import { defaultViewPreferences, parseViewPreferences } from '../domain/funcs';
+
+export function loadViewPreferences(storage: Pick<PreferencesStorage, 'getItem'>, key: string): ViewPreferences {
+  const saved = storage.getItem(`${key}.view`);
+  return saved === null ? defaultViewPreferences() : parseViewPreferences(JSON.parse(saved));
+}
+
+export function saveViewPreferences(
+  storage: Pick<PreferencesStorage, 'setItem'>,
+  key: string,
+  preferences: ViewPreferences,
+): void {
+  storage.setItem(`${key}.view`, JSON.stringify(preferences));
+}
 export async function loadWorkspace(ports: AppPorts, workspace: Workspace) {
   const [folders, cards] = await Promise.all([ports.ListFolders(), ports.ListCards()]);
   return { workspace: reconcileFolders(workspace, folders), cards, now: ports.now() };

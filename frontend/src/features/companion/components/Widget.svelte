@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { useLocalization, type MessageKey } from '../../localization';
+  const l = useLocalization();
   import { onMount } from 'svelte';
   import { reviewItems } from '../../reviews';
   import type { Card } from '../../cards';
@@ -7,7 +9,7 @@
   let cards = $state<Card[]>([]);
   let now = $state(0);
   const dueCount = $derived(reviewItems(cards).filter((entry) => entry.dueAt <= now).length);
-  let error = $state('');
+  let error = $state<MessageKey | ''>('');
   let widgetPointerStart: { x: number; y: number } | undefined;
   async function refresh() {
     try {
@@ -28,7 +30,7 @@
       error = '';
       await backend.ToggleFloatingReview();
     } catch {
-      error = 'Raven could not complete that action. Please try again.';
+      error = 'companion.raven_could_not_complete_that_action_please_try_again';
     }
   }
   function focus() {
@@ -55,18 +57,21 @@
   <button
     class="widget-logo"
     aria-label={dueCount
-      ? `${dueCount} ${dueCount === 1 ? 'item' : 'items'} ready to review. Toggle floating review`
-      : 'Toggle floating review'}
-    title={`${dueCount ? `${dueCount} ${dueCount === 1 ? 'item' : 'items'} ready to review · ` : ''}Drag to move · click to toggle floating review · right-click for more`}
+      ? $l.t('widget.reviewLabel', { items: $l.t('common.items', { count: dueCount }) })
+      : $l.t('companion.toggle_floating_review')}
+    title={$l.t('widget.reviewTitle', {
+      items: $l.t('common.items', { count: dueCount }),
+      instructions: $l.t('widget.instructions'),
+    })}
     onpointerdown={(event) => {
       if (event.button === 0) widgetPointerStart = { x: event.screenX, y: event.screenY };
     }}
     onclick={openFromWidget}
     ><img src="/raven.svg" alt="" draggable="false" />{#if dueCount}<span class="widget-due" aria-hidden="true"
-        >{dueCount > 9 ? '9+' : dueCount}</span
+        >{dueCount > 9 ? `${$l.number(9)}+` : $l.number(dueCount)}</span
       >{/if}</button
   >
-  {#if error}<span class="sr-only" role="alert">{error}</span>{/if}
+  {#if error}<span class="sr-only" role="alert">{error ? $l.t(error) : ''}</span>{/if}
 </div>
 
 <style>
@@ -109,7 +114,7 @@
   .widget-due {
     position: absolute;
     top: 10%;
-    right: 10%;
+    inset-inline-end: 10%;
     display: grid;
     place-items: center;
     width: 23px;
@@ -117,7 +122,7 @@
     padding: 0;
     border: 2px solid white;
     border-radius: 50%;
-    background: #dc2626;
+    background: #000;
     color: #fff;
     font-size: 11px;
     line-height: 1;

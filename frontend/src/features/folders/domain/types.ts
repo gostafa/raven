@@ -4,6 +4,9 @@ export interface Folder {
   description: string;
   tags: string[];
 }
+export interface FolderPaper {
+  kind: 'image' | 'video';
+}
 export interface Preferences {
   selectedFolderId: string | null;
   sidebarOpen: boolean;

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { compile } from 'svelte/compiler';
 import {
   cardPreview,
+  cardProgress,
   editItems,
   hasContent,
   matchesCard,
@@ -16,7 +17,7 @@ import {
 } from '../src/features/cards/index.ts';
 
 import { stopMedia } from '../src/features/ui/index.ts';
-import { reviewItems, lastUserReview } from '../src/features/reviews/index.ts';
+import { reviewItems, shuffledReviewItems, lastUserReview } from '../src/features/reviews/index.ts';
 import { mergeCardSnapshot } from '../src/features/cards/index.ts';
 
 const card = {
@@ -33,6 +34,35 @@ const card = {
     { id: 'a1', folderId: 'folder', cardId: 'card', position: 3, kind: 'audio', originalName: 'Pronunciation.wav' },
   ],
 };
+
+test('card progress measures manual recall and excludes hints and automatic reviews', () => {
+  const review = (Rating, automatic = false) => ({ automatic, log: { Rating } });
+  assert.equal(cardProgress({ ...card, items: [] }), 0);
+  const items = [
+    { reviews: [review(1), review(2), review(3), review(4), review(1, true)] },
+    { hint: true, reviews: [review(1)] },
+  ];
+  assert.equal(cardProgress({ ...card, items }), 75);
+  assert.equal(cardProgress({ ...card, items: [{ reviews: [review(1)] }] }), 0);
+  assert.equal(cardProgress({ ...card, items: [{ reviews: [review(4)] }] }), 100);
+  assert.equal(cardProgress({ ...card, items: [{ reviews: [review(1, true)] }] }), 0);
+});
+
+test('card progress weights items equally and includes unreviewed items', () => {
+  const review = (Rating) => ({ automatic: false, log: { Rating } });
+  const successful = { reviews: Array.from({ length: 20 }, () => review(3)) };
+  const failed = { reviews: [review(1)] };
+  assert.equal(cardProgress({ ...card, items: [successful, failed] }), 50);
+  assert.equal(cardProgress({ ...card, items: [successful, { reviews: [] }] }), 50);
+  assert.equal(cardProgress({ ...card, items: [successful, { reviews: [] }, { reviews: [] }, { reviews: [] }] }), 25);
+  assert.equal(cardProgress({ ...card, items: [{ ...successful, hint: true }] }), 0);
+});
+
+test('card progress ignores invalid ratings and rounds only after averaging', () => {
+  const reviews = (ratings) => ratings.map((Rating) => ({ automatic: false, log: { Rating } }));
+  assert.equal(cardProgress({ ...card, items: [{ reviews: reviews([0, 5, 1.5, NaN, Infinity, 3]) }] }), 100);
+  assert.equal(cardProgress({ ...card, items: [{ reviews: reviews([1, 1, 3]) }, { reviews: reviews([1, 3]) }] }), 42);
+});
 
 test('a refresh preceding the save response never duplicates a saved card', () => {
   const sibling = { ...card, folderId: 'another-folder' };
@@ -148,7 +178,7 @@ test('the editor has one information fieldset and both review views share one it
   }
   visit(ast.fragment);
   assert.equal(fieldsets.length, 1);
-  assert.match(editor, /<legend>What you want to remember<\/legend>/);
+  assert.match(editor, /<legend>\{\$l.t\('cards.what_you_want_to_remember'\)\}<\/legend>/);
   assert.doesNotMatch(editor, /Question or prompt|Front of card|Back of card/);
   assert.equal((review.match(/<CardContent\b/g) ?? []).length, 2);
   assert.match(source, /<ReviewSession\b/);
@@ -195,6 +225,27 @@ test('hint roles survive editing and saving and are excluded from review queues'
     ['t1'],
   );
   assert.equal(reviewItems([{ ...mixed, items: mixed.items.map((item) => ({ ...item, hint: true })) }]).length, 0);
+});
+
+test('full review shuffles individual parts across cards and excludes hints without changing stored order', () => {
+  const makeCard = (id) => ({
+    ...card,
+    id,
+    items: ['a', 'b', 'hint'].map((part) => ({
+      id: part,
+      hint: part === 'hint',
+      schedule: { Due: new Date(1000).toISOString() },
+    })),
+  });
+  const cards = [makeCard('first'), makeCard('second')];
+  const original = structuredClone(cards);
+  const entries = shuffledReviewItems(cards, () => 0);
+  assert.deepEqual(
+    entries.map(({ card, item }) => `${card.id}/${item.id}`),
+    ['first/b', 'second/a', 'second/b', 'first/a'],
+  );
+  assert.deepEqual(cards, original);
+  assert.deepEqual(shuffledReviewItems([]), []);
 });
 
 test('automatic Again initialization does not count as a user review', () => {

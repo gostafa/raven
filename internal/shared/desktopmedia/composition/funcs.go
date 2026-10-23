@@ -26,5 +26,13 @@ func newRegistry(params registryParams, settings configuration.Settings) *deskto
 }
 
 func newSelection(params mediaParams) *desktopmedia.Picker {
-	return desktopmedia.NewPicker(params.App, params.Handles.Main, params.Registry)
+	return desktopmedia.NewLocalizedPicker(
+		params.App,
+		params.Handles.Main,
+		desktopmedia.NewPickerOptions(params.Registry, params.Messages),
+	)
+}
+
+func newArchiveDialogs(params mediaParams) *desktopmedia.ArchiveDialogs {
+	return desktopmedia.NewArchiveDialogs(params.App, params.Handles.Main, params.Messages)
 }

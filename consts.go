@@ -4,6 +4,8 @@
 package main
 
 const (
+	actionFailedCode           = "action_failed"
+	folderArchivesUnavailable  = "Folder archives are unavailable."
 	startupDetailsKey          = "details"
 	startupFailureExitCode     = 1
 	cardStorageIsUnavailable   = "card storage is unavailable"

@@ -30,14 +30,21 @@ func NewPicker(
 	window *application.WebviewWindow,
 	registry *Registry,
 ) *Picker {
-	return &Picker{
-		choose: nativeChooser(
-			app,
-			window,
-			(*application.OpenFileDialogStruct).PromptForMultipleSelection,
-		),
-		inspect: registry.inspect,
+	return NewLocalizedPicker(app, window, NewPickerOptions(registry, nil))
+}
+
+// NewLocalizedPicker attaches native selection and localized file filters to the registry.
+func NewLocalizedPicker(
+	app *application.App,
+	window *application.WebviewWindow,
+	options *ports.PickerOptions,
+) *Picker {
+	prompt := &chooserOptions{
+		prompt:   (*application.OpenFileDialogStruct).PromptForMultipleSelection,
+		messages: []ports.Messages{options.Messages},
 	}
+
+	return &Picker{choose: localizedChooser(app, window, prompt), inspect: options.Inspect}
 }
 
 // NewRegistry binds media routes, inspection, and preview storage to injected dependencies.
@@ -95,21 +102,26 @@ func nativeChooser(
 	window *application.WebviewWindow,
 	prompt func(*application.OpenFileDialogStruct) ([]string, error),
 ) func(string, string) ([]string, error) {
+	return localizedChooser(app, window, &chooserOptions{prompt: prompt, messages: nil})
+}
+
+func localizedChooser(
+	app *application.App,
+	window *application.WebviewWindow,
+	options *chooserOptions,
+) func(string, string) ([]string, error) {
 	return func(kind, filter string) ([]string, error) {
 		if app == nil || window == nil {
 			return nil, errFileSelectionIsUnavailable
 		}
 
-		dialog := app.Dialog.OpenFile().AttachToWindow(window).CanChooseFiles(true).
-			CanChooseDirectories(false).
-			AllowsOtherFileTypes(false).AddFilter(kind+" files", filter)
+		dialog := mediaDialog(
+			app,
+			window,
+			[]string{mediaText(options.messages, kind+"Files", kind+" files"), filter},
+		)
 
-		paths, err := prompt(dialog)
-		if err != nil {
-			return nil, fmt.Errorf("select native media files: %w", err)
-		}
-
-		return paths, nil
+		return promptMedia(options.prompt, dialog)
 	}
 }
 
@@ -353,4 +365,104 @@ func marshalSelection(value any) ([]byte, error) {
 	}
 
 	return encoded, nil
+}
+
+// NewArchiveDialogs constructs native dialogs without opening a window.
+func NewArchiveDialogs(
+	app *application.App,
+	window *application.WebviewWindow,
+	messages ...ports.Messages,
+) *ArchiveDialogs {
+	state := &archiveDialogState{
+		app:      app,
+		window:   window,
+		messages: nil,
+		save:     (*application.SaveFileDialogStruct).PromptForSingleSelection,
+		open:     (*application.OpenFileDialogStruct).PromptForSingleSelection,
+	}
+	if len(messages) > zero {
+		state.messages = messages[zero]
+	}
+
+	return &ArchiveDialogs{state: state}
+}
+
+// SaveArchive selects an export destination.
+func (dialogs *ArchiveDialogs) SaveArchive() (string, error) {
+	name, err := saveArchive(dialogs.state)
+
+	return name, errors.Join(err)
+}
+
+// OpenArchive selects an archive for import.
+func (dialogs *ArchiveDialogs) OpenArchive() (string, error) {
+	name, err := openArchive(dialogs.state)
+
+	return name, errors.Join(err)
+}
+
+func saveArchive(dialogs *archiveDialogState) (string, error) {
+	dialog := dialogs.app.Dialog.SaveFile().
+		AttachToWindow(dialogs.window).
+		SetFilename("folders"+archiveSuffix).
+		AddFilter(mediaText([]ports.Messages{dialogs.messages}, archiveMessage, archiveLabel), archiveFilter).
+		AllowsOtherFileTypes(false).
+		CanCreateDirectories(true)
+	filename, err := dialogs.save(dialog)
+
+	if filename != "" && !strings.HasSuffix(strings.ToLower(filename), ".zip") {
+		filename += archiveSuffix
+	}
+
+	return filename, errors.Join(err)
+}
+
+func openArchive(dialogs *archiveDialogState) (string, error) {
+	dialog := dialogs.app.Dialog.OpenFile().
+		AttachToWindow(dialogs.window).
+		CanChooseFiles(true).
+		CanChooseDirectories(false).
+		AllowsOtherFileTypes(false).
+		AddFilter(mediaText([]ports.Messages{dialogs.messages}, archiveMessage, archiveLabel), archiveFilter)
+	filename, err := dialogs.open(dialog)
+
+	return filename, errors.Join(err)
+}
+
+func mediaText(messages []ports.Messages, key, fallback string) string {
+	if len(messages) > zero && messages[zero] != nil {
+		return messages[zero].Text(key, zero)
+	}
+
+	return fallback
+}
+
+// NewPickerOptions combines saved-media previews and native messages.
+func NewPickerOptions(registry *Registry, messages ports.Messages) *ports.PickerOptions {
+	return &ports.PickerOptions{Inspect: registry.inspect, Messages: messages}
+}
+
+func mediaDialog(
+	app *application.App,
+	window *application.WebviewWindow,
+	filter []string,
+) *application.OpenFileDialogStruct {
+	return app.Dialog.OpenFile().
+		AttachToWindow(window).
+		CanChooseFiles(true).
+		CanChooseDirectories(false).
+		AllowsOtherFileTypes(false).
+		AddFilter(filter[zero], filter[one])
+}
+
+func promptMedia(
+	prompt func(*application.OpenFileDialogStruct) ([]string, error),
+	dialog *application.OpenFileDialogStruct,
+) ([]string, error) {
+	paths, err := prompt(dialog)
+	if err != nil {
+		return paths, fmt.Errorf("select native media files: %w", err)
+	}
+
+	return paths, nil
 }

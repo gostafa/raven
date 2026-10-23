@@ -76,13 +76,13 @@ func newNotificationRuntime(
 	params notificationParams,
 	settings configuration.Settings,
 ) *reminderwails.Runtime {
-	return reminderwails.NewRuntime(
+	return reminderwails.NewLocalizedRuntime(
 		params.Native,
 		params.Sound,
-		func(ctx context.Context, err error) {
+		reminderwails.NewRuntimeOptions(func(ctx context.Context, err error) {
 			params.Logger.WarnContext(ctx, "desktop notifications unavailable",
 				//nolint:sloglint // Log field names come from validated embedded configuration.
 				slog.Any(settings.LogErrorKey(), err))
-		},
+		}, params.Messages),
 	)
 }
