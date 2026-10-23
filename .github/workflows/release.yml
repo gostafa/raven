@@ -159,6 +159,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Remove all release run artifacts
-        uses: ./.github/actions/cleanup-artifacts
+        uses: $/.github/actions/cleanup-artifacts
         with:
           run-id: ${{ github.run_id }}

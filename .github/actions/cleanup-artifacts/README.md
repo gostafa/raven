@@ -16,7 +16,7 @@ permissions:
   actions: write
 steps:
   - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-  - uses: ./.github/actions/cleanup-artifacts
+  - uses: $/.github/actions/cleanup-artifacts
     with:
       run-id: ${{ github.run_id }}
 ```
