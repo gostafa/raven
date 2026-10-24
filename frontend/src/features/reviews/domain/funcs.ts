@@ -5,8 +5,11 @@ export function shuffledReviewItems(cards: Card[], random: () => number = Math.r
   const entries = reviewItems(cards);
   for (let remaining = entries.length; remaining > 1; remaining--) {
     const index = Math.floor(random() * remaining);
-    // eslint-disable-next-line security/detect-object-injection -- Both indices select positions within this local review array.
-    [entries[remaining - 1], entries[index]] = [entries[index], entries[remaining - 1]];
+    const other = entries.at(index);
+    const last = entries.at(remaining - 1);
+    if (!other || !last) throw new Error('Invalid review shuffle index');
+    entries.splice(index, 1, last);
+    entries.splice(remaining - 1, 1, other);
   }
   return entries;
 }

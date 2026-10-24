@@ -21,11 +21,11 @@ const child = spawn(existsSync(local) ? local : binary, process.argv.slice(2), {
   },
 });
 child.on('error', (error) => {
-  console.error(
+  const message =
     error.code === 'ENOENT'
       ? 'Install Wails first: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.29'
-      : error.message,
-  );
+      : error.message;
+  process.stderr.write(`${message}\n`);
   process.exitCode = 1;
 });
 child.on('exit', (code, signal) => {

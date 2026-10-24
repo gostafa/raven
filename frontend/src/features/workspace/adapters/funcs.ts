@@ -28,15 +28,17 @@ async function call<T>(action: () => Promise<T>): Promise<T> {
   } catch (error) {
     const cause: unknown = error instanceof Error ? error.cause : null;
     const code = transportErrorCode(cause);
-    // eslint-disable-next-line preserve-caught-error -- Keep transport details outside the frontend-owned error contract.
+    // eslint-disable-next-line preserve-caught-error -- Keep transport details outside the public error contract.
     throw new Error(code);
   }
 }
 function transportErrorCode(cause: unknown): string {
-  return cause !== null && typeof cause === 'object' && 'code' in cause ? String(cause.code) : 'action_failed';
+  if (cause !== null && typeof cause === 'object' && 'code' in cause) return String(cause.code);
+  return 'action_failed';
 }
 
 class Runtime implements AppPorts {
+  public readonly configuration: RuntimeConfiguration;
   public readonly mediaURL;
   public readonly previewStart;
   public readonly events;
@@ -46,7 +48,8 @@ class Runtime implements AppPorts {
       window.localStorage.setItem(key, value);
     },
   };
-  public constructor(public readonly configuration: RuntimeConfiguration) {
+  public constructor(configuration: RuntimeConfiguration) {
+    this.configuration = configuration;
     this.mediaURL = createMediaURL(configuration.mediaRoutePrefix);
     this.previewStart = createNativePreviewStarter({
       once: (name, callback) => Events.Once(name, callback),

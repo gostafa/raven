@@ -17,11 +17,10 @@ export function selectFolderPapers(cards: readonly Card[], folderId: string): Fo
         left.item.id.localeCompare(right.item.id),
     )
     .slice(0, 5)
-    .map(({ card, item }) => ({
-      key: JSON.stringify([card.id, item.id]),
-      kind: item.kind === 'video' ? 'video' : 'image',
-      item,
-    }));
+    .map(folderPaper);
+}
+function folderPaper({ card, item }: { card: Card; item: Card['items'][number] }): FolderPaper {
+  return { key: JSON.stringify([card.id, item.id]), kind: item.kind === 'video' ? 'video' : 'image', item };
 }
 
 function reviewTime(due: string): number {

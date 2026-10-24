@@ -1,4 +1,4 @@
-import type { Folder, FolderSelection, Preferences, PreferencesStorage, Workspace } from './types';
+import type { Folder, FolderSelection, FolderMetrics, Preferences, PreferencesStorage, Workspace } from './types';
 
 export function emptyWorkspace(): Workspace {
   return { folders: [], selectedFolderId: null, sidebarOpen: true };
@@ -26,18 +26,17 @@ export function loadPreferences(
 
   const value: unknown = JSON.parse(saved);
   const data = preferencesRecord(value);
+  return parsePreferences(data);
+}
+function parsePreferences(data: Record<string, unknown>): Preferences {
   if (
     typeof data.sidebarOpen !== 'boolean' ||
     (data.selectedFolderId !== null && typeof data.selectedFolderId !== 'string')
-  ) {
+  )
     throw new Error('Invalid saved preferences');
-  }
-
-  return {
-    selectedFolderId: data.selectedFolderId,
-    sidebarOpen: data.sidebarOpen,
-  };
+  return { selectedFolderId: data.selectedFolderId, sidebarOpen: data.sidebarOpen };
 }
+
 function preferencesRecord(value: unknown): Record<string, unknown> {
   if (isRecord(value)) return value;
   throw new Error('Invalid saved preferences');
@@ -75,14 +74,28 @@ export function selectFolders(folders: Folder[], selection: FolderSelection): Fo
 }
 function compareFolders(left: Folder, right: Folder, selection: FolderSelection): number {
   const compare = selection.compare ?? ((a: string, b: string) => a.localeCompare(b));
-  const difference = folderDifference(left, right, selection);
-  const leftReview = selection.metrics.get(left.id)?.nextReview ?? null;
-  const rightReview = selection.metrics.get(right.id)?.nextReview ?? null;
-  if (selection.sort.startsWith('review-') && (leftReview === null || rightReview === null))
-    return missingReviewDifference(leftReview, rightReview) || compare(left.title, right.title);
-  return (selection.sort.endsWith('-desc') ? -difference : difference) || compare(left.title, right.title);
+  return sortedFolderDifference(left, right, selection) || compare(left.title, right.title);
 }
-function missingReviewDifference(left: number | null, right: number | null): number {
+function directedDifference(difference: number, sort: string): number {
+  return sort.endsWith('-desc') ? -difference : difference;
+}
+function sortedFolderDifference(left: Folder, right: Folder, selection: FolderSelection): number {
+  const leftMetric = selection.metrics.get(left.id);
+  const rightMetric = selection.metrics.get(right.id);
+  const reviews = reviewOrdering(leftMetric, rightMetric);
+  if (selection.sort.startsWith('review-') && reviews !== null) return reviews;
+  return directedDifference(folderDifference(left, right, selection), selection.sort);
+}
+function reviewTime(metric: FolderMetrics | undefined): number | null {
+  return metric?.nextReview ?? null;
+}
+function cardCount(metric: FolderMetrics | undefined): number {
+  return metric?.cardCount ?? 0;
+}
+function reviewOrdering(leftMetric: FolderMetrics | undefined, rightMetric: FolderMetrics | undefined): number | null {
+  const left = reviewTime(leftMetric);
+  const right = reviewTime(rightMetric);
+  if (left !== null && right !== null) return null;
   if (left === right) return 0;
   return left === null ? 1 : -1;
 }
@@ -90,6 +103,6 @@ function folderDifference(left: Folder, right: Folder, selection: FolderSelectio
   if (selection.sort.startsWith('tags-')) return left.tags.length - right.tags.length;
   const leftMetric = selection.metrics.get(left.id);
   const rightMetric = selection.metrics.get(right.id);
-  if (selection.sort.startsWith('cards-')) return (leftMetric?.cardCount ?? 0) - (rightMetric?.cardCount ?? 0);
-  return (leftMetric?.nextReview ?? 0) - (rightMetric?.nextReview ?? 0);
+  if (selection.sort.startsWith('cards-')) return cardCount(leftMetric) - cardCount(rightMetric);
+  return (reviewTime(leftMetric) ?? 0) - (reviewTime(rightMetric) ?? 0);
 }

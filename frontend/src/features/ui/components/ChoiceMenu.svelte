@@ -60,11 +60,14 @@
     const checked = buttons.find((button) => button.getAttribute('aria-checked') === 'true');
     (last ? buttons.at(-1) : (checked ?? buttons[0]))?.focus();
   }
+  function focusSearch() {
+    searchInput?.focus();
+  }
   async function open(last = false, focusChoice = false) {
     search = '';
     await tick();
     panel.showPopover();
-    if (searchable && !focusChoice) searchInput?.focus();
+    if (searchable && !focusChoice) focusSearch();
     else focusOption(last);
   }
 

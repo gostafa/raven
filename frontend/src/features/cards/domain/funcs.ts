@@ -6,7 +6,7 @@ function selectionEntry(card: Card): CardSelectionEntry {
   return { card, nextReview: dates.length ? Math.min(...dates) : null, progress: cardProgress(card) };
 }
 function selectedEntry(entry: CardSelectionEntry, selection: CardSelection): boolean {
-  const { minimum = 0, maximum = 100 } = selection.progressRange ?? {};
+  const { minimum, maximum } = selection.progressRange ?? { minimum: 0, maximum: 100 };
   const kindsMatch =
     !selection.kinds.length || entry.card.items.some((item) => selection.kinds.some((kind) => kind === item.kind));
   return kindsMatch && entry.progress >= minimum && entry.progress <= maximum;
@@ -27,18 +27,32 @@ function selectionTie(left: Card, right: Card): number {
     right.createdAt - left.createdAt || left.folderId.localeCompare(right.folderId) || left.id.localeCompare(right.id)
   );
 }
+function missingSchedule(
+  left: CardSelectionEntry,
+  right: CardSelectionEntry,
+  sort: CardSelection['sort'],
+): number | null {
+  if (!sort.startsWith('review-')) return null;
+  if (left.nextReview !== null && right.nextReview !== null) return null;
+  return reviewDifference(left, right);
+}
+function directedDifference(difference: number, sort: CardSelection['sort']): number {
+  return sort.endsWith('-desc') ? -difference : difference;
+}
+function compareEntries(left: CardSelectionEntry, right: CardSelectionEntry, sort: CardSelection['sort']): number {
+  const missing = missingSchedule(left, right, sort);
+  if (missing !== null) return missing || selectionTie(left.card, right.card);
+  return directedDifference(selectionDifference(left, right, sort), sort) || selectionTie(left.card, right.card);
+}
 export function selectCards(cards: readonly Card[], selection: CardSelection): Card[] {
   return cards
     .map(selectionEntry)
     .filter((entry) => selectedEntry(entry, selection))
-    .sort((left, right) => {
-      const difference = selectionDifference(left, right, selection.sort);
-      return (selection.sort.endsWith('-desc') ? -difference : difference) || selectionTie(left.card, right.card);
-    })
+    .sort((left, right) => compareEntries(left, right, selection.sort))
     .map(({ card }) => card);
 }
 
-export function textDraft(text = '', key: string): EditorItem {
+export function textDraft(text: string, key: string): EditorItem {
   return { key, kind: 'text', text };
 }
 
@@ -64,9 +78,12 @@ export function hasContent(items: ItemDraft[]): boolean {
   return items.some(itemHasContent);
 }
 
+function hasValue(value: string | undefined): boolean {
+  return value !== undefined && value.length > 0;
+}
 function itemHasContent(item: ItemDraft): boolean {
-  if (item.kind === 'text') return (item.text?.trim().length ?? 0) > 0;
-  return (item.id?.length ?? 0) > 0 || (item.sourcePath?.length ?? 0) > 0;
+  if (item.kind === 'text') return hasValue(item.text?.trim());
+  return hasValue(item.id) || hasValue(item.sourcePath);
 }
 
 export function moveItem(items: EditorItem[], key: string, direction: -1 | 1): EditorItem[] {

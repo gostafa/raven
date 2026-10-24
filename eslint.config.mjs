@@ -95,6 +95,10 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
+    files: ['taskfiles/**/*.test.mjs', '.github/**/*.test.mjs'],
+    languageOptions: { globals: { Bun: 'readonly' } },
+  },
+  {
     files: ['frontend/*.ts'],
     extends: [...tseslint.configs.strict, ...tseslint.configs.stylistic],
   },

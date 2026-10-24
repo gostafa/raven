@@ -147,6 +147,36 @@ bun run --cwd frontend test
 bun run --cwd frontend build
 ```
 
+### Frontend Lint Policy
+
+`bun run lint` checks all hand-written JavaScript, TypeScript, and Svelte files,
+including tooling, configuration, release helpers, and tests, with zero warnings.
+Generated bindings, build output, dependencies, and `taskotter/` are excluded.
+
+The production ESLint limits follow the comparable rules in `.golangci.yml`:
+
+| Go policy | Frontend enforcement |
+| --- | --- |
+| `cyclop` / `gocyclo`: complexity 5 | `complexity`: 5 |
+| `revive` argument limit: 3 | `max-params`: 3 |
+| `funlen`: 20 lines, 10 statements | `max-lines-per-function`: 20, `max-statements`: 10 |
+| `nestif`: early nesting checks | `max-depth`: 2 (an approximation) |
+| `lll`: 120 columns | `max-len`: 120 in JS/TS source; Prettier formats components |
+| `errcheck`, `errorlint`, exhaustive switches | Strict typed promise, error, assertion, and exhaustiveness rules |
+| `gosec`, `forbidigo`, `unused` | Security rules, no console/debugger/dynamic evaluation, strict unused checks |
+
+Strict and stylistic type-aware TypeScript rules apply to application TS/JS and
+Svelte scripts. Browser and Node globals are scoped separately. Svelte-aware
+rules preserve reactive props and template narrowing; `$bindable()` declarations
+are exempt from the TypeScript redundant-default rule because they establish a
+binding contract. Inline exceptions must remain narrowly justified, and unused
+exceptions are errors. Tests retain correctness and security checks but omit
+production function-size limits, matching Go's test exclusions.
+
+Go-specific metrics such as package distance, type reusability, coverage, and
+reachable vulnerability analysis have no direct ESLint equivalents. ESLint does
+not replace those Go checks or the separate frontend tests, typecheck, and build.
+
 ## Your Data
 
 Raven stores its database and managed media in the user configuration directory:

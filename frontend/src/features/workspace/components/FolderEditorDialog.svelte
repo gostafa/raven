@@ -33,9 +33,9 @@
   }
 
   function fillFolder(folder: Folder | null) {
-    title = folder?.title ?? '';
-    description = folder?.description ?? '';
-    tags = folder?.tags.join(', ') ?? '';
+    title = folder ? folder.title : '';
+    description = folder ? folder.description : '';
+    tags = folder ? folder.tags.join(', ') : '';
   }
   function validateFolder(): boolean {
     if (title.trim()) return true;
@@ -49,12 +49,15 @@
       ? await backend.UpdateFolder({ ...input, id: editingFolder.id })
       : await backend.CreateFolder(input);
   }
+  function beginSave() {
+    saving = true;
+    formError = '';
+  }
   async function saveFolder(event: SubmitEvent) {
     event.preventDefault();
     if (saving) return;
     if (!validateFolder()) return;
-    saving = true;
-    formError = '';
+    beginSave();
     try {
       const folder = await writeFolder();
       onsaved(folder, editingFolder !== null);

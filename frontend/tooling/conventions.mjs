@@ -72,21 +72,23 @@ function scripts(file, text) {
     .map((script) => text.slice(script.content.start, script.content.end));
 }
 function frameworkImport(specifier, resolved) {
-  return (
-    specifier === 'svelte' ||
-    specifier.startsWith('svelte/') ||
-    resolved?.includes('/adapters/') ||
-    resolved?.endsWith('.svelte') ||
-    resolved?.endsWith('.svelte.ts')
-  );
+  if (specifier === 'svelte' || specifier.startsWith('svelte/')) return true;
+  return resolved ? implementationImport(resolved) : false;
 }
-function crossFeatureImport(context, resolved) {
-  const target = resolved && featureOf(resolved);
-  if (!target || target === context.feature || resolved.endsWith(`/features/${target}/index.ts`)) return false;
+function implementationImport(resolved) {
+  return resolved.includes('/adapters/') || resolved.endsWith('.svelte') || resolved.endsWith('.svelte.ts');
+}
+function permittedCrossFeature(context, resolved, target) {
   const composition =
     context.file.endsWith('/src/main.ts') && resolved.endsWith(`/features/${target}/adapters/index.ts`);
   const domain = context.core && resolved.endsWith(`/features/${target}/domain/index.ts`);
-  return !composition && !domain;
+  return composition || domain;
+}
+function crossFeatureImport(context, resolved) {
+  if (!resolved) return false;
+  const target = featureOf(resolved);
+  if (!target || target === context.feature || resolved.endsWith(`/features/${target}/index.ts`)) return false;
+  return !permittedCrossFeature(context, resolved, target);
 }
 function importErrors(context, specifier) {
   const resolved = resolveImport(context.file, specifier)?.replaceAll('\\', '/');

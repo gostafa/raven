@@ -279,12 +279,15 @@
   function tileButton(tile: Element | null | undefined): HTMLElement | null {
     return tile?.querySelector<HTMLElement>('button') ?? null;
   }
+  function adjacentButton(tile: Element | null): HTMLElement | null {
+    return tileButton(tile?.nextElementSibling) ?? tileButton(tile?.previousElementSibling);
+  }
   function rememberOpener(source: MouseEvent | HTMLElement) {
     const opener = source instanceof HTMLElement ? source : source.currentTarget;
     if (!(opener instanceof HTMLElement)) return;
     dialogOpener = opener;
     const tile = opener.closest('li');
-    dialogFallback = tileButton(tile?.nextElementSibling) ?? tileButton(tile?.previousElementSibling);
+    dialogFallback = adjacentButton(tile);
   }
   async function restoreDialogFocus() {
     await tick();

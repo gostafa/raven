@@ -138,11 +138,16 @@ export function parseTransport(payload: string): unknown {
 export function localizationFromTransport(value: unknown): LocalizationState {
   if (!isRecord(value)) throw new Error('Invalid localization response');
   const { preference, locale, direction, revision } = value;
-  if (preference !== 'system' && preference !== 'en' && preference !== 'ar')
-    throw new Error('Invalid localization response');
-  if (locale !== 'en' && locale !== 'ar') throw new Error('Invalid localization response');
+  if (!isLanguagePreference(preference)) throw new Error('Invalid localization response');
+  if (!isLocale(locale)) throw new Error('Invalid localization response');
   validateLocalizationMetadata({ direction, revision }, locale);
   return { preference, locale, direction: locale === 'ar' ? 'rtl' : 'ltr', revision: Number(revision) };
+}
+function isLocale(value: unknown): value is LocalizationState['locale'] {
+  return value === 'en' || value === 'ar';
+}
+function isLanguagePreference(value: unknown): value is LocalizationState['preference'] {
+  return value === 'system' || value === 'en' || value === 'ar';
 }
 function validateLocalizationMetadata(data: Record<string, unknown>, locale: string): void {
   if (

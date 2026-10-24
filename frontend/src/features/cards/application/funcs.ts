@@ -23,13 +23,14 @@ export async function playMedia(media: PlaybackPort): Promise<void> {
 }
 
 class PreviewPlayback implements PreviewPlaybackPort {
+  private readonly media: VideoPreviewPort;
+  private readonly nativeStart: PreviewStartPort | undefined;
   private wanted = false;
   private stoppedTime = 0;
   private revision = 0;
-  public constructor(
-    private readonly media: VideoPreviewPort,
-    private readonly nativeStart?: PreviewStartPort,
-  ) {
+  public constructor(media: VideoPreviewPort, nativeStart?: PreviewStartPort) {
+    this.media = media;
+    this.nativeStart = nativeStart;
     media.defaultMuted = true;
     media.muted = true;
   }

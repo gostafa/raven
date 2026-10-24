@@ -30,6 +30,15 @@
     entries = [];
     closeError = '';
   }
+  function loadFailed(request: number) {
+    if (request === generation) status = 'error';
+  }
+  function finishClose() {
+    ++generation;
+    entries = [];
+    status = 'closed';
+    closeError = '';
+  }
   async function load() {
     if (saving || closing) return;
     const request = ++generation;
@@ -41,7 +50,7 @@
       folders = loaded.folders;
       status = 'ready';
     } catch {
-      if (request === generation) status = 'error';
+      loadFailed(request);
     }
   }
 
@@ -51,10 +60,7 @@
     stopMedia(root);
     try {
       await backend.HideFloatingReview();
-      ++generation;
-      entries = [];
-      status = 'closed';
-      closeError = '';
+      finishClose();
     } catch {
       closeError = 'reviews.could_not_close_this_review_please_try_again';
     } finally {

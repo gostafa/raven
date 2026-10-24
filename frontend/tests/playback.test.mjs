@@ -44,7 +44,9 @@ test('a WebKit permission rejection starts through the native event callback wit
   });
   const preview = createPreviewPlayback(video, native.starter);
   const pending = preview.start();
-  await new Promise((resolve) => queueMicrotask(resolve));
+  await new Promise((resolve) => {
+    queueMicrotask(resolve);
+  });
   assert.equal(video.paused, true);
   assert.equal(native.emitted.length, 1);
   native.deliver();
@@ -66,10 +68,14 @@ test('a queued native start cannot play after leaving, even after another hover 
   });
   const preview = createPreviewPlayback(video, native.starter);
   const first = preview.start();
-  await new Promise((resolve) => queueMicrotask(resolve));
+  await new Promise((resolve) => {
+    queueMicrotask(resolve);
+  });
   preview.stop();
   const second = preview.start();
-  await new Promise((resolve) => queueMicrotask(resolve));
+  await new Promise((resolve) => {
+    queueMicrotask(resolve);
+  });
   native.deliver();
   await first;
   assert.equal(plays, 0);
@@ -203,7 +209,9 @@ test('old playback completions do not stop a newly requested preview', async () 
   const completions = [];
   const video = media({
     play() {
-      return new Promise((resolve) => completions.push(resolve));
+      return new Promise((resolve) => {
+        completions.push(resolve);
+      });
     },
   });
   const preview = createPreviewPlayback(video);

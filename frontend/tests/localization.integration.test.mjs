@@ -61,7 +61,9 @@ test('language changes update every window, format Arabic values, and release su
   assert.equal(get(windows[2]).t('common.language'), 'Language');
   assert.equal(get(windows[2]).number(123), '123');
   assert.equal(documents.length, 9);
-  windows.forEach((window) => window.dispose());
+  windows.forEach((window) => {
+    window.dispose();
+  });
   assert.equal(port.subscriptions, 0);
 });
 

@@ -82,6 +82,8 @@ function presentation(state: LocalizationState, engine: ReturnType<typeof create
   };
 }
 class I18nLocalization implements Localization {
+  private readonly port: LocalizationPort;
+  private readonly environment: PresentationEnvironment;
   private readonly engine = createInstance();
   private readonly ready = initializeEngine(this.engine);
   private state: LocalizationState = { preference: 'system', locale: 'en', direction: 'ltr', revision: -1 };
@@ -90,10 +92,10 @@ class I18nLocalization implements Localization {
     /* No subscription exists before startup. */
   };
   private disposed = false;
-  public constructor(
-    private readonly port: LocalizationPort,
-    private readonly environment: PresentationEnvironment,
-  ) {}
+  public constructor(port: LocalizationPort, environment: PresentationEnvironment) {
+    this.port = port;
+    this.environment = environment;
+  }
   public subscribe: Localization['subscribe'] = (run, invalidate) => this.store.subscribe(run, invalidate);
   private accept(incoming: LocalizationState): void {
     if (this.disposed) return;

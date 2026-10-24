@@ -72,7 +72,7 @@ test('failed reviews do not mutate the session entry and can be retried', async 
   await assert.rejects(saveReview(port, entry, 3), /unavailable/);
   assert.deepEqual(entry, before);
   port.ReviewItem = async (...args) => {
-    assert.deepEqual(args, ['folder', 'card', 'item', 3]);
+    assert.deepEqual(args, [{ folderId: 'folder', cardId: 'card', itemId: 'item', rating: 3 }]);
     return card;
   };
   assert.equal(await saveReview(port, entry, 3), card);

@@ -14,11 +14,16 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function fields(value: Record<string, unknown>, names: string, kind: string): boolean {
-  return names.split(' ').every((name) => typeof value[name] === kind);
+  return names.split(' ').every((name) => typeof fieldValue(value, name) === kind);
 }
 
 function optional(value: Record<string, unknown>, names: string, kind: string): boolean {
-  return names.split(' ').every((name) => value[name] === undefined || typeof value[name] === kind);
+  return names
+    .split(' ')
+    .every((name) => fieldValue(value, name) === undefined || typeof fieldValue(value, name) === kind);
+}
+function fieldValue(value: Record<string, unknown>, name: string): unknown {
+  return Object.getOwnPropertyDescriptor(value, name)?.value;
 }
 
 function list<T>(value: unknown, guard: (item: unknown) => item is T): value is T[] | null {
@@ -121,4 +126,3 @@ export function decodeList<T>(value: unknown, guard: (item: unknown) => item is 
   if (!Array.isArray(value)) throw new Error('Invalid Raven list response');
   return value.map((item: unknown) => decode(item, guard));
 }
- 

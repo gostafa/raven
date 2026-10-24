@@ -9,15 +9,17 @@
   );
   const description = $derived($l.t('common.choice', { label: $l.t('common.language'), value: currentLanguage }));
 
+  async function saveLanguage(value: string) {
+    if (value !== 'system' && value !== 'en' && value !== 'ar') throw new Error('Invalid language');
+    await l.change(value);
+  }
   async function change(event: Event) {
     const select = event.currentTarget;
     if (!(select instanceof HTMLSelectElement)) return;
     saving = true;
     failed = false;
     try {
-      const preference = select.value;
-      if (preference !== 'system' && preference !== 'en' && preference !== 'ar') throw new Error('Invalid language');
-      await l.change(preference);
+      await saveLanguage(select.value);
     } catch {
       select.value = $l.preference;
       failed = true;

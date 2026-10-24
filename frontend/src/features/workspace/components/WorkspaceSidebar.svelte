@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { useLocalization } from '../../localization';
+  import { useLocalization, LanguageSelector } from '../../localization';
   const l = useLocalization();
-  import { LanguageSelector } from '../../localization';
   import { Skeleton } from '../../ui';
   import type { Workspace, Folder } from '../../folders';
   import type { Card } from '../../cards';

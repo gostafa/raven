@@ -98,6 +98,18 @@ test('runtime JSON transport preserves requests, records, nullable lists, and pa
   assert.deepEqual(await runtime.SelectMediaFiles('image'), []);
   globalThis.ravenRuntime.responses.ListCards = '{invalid';
   await assert.rejects(runtime.ListCards(), /action_failed/);
+  globalThis.ravenRuntime.responses.ListFolders = JSON.stringify([{ ...folder, id: 7 }]);
+  await assert.rejects(runtime.ListFolders(), /action_failed/);
+  globalThis.ravenRuntime.responses.ListCards = '{}';
+  await assert.rejects(runtime.ListCards(), /action_failed/);
+  globalThis.ravenRuntime.responses.ListCards = JSON.stringify([
+    { ...card, items: [{ id: 'item', schedule: { due: 7 } }] },
+  ]);
+  await assert.rejects(runtime.ListCards(), /action_failed/);
+  globalThis.ravenRuntime.responses.SelectMediaFiles = JSON.stringify([
+    { source_path: false, original_name: 'test.png', byte_size: 8, preview_url: '/preview' },
+  ]);
+  await assert.rejects(runtime.SelectMediaFiles('image'), /action_failed/);
 });
 after(() => hooks.deregister());
 
@@ -166,7 +178,9 @@ test('runtime consumes configured event names and media routes and releases subs
     globalThis.ravenRuntime.events.map((event) => event.name),
     ['custom:changed', 'custom:show', 'custom:open', 'custom:close'],
   );
-  dispose.forEach((unsubscribe) => unsubscribe());
+  dispose.forEach((unsubscribe) => {
+    unsubscribe();
+  });
   assert.equal(globalThis.ravenRuntime.unsubscribed, 4);
   globalThis.ravenRuntime.failure = new Error('configuration unavailable');
   await assert.rejects(loadConfiguration(), /action_failed/);

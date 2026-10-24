@@ -2,15 +2,18 @@ import type { PreviewEventsPort, PreviewStartPort } from '../../ports/types';
 import type { PreviewCompletion } from './types';
 
 class NativePreviewRequest {
+  private readonly events: PreviewEventsPort;
+  private readonly play: () => Promise<void>;
+  private readonly completion: PreviewCompletion;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private off: () => void = () => {
     /* Registration has not completed yet. */
   };
-  public constructor(
-    private readonly events: PreviewEventsPort,
-    private readonly play: () => Promise<void>,
-    private readonly completion: PreviewCompletion,
-  ) {}
+  public constructor(events: PreviewEventsPort, play: () => Promise<void>, completion: PreviewCompletion) {
+    this.events = events;
+    this.play = play;
+    this.completion = completion;
+  }
   private dispose(): void {
     clearTimeout(this.timer);
     this.off();

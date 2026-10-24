@@ -1,3 +1,5 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- Test paths are isolated temporary directories and fixed repository fixtures. */
+/* eslint-disable no-template-curly-in-string -- These strings are shell fixtures with shell parameter expansion. */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';

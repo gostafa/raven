@@ -47,7 +47,8 @@
   }
 
   function initialFolder(card: Card | null): string {
-    return card?.folderId ?? selectedFolderId ?? folders.at(0)?.id ?? '__new';
+    if (card) return card.folderId;
+    return selectedFolderId ?? folders.at(0)?.id ?? '__new';
   }
   function reportFailure() {
     formError = 'workspace.your_card_could_not_be_saved_your_entries_are_still_here_try_again';
@@ -72,24 +73,31 @@
       folderCreated,
     );
   }
-  async function createCard(event: SubmitEvent) {
-    event.preventDefault();
-    if (saving || selectingFiles) return;
+  function prepareSave(): boolean {
     if (!validCard()) {
       formError = 'workspace.add_something_you_want_to_remember_and_choose_a_folder_for_this_card';
-      return;
+      return false;
     }
     saving = true;
     formError = '';
+    return true;
+  }
+  async function createCard(event: SubmitEvent) {
+    event.preventDefault();
+    if (saving || selectingFiles) return;
+    if (!prepareSave()) return;
     try {
       const card = await writeCard();
-      onsaved(card, editingCard !== null);
-      cardDialog?.close();
+      finishCardSave(card);
     } catch {
       reportFailure();
     } finally {
       saving = false;
     }
+  }
+  function finishCardSave(card: Card) {
+    onsaved(card, editingCard !== null);
+    cardDialog?.close();
   }
 </script>
 

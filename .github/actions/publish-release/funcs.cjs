@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- Asset paths are constrained by assetPaths and realpath containment checks in regularAsset. */
 const { createHash } = require('node:crypto');
 const { createReadStream } = require('node:fs');
 const { lstat, mkdtemp, readFile, realpath } = require('node:fs/promises');
@@ -12,7 +13,8 @@ function assetPaths(env) {
   for (const file of files) {
     if (
       path.posix.isAbsolute(file) ||
-      /[\\:*?\[\]{}!\x00-\x1f]/.test(file) ||
+      /[\\:*?[\]{}!]/.test(file) ||
+      [...file].some((character) => character.charCodeAt(0) < 32) ||
       file.split('/').some((part) => !part || part === '.' || part === '..')
     ) {
       throw new Error(`Expected an exact relative asset path: ${file}`);

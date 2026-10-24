@@ -6,11 +6,10 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import type { Card, MediaURLPort, PreviewStartPort } from '../../cards';
   import type { Folder } from '../../folders';
-  import type { ReviewPort } from '../domain/types';
+  import type { ReviewPort, ReviewItem } from '../domain/types';
   import { saveReview } from '../application/funcs';
   import { CardContent } from '../../cards';
   import { stopMedia } from '../../ui';
-  import type { ReviewItem } from '../domain/types';
 
   let {
     review,
@@ -62,15 +61,21 @@
     await tick();
     (ratingButton ?? completionButton)?.focus();
   }
-  async function rate(rating: number) {
-    if (!entry || saving || disabled) return;
+  function beginRating() {
     saving = true;
     error = '';
+  }
+  function acceptRating(updated: Card) {
+    onsaved?.(updated);
+    stopMedia(root);
+    index += 1;
+  }
+  async function rate(rating: number) {
+    if (!entry || saving || disabled) return;
+    beginRating();
     try {
       const updated = await saveReview(review, entry, rating);
-      onsaved?.(updated);
-      stopMedia(root);
-      index += 1;
+      acceptRating(updated);
     } catch {
       error = 'reviews.your_review_could_not_be_saved_try_again_before_moving_on';
     } finally {

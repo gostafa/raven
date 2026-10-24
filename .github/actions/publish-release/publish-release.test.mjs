@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- Test paths are isolated temporary directories and fixed repository fixtures. */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
@@ -12,7 +13,7 @@ const actionPath = path.dirname(new URL(import.meta.url).pathname);
 test('the action can load both helper entry points from its own directory', async () => {
   const action = await readFile(path.join(actionPath, 'action.yml'), 'utf8');
   assert.ok(action.includes('process.env.PUBLISH_ACTION_PATH}/funcs.cjs'));
-  const helper = require(path.join(actionPath, 'funcs.cjs'));
+  const helper = require('./funcs.cjs');
   assert.equal(typeof helper.prepare, 'function');
   assert.equal(typeof helper.verifyAssets, 'function');
 });
@@ -21,12 +22,12 @@ test('prepare isolates downloads and rejects existing releases and API failures'
   const { prepare } = require('./funcs.cjs');
   const root = await mkdtemp(path.join(tmpdir(), 'raven-publish-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const outputs = {};
+  const outputs = new Map();
   const args = {
     context: { repo: { owner: 'owner', repo: 'repo' } },
     core: {
       setOutput: (key, value) => {
-        outputs[key] = value;
+        outputs.set(key, value);
       },
     },
     env: {
@@ -48,10 +49,10 @@ test('prepare isolates downloads and rejects existing releases and API failures'
     },
   };
   await prepare(args);
-  const first = outputs['download-path'];
+  const first = outputs.get('download-path');
   assert.equal(path.dirname(first), root);
   await prepare(args);
-  assert.notEqual(outputs['download-path'], first);
+  assert.notEqual(outputs.get('download-path'), first);
   args.github.rest.repos.getReleaseByTag = async () => ({ data: { id: 1 } });
   await assert.rejects(prepare(args), /already exists/);
   args.github.rest.repos.getReleaseByTag = async () => {

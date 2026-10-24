@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { compile } from 'svelte/compiler';
 import {
   cardPreview,
+  mergeCardSnapshot,
   cardProgress,
   editItems,
   hasContent,
@@ -18,7 +19,6 @@ import {
 
 import { stopMedia } from '../src/features/ui/index.ts';
 import { reviewItems, shuffledReviewItems, lastUserReview } from '../src/features/reviews/index.ts';
-import { mergeCardSnapshot } from '../src/features/cards/index.ts';
 
 const card = {
   id: 'card',
