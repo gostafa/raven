@@ -1,18 +1,13 @@
 <script lang="ts">
+  import EditorMedia from './EditorMedia.svelte';
+  import { contentKindMessageKeys } from './consts';
   import { useLocalization, type MessageKey } from '../../localization';
   const l = useLocalization();
-  const kindKeys: Record<string, MessageKey> = {
-    text: 'workspace.text',
-    image: 'workspace.image',
-    audio: 'cards.audio',
-    video: 'cards.video',
-  };
   import { onDestroy, tick } from 'svelte';
   import { stopMedia } from '../../ui';
   import { moveItem, textDraft } from '../domain/funcs';
   import { selectMedia } from '../application/funcs';
   import type { EditorItem, MediaKind, MediaPort } from '../domain/types';
-  import AudioPlayer from './AudioPlayer.svelte';
 
   let {
     media,
@@ -29,7 +24,6 @@
   } = $props();
   const kinds: MediaKind[] = ['image', 'audio', 'video'];
   let root: HTMLFieldSetElement;
-  let failed = $state<string[]>([]);
   let removeDialog = $state<HTMLDialogElement>();
   let removal = $state<EditorItem | null>(null);
   onDestroy(() => stopMedia(root));
@@ -61,7 +55,7 @@
     {#each items as item, index (item.key)}
       <li>
         <div class="item-header">
-          <span>{$l.number(index + 1)} · {$l.t(kindKeys[item.kind])}</span>
+          <span>{$l.number(index + 1)} · {$l.t(contentKindMessageKeys[item.kind])}</span>
           <div class="item-actions">
             <button
               type="button"
@@ -105,40 +99,7 @@
             rows="3"
             placeholder={$l.t('cards.what_do_you_want_to_remember')}></textarea>
         {:else}
-          {#if failed.includes(item.key)}<p class="hint" role="status">
-              {$l.t(
-                'cards.this_file_could_not_be_loaded_or_played_check_that_it_is_available_and_its_format_is_supported_on_this_device',
-              )}
-            </p>
-          {:else if item.previewURL}
-            {#if item.kind === 'image'}<img
-                src={item.previewURL}
-                alt={item.originalName || $l.t('cards.card_image')}
-                onerror={() => (failed = [...failed, item.key])}
-              />
-            {:else if item.kind === 'audio'}<AudioPlayer
-                src={item.previewURL}
-                filename={item.originalName}
-                onerror={() => (failed = [...failed, item.key])}
-              />
-            {:else if item.kind === 'video'}
-              <!-- svelte-ignore a11y_media_has_caption (Imported videos do not include separate caption files.) -->
-              <video
-                dir="ltr"
-                controls
-                playsinline
-                preload="metadata"
-                src={item.previewURL}
-                aria-label={item.originalName}
-                onerror={() => (failed = [...failed, item.key])}
-              ></video>
-            {/if}
-          {/if}
-          <p class="filename">
-            <bdi>{item.originalName}</bdi><span
-              >{item.id ? $l.t('cards.saved_file') : $l.t('cards.will_be_copied_when_you_save')}</span
-            >
-          </p>
+          <EditorMedia {item} />
         {/if}
       </li>
     {/each}
@@ -338,29 +299,7 @@
   textarea:focus-visible {
     outline: none;
   }
-  .filename {
-    overflow-wrap: anywhere;
-    margin: 0;
-    color: var(--ink);
-    font-size: 12px;
-    line-height: 1.6;
-  }
-  img,
-  video {
-    display: block;
-    width: 100%;
-    max-height: 320px;
-    object-fit: contain;
-    border-radius: 6px;
-    background: #000;
-    margin-bottom: 8px;
-  }
-  .filename span {
-    display: block;
-    font-size: 10px;
-    color: var(--muted);
-    margin-top: 3px;
-  }
+
   .hint {
     font-size: 10px;
     color: var(--muted);

@@ -1,19 +1,19 @@
 <script lang="ts">
   import { useLocalization } from '../../localization';
   const l = useLocalization();
-  import { onDestroy } from 'svelte';
-  import { positionPopover } from '../adapters/positioning/funcs';
-  let releasePosition = () => {};
-  onDestroy(() => releasePosition());
+  import { trackPopover } from '../adapters/positioning/funcs';
+  import { menuFocusIndex } from '../domain/funcs';
 
   let {
     label,
     actions,
     disabled = false,
+    appearance = 'default',
   }: {
     label: string;
     actions: { label: string; onselect: (opener: HTMLButtonElement) => void }[];
     disabled?: boolean;
+    appearance?: 'default' | 'quiet';
   } = $props();
 
   const id = $props.id();
@@ -22,7 +22,6 @@
   let expanded = $state(false);
 
   function close(restoreFocus = false) {
-    releasePosition();
     menu.hidePopover();
     if (restoreFocus) trigger.focus();
   }
@@ -33,8 +32,6 @@
 
   function open(last = false) {
     menu.showPopover();
-    releasePosition();
-    releasePosition = positionPopover(trigger, menu, 'end');
     const buttons = items();
     buttons[last ? buttons.length - 1 : 0]?.focus();
   }
@@ -57,31 +54,15 @@
       event.preventDefault();
       const buttons = items();
       const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
-      const next =
-        event.key === 'Home'
-          ? 0
-          : event.key === 'End'
-            ? buttons.length - 1
-            : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
-      buttons.at(next)?.focus();
+      const next = menuFocusIndex(event.key, current, buttons.length);
+      if (next !== null) buttons.at(next)?.focus();
     }
   }
 
   $effect(() => {
     const direction = $l.direction;
-    if (!expanded) return;
-    if (direction) {
-      releasePosition();
-      releasePosition = positionPopover(trigger, menu, 'end');
-    }
-    // Fixed popovers must close when their anchor moves inside the scrolling content.
-    const dismiss = () => close();
-    window.addEventListener('scroll', dismiss, true);
-    window.addEventListener('resize', dismiss);
-    return () => {
-      window.removeEventListener('scroll', dismiss, true);
-      window.removeEventListener('resize', dismiss);
-    };
+    if (!expanded || !direction) return;
+    return trackPopover(trigger, menu, 'end', () => close(), false);
   });
 </script>
 
@@ -95,6 +76,7 @@
     bind:this={trigger}
     type="button"
     class="menu-trigger"
+    class:quiet={appearance === 'quiet'}
     aria-label={label}
     title={label}
     aria-haspopup="menu"
@@ -164,6 +146,17 @@
   .menu-trigger:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  .menu-trigger.quiet {
+    background: transparent;
+  }
+  .menu-trigger.quiet:hover,
+  .menu-trigger.quiet[aria-expanded='true'] {
+    background: var(--hover);
+  }
+  .menu-trigger.quiet:focus-visible {
+    outline: 1px solid var(--line-strong);
+    outline-offset: 2px;
   }
   .menu {
     position: fixed;

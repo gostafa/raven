@@ -3,7 +3,12 @@
 
 package bbolt
 
+import (
+	"time"
+)
+
 const (
+	initialReviewSpacing      = 5 * time.Minute
 	defaultLanguagePreference = "system"
 	languagePreferenceKey     = "language_preference"
 	mediaStagingPattern       = ".import-*"

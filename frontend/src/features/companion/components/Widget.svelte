@@ -53,26 +53,29 @@
 </script>
 
 <svelte:window onfocus={focus} />
-<div class="widget" style="--custom-contextmenu: raven;">
-  <button
-    class="widget-logo"
-    aria-label={dueCount
-      ? $l.t('widget.reviewLabel', { items: $l.t('common.items', { count: dueCount }) })
-      : $l.t('companion.toggle_floating_review')}
-    title={$l.t('widget.reviewTitle', {
-      items: $l.t('common.items', { count: dueCount }),
-      instructions: $l.t('widget.instructions'),
-    })}
-    onpointerdown={(event) => {
-      if (event.button === 0) widgetPointerStart = { x: event.screenX, y: event.screenY };
-    }}
-    onclick={openFromWidget}
-    ><img src="/raven.svg" alt="" draggable="false" />{#if dueCount}<span class="widget-due" aria-hidden="true"
-        >{dueCount > 9 ? `${$l.number(9)}+` : $l.number(dueCount)}</span
-      >{/if}</button
-  >
-  {#if error}<span class="sr-only" role="alert">{error ? $l.t(error) : ''}</span>{/if}
-</div>
+{#if dueCount > 0}
+  <div class="widget" style="--custom-contextmenu: raven;">
+    <button
+      class="widget-logo"
+      class:has-due={dueCount > 0}
+      aria-label={dueCount
+        ? $l.t('widget.reviewLabel', { items: $l.t('common.items', { count: dueCount }) })
+        : $l.t('companion.toggle_floating_review')}
+      title={$l.t('widget.reviewTitle', {
+        items: $l.t('common.items', { count: dueCount }),
+        instructions: $l.t('widget.instructions'),
+      })}
+      onpointerdown={(event) => {
+        if (event.button === 0) widgetPointerStart = { x: event.screenX, y: event.screenY };
+      }}
+      onclick={openFromWidget}
+      ><img src="/raven.svg" alt="" draggable="false" />{#if dueCount}<span class="widget-due" aria-hidden="true"
+          >{dueCount > 9 ? `${$l.number(9)}+` : $l.number(dueCount)}</span
+        >{/if}</button
+    >
+    {#if error}<span class="sr-only" role="alert">{error ? $l.t(error) : ''}</span>{/if}
+  </div>
+{/if}
 
 <style>
   .widget {
@@ -83,10 +86,9 @@
     width: calc(min(100dvw, 100dvh) - 2px);
     height: calc(min(100dvw, 100dvh) - 2px);
     aspect-ratio: 1;
-    background: #fff;
+    container-type: inline-size;
     border-radius: 50%;
-    clip-path: circle(50% at 50% 50%);
-    overflow: hidden;
+    overflow: visible;
     cursor: grab;
     user-select: none;
     --wails-draggable: drag;
@@ -105,28 +107,34 @@
     padding: 2px;
     border: 0;
     border-radius: 50%;
-    overflow: hidden;
-    background: transparent;
+    overflow: visible;
+    background: #fff;
     box-shadow: none;
     cursor: inherit;
     --wails-draggable: drag;
   }
+  .widget-logo.has-due {
+    inset: auto auto 0 0;
+    width: 90%;
+    height: 90%;
+  }
   .widget-due {
     position: absolute;
-    top: 10%;
-    inset-inline-end: 10%;
+    top: -5%;
+    right: -5%;
     display: grid;
     place-items: center;
-    width: 23px;
-    height: 23px;
+    width: 45%;
+    height: 45%;
     padding: 0;
-    border: 2px solid white;
+    border: 0;
     border-radius: 50%;
-    background: #000;
+    background: #ff001a;
     color: #fff;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1;
-    font-weight: 600;
+    font-weight: 700;
+    direction: ltr;
     pointer-events: none;
   }
   .widget:active,

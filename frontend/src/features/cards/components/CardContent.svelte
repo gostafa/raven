@@ -1,12 +1,7 @@
 <script lang="ts">
-  import { useLocalization, type MessageKey } from '../../localization';
+  import { contentKindMessageKeys } from './consts';
+  import { useLocalization } from '../../localization';
   const l = useLocalization();
-  const kindKeys: Record<string, MessageKey> = {
-    text: 'workspace.text',
-    image: 'workspace.image',
-    audio: 'cards.audio',
-    video: 'cards.video',
-  } as const;
   import { onDestroy } from 'svelte';
   import type { Card, MediaURLPort } from '../domain/types';
   import { orderedItems } from '../domain/funcs';
@@ -76,7 +71,7 @@
       class:video-item={item.kind === 'video'}
       class:active={compact && active === index}
       role="group"
-      aria-label={$l.t('cards.content', { kind: $l.t(kindKeys[item.kind]) })}
+      aria-label={$l.t('cards.content', { kind: $l.t(contentKindMessageKeys[item.kind]) })}
       tabindex={compact ? 0 : undefined}
       onpointerenter={(event) => {
         if (compact && event.pointerType === 'mouse') hovered = index;
@@ -141,7 +136,7 @@
         <button
           class="open-part"
           type="button"
-          aria-label={$l.t('cards.openPart', { kind: $l.t(kindKeys[item.kind]), count: index + 1 })}
+          aria-label={$l.t('cards.openPart', { kind: $l.t(contentKindMessageKeys[item.kind]), count: index + 1 })}
           onclick={(event) => onopen?.(item.id, event.currentTarget)}
         ></button>
       {/if}

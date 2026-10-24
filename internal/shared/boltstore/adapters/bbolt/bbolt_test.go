@@ -42,6 +42,42 @@ import (
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
 
+func TestNewReviewPartsHaveStaggeredDueTimes(t *testing.T) {
+	scheduler := scheduling.New(new(configuration.Library(configurationFixture())))
+	storage := &persistence{initializeSchedule: scheduler.Initialize}
+	write := &cardWrite{card: cardapi.Card{}, items: []contentapi.Item{
+		{ID: "first"}, {ID: "hint", Hint: true}, {ID: "second"}, {ID: "third"},
+	}}
+	if err := cardWriteMergeSchedules(storage, write); err != nil {
+		t.Fatal(err)
+	}
+	items := contentapi.Items(cardRecord(&write.card).Items)
+	first := contentapi.Schedule(items[0].Schedule)
+	for index, position := range []int{0, 2, 3} {
+		schedule := contentapi.Schedule(items[position].Schedule)
+		if got, want := schedule.Due.Sub(
+			first.Due,
+		), time.Duration(
+			index,
+		)*5*time.Minute; got != want {
+			t.Fatalf("part %d due offset = %v, want %v", position, got, want)
+		}
+		if !schedule.LastReview.Equal(first.LastReview) {
+			t.Fatal("spacing changed the automatic review time")
+		}
+	}
+	previous := contentapi.Schedule(items[2].Schedule)
+	write.items = items
+	if err := cardWriteMergeSchedules(storage, write); err != nil {
+		t.Fatal(err)
+	}
+	if got := contentapi.Schedule(
+		contentapi.Items(cardRecord(&write.card).Items)[2].Schedule,
+	); got != previous {
+		t.Fatal("saving existing parts changed their schedule")
+	}
+}
+
 func TestJSONRepositoryRoundTripAndLifecycle(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven.db")
 	dependencies := NewDependencies(
@@ -2466,7 +2502,13 @@ func TestMixedContentPersistenceEditingAndMediaCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	due, reviewed := card.DueAt, card.LastReviewed
+	due := contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).Due.UnixMilli()
+	for _, item := range contentapi.Items(card.Items)[2:] {
+		if value := contentapi.Schedule(item.Schedule).Due.UnixMilli(); value < due {
+			due = value
+		}
+	}
+	reviewed := card.LastReviewed
 	edit := itemDrafts(card)
 	removed := contentapi.Items(card.Items)[1]
 	edit = append(edit[:1], edit[2:]...)

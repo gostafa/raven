@@ -51,6 +51,10 @@ export default tseslint.config(
   },
   ...svelte.configs['flat/recommended'],
   {
+    files: ['frontend/src/**/*.svelte.ts'],
+    languageOptions: { parser: tseslint.parser },
+  },
+  {
     files: ['frontend/src/**/*.svelte'],
     languageOptions: { parserOptions: { parser: tseslint.parser, extraFileExtensions: ['.svelte'] } },
     rules: {

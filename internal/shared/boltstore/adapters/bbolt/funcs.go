@@ -3061,7 +3061,7 @@ func cardWriteMergeSchedules(storage *persistence, write *cardWrite) error {
 		[]contentapi.Item(nil),
 		contentapi.Items(write.items)...)
 
-	initialization := &itemInitialization{at: time.Now(), initialize: storage.initializeSchedule}
+	initialization := newItemInitialization(storage)
 
 	for index := range contentapi.Items(cardRecord(&write.card).Items) {
 		item := &contentapi.Items(cardRecord(&write.card).Items)[index]
@@ -3075,6 +3075,15 @@ func cardWriteMergeSchedules(storage *persistence, write *cardWrite) error {
 	assignContentOwnership(cardRecord(&write.card))
 
 	return nil
+}
+
+func newItemInitialization(storage *persistence) *itemInitialization {
+	var initialization itemInitialization
+
+	initialization.at = time.Now()
+	initialization.initialize = storage.initializeSchedule
+
+	return &initialization
 }
 
 func indexContentItems(items []contentapi.Item) map[string]*contentapi.Item {
@@ -3103,7 +3112,22 @@ func storeRestoreItemSchedule(
 		return fmt.Errorf("initialize item schedule: %w", err)
 	}
 
+	spaceInitialReview(item, initialization)
+
 	return nil
+}
+
+func spaceInitialReview(item *contentapi.Item, initialization *itemInitialization) {
+	if item.Hint {
+		return
+	}
+
+	schedule := contentapi.Schedule(item.Schedule)
+
+	schedule.Due = schedule.Due.Add(initialization.dueOffset)
+	item.Schedule = schedule
+
+	initialization.dueOffset += initialReviewSpacing
 }
 
 func assignContentOwnership(card *cardapi.Card) {

@@ -23,6 +23,8 @@ registerHooks({
     return next(specifier, context);
   },
   load(url, context, next) {
+    // Vite handles styles in the app; Node tests exercise the component modules.
+    if (url.endsWith('.css')) return { format: 'module', shortCircuit: true, source: 'export {};' };
     if (url.endsWith('.svelte')) {
       return {
         format: 'module',

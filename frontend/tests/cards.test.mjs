@@ -162,6 +162,10 @@ test('the editor has one information fieldset and both review views share one it
     new URL('../src/features/reviews/components/ReviewSession.svelte', import.meta.url),
     'utf8',
   );
+  const hints = await readFile(
+    new URL('../src/features/reviews/components/ReviewHints.svelte', import.meta.url),
+    'utf8',
+  );
   const floating = await readFile(
     new URL('../src/features/reviews/components/FloatingReview.svelte', import.meta.url),
     'utf8',
@@ -180,7 +184,9 @@ test('the editor has one information fieldset and both review views share one it
   assert.equal(fieldsets.length, 1);
   assert.match(editor, /<legend>\{\$l.t\('cards.what_you_want_to_remember'\)\}<\/legend>/);
   assert.doesNotMatch(editor, /Question or prompt|Front of card|Back of card/);
-  assert.equal((review.match(/<CardContent\b/g) ?? []).length, 2);
+  assert.equal((review.match(/<CardContent\b/g) ?? []).length, 1);
+  assert.equal((hints.match(/<CardContent\b/g) ?? []).length, 1);
+  assert.match(review, /<ReviewHints\b/);
   assert.match(source, /<ReviewSession\b/);
   assert.match(floating, /<ReviewSession\b/);
   assert.doesNotMatch(review, /revealed|Reveal answer|side="/);

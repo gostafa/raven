@@ -1,3 +1,5 @@
+import type { ContentItem } from '../../cards';
+
 export interface Folder {
   id: string;
   title: string;
@@ -5,7 +7,9 @@ export interface Folder {
   tags: string[];
 }
 export interface FolderPaper {
+  key: string;
   kind: 'image' | 'video';
+  item: ContentItem;
 }
 export interface Preferences {
   selectedFolderId: string | null;

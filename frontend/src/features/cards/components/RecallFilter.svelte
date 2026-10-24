@@ -6,6 +6,7 @@
 
   let { range, onchange }: { range: CardProgressRange; onchange: (range: CardProgressRange) => void } = $props();
   const id = $props.id();
+  const bounds = ['minimum', 'maximum'] as const;
   let disclosure: HTMLDetailsElement;
   let trigger: HTMLElement;
   let panel: HTMLDivElement;
@@ -19,14 +20,14 @@
   ]);
 
   function update(bound: 'minimum' | 'maximum', value: number) {
-    if (!Number.isFinite(value)) return range;
+    if (!Number.isFinite(value)) return bound === 'minimum' ? range.minimum : range.maximum;
     const percentage = Math.max(0, Math.min(100, Math.round(value)));
     const next =
       bound === 'minimum'
         ? { minimum: Math.min(percentage, range.maximum), maximum: range.maximum }
         : { minimum: range.minimum, maximum: Math.max(percentage, range.minimum) };
     onchange(next);
-    return next;
+    return bound === 'minimum' ? next.minimum : next.maximum;
   }
 
   function dismiss(event: PointerEvent) {
@@ -89,61 +90,38 @@
       {/each}
     </div>
     <div class="bounds">
-      <div class="bound">
-        <label for={`${id}-minimum`}>{$l.t('cards.minimum')}</label>
-        <div class="number">
+      {#each bounds as bound (bound)}
+        {@const value = bound === 'minimum' ? range.minimum : range.maximum}
+        <div class="bound">
+          <label for={`${id}-${bound}`}>{$l.t(bound === 'minimum' ? 'cards.minimum' : 'cards.maximum')}</label>
+          <div class="number">
+            <input
+              id={`${id}-${bound}`}
+              type="text"
+              inputmode="numeric"
+              dir="auto"
+              value={$l.number(value, { useGrouping: false })}
+              onchange={(event) => {
+                event.currentTarget.value = $l.number(update(bound, parseLocalizedNumber(event.currentTarget.value)), {
+                  useGrouping: false,
+                });
+              }}
+            /><span>{$l.locale === 'ar' ? '٪' : '%'}</span>
+          </div>
           <input
-            id={`${id}-minimum`}
-            type="text"
-            inputmode="numeric"
-            dir="auto"
-            value={$l.number(range.minimum, { useGrouping: false })}
-            onchange={(event) => {
-              event.currentTarget.value = $l.number(
-                update('minimum', parseLocalizedNumber(event.currentTarget.value)).minimum,
-                { useGrouping: false },
-              );
-            }}
-          /><span>{$l.locale === 'ar' ? '٪' : '%'}</span>
+            type="range"
+            aria-label={$l.t(
+              bound === 'minimum' ? 'cards.minimum_recall_percentage' : 'cards.maximum_recall_percentage',
+            )}
+            min={bound === 'minimum' ? 0 : range.minimum}
+            max={bound === 'minimum' ? range.maximum : 100}
+            step="1"
+            {value}
+            oninput={(event) => update(bound, event.currentTarget.valueAsNumber)}
+          />
         </div>
-        <input
-          type="range"
-          aria-label={$l.t('cards.minimum_recall_percentage')}
-          min="0"
-          max={range.maximum}
-          step="1"
-          value={range.minimum}
-          oninput={(event) => update('minimum', event.currentTarget.valueAsNumber)}
-        />
-      </div>
-      <span class="separator" aria-hidden="true">–</span>
-      <div class="bound">
-        <label for={`${id}-maximum`}>{$l.t('cards.maximum')}</label>
-        <div class="number">
-          <input
-            id={`${id}-maximum`}
-            type="text"
-            inputmode="numeric"
-            dir="auto"
-            value={$l.number(range.maximum, { useGrouping: false })}
-            onchange={(event) => {
-              event.currentTarget.value = $l.number(
-                update('maximum', parseLocalizedNumber(event.currentTarget.value)).maximum,
-                { useGrouping: false },
-              );
-            }}
-          /><span>{$l.locale === 'ar' ? '٪' : '%'}</span>
-        </div>
-        <input
-          type="range"
-          aria-label={$l.t('cards.maximum_recall_percentage')}
-          min={range.minimum}
-          max="100"
-          step="1"
-          value={range.maximum}
-          oninput={(event) => update('maximum', event.currentTarget.valueAsNumber)}
-        />
-      </div>
+        {#if bound === 'minimum'}<span class="separator" aria-hidden="true">–</span>{/if}
+      {/each}
     </div>
     <p class="note">{$l.t('cards.both_limits_are_included_uses_the_percentage_shown_on_each_card')}</p>
   </div>

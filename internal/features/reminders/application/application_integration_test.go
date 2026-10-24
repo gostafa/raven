@@ -89,7 +89,7 @@ func TestReminderDeliveryPermissionFailureAndRestartDeduplication(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := contentapi.Schedule(contentapi.Items(card.Items)[0].Schedule).Due.Add(time.Second)
+	now := contentapi.Schedule(contentapi.Items(card.Items)[1].Schedule).Due.Add(time.Second)
 	cards, _ := store.ListCards()
 	pending, _ := reminders.Snapshot(cards, now)
 	notifier := &fakeReminderNotifier{}

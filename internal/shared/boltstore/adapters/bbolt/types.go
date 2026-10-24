@@ -158,6 +158,7 @@ type (
 	itemInitialization struct {
 		at         time.Time
 		initialize func(time.Time) (json.RawMessage, json.RawMessage, error)
+		dueOffset  time.Duration
 	}
 	cardRating struct {
 		card     any
