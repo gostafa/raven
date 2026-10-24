@@ -121,14 +121,17 @@ func TestWidgetConfigureReportsNativeFailures(t *testing.T) {
 func TestWidgetProcedureFailureUsesLastError(t *testing.T) {
 	for _, test := range []struct {
 		name      string
-		lastError uintptr
+		returned  error
 		wantError error
 	}{
 		{name: "missing last error", wantError: errWidgetProcedureReturnedZero},
-		{name: "reported last error", lastError: 5, wantError: syscall.Errno(5)},
+		{name: "zero errno", returned: syscall.Errno(0), wantError: errWidgetProcedureReturnedZero},
+		{name: "reported last error", returned: syscall.Errno(5), wantError: syscall.Errno(5)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			call := callWidgetProcedure(&widgetProcedureFixture{lastError: test.lastError})
+			call := callWidgetProcedure(
+				&widgetProcedureFixture{lastError: 99, returned: test.returned},
+			)
 			if call.result != zero || call.err == nil {
 				t.Fatalf("expected native procedure failure, got %+v", call)
 			}
@@ -136,5 +139,14 @@ func TestWidgetProcedureFailureUsesLastError(t *testing.T) {
 				t.Fatalf("unexpected native procedure error: %v", call.err)
 			}
 		})
+	}
+}
+
+func TestWidgetProcedureSuccessIgnoresLastError(t *testing.T) {
+	for _, returned := range []error{nil, syscall.Errno(0), syscall.Errno(5)} {
+		call := callWidgetProcedure(&widgetProcedureFixture{result: 1, returned: returned})
+		if call.result != 1 || call.err != nil {
+			t.Fatalf("successful native call returned an error: %+v", call)
+		}
 	}
 }

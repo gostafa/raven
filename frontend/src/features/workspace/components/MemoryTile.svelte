@@ -30,10 +30,21 @@
     confirmDelete: (opener: HTMLElement, folderId: string, card: Card) => void;
   } = $props();
   const progress = $derived(cardProgress(card));
+  const progressColor = $derived(
+    progress <= 50
+      ? '#f87171'
+      : progress <= 80
+        ? `color-mix(in oklab, #f87171 ${String(((80 - progress) / 30) * 100)}%, #facc15)`
+        : `color-mix(in oklab, #facc15 ${String(((100 - progress) / 20) * 100)}%, #4ade80)`,
+  );
 </script>
 
 <li class="workspace-control workspace-memory-tile">
-  <div class="workspace-memory-card" style:--progress-fill="var(--ink)" style:--progress-border="var(--line-strong)">
+  <div
+    class="workspace-memory-card"
+    style:--progress-fill={progressColor}
+    style:--progress-border="var(--progress-fill)"
+  >
     <span
       class="workspace-control workspace-card-progress-percentage"
       aria-label={$l.t('workspace.recallSuccess', { percentage: $l.percent(progress) })}

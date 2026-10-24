@@ -188,6 +188,7 @@ func mainWindowOptions(configuration *Configuration) application.WebviewWindowOp
 	options.BackgroundColour = application.NewRGB(zero, zero, zero)
 	options.URL = "/"
 	options.Mac = mainMacWindowOptions()
+	options.Windows.Theme = application.Dark
 
 	return options
 }
@@ -211,6 +212,7 @@ func floatingWindowOptions() application.WebviewWindowOptions {
 	options.MaximiseButtonState = application.ButtonDisabled
 	options.FullscreenButtonState = application.ButtonDisabled
 	options.Windows.HiddenOnTaskbar = true
+	options.Windows.Theme = application.Dark
 
 	return options
 }

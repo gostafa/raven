@@ -306,6 +306,17 @@ func TestMainWindowAllowsVideoHoverPlaybackWithoutClick(t *testing.T) {
 	}
 }
 
+func TestNativeWindowsPreserveDarkAppearance(t *testing.T) {
+	settings := nativeConfigurationFixture()
+	for _, window := range []application.WebviewWindowOptions{
+		mainWindowOptions(settings), widgetWindowOptions(settings), reviewWindowOptions(settings),
+	} {
+		if window.Windows.Theme != application.Dark {
+			t.Errorf("%s follows the Windows system theme instead of dark mode", window.Name)
+		}
+	}
+}
+
 func configurationFixture() configuration.Settings {
 	settings, err := configyaml.Load()
 	if err != nil {

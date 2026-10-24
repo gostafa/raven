@@ -6,10 +6,19 @@
   const l = useLocalization();
   const completed = $derived(cards.filter((card) => cardProgress(card) === 100).length);
   const progress = $derived(cards.length ? completed / cards.length : 0);
+  const percentage = $derived(progress * 100);
+  const progressColor = $derived(
+    percentage <= 50
+      ? '#f87171'
+      : percentage <= 80
+        ? `color-mix(in oklab, #f87171 ${String(((80 - percentage) / 30) * 100)}%, #facc15)`
+        : `color-mix(in oklab, #facc15 ${String(((100 - percentage) / 20) * 100)}%, #4ade80)`,
+  );
 </script>
 
 <span
   class="folder-progress"
+  style:--progress-color={progressColor}
   class:complete={cards.length > 0 && completed === cards.length}
   role="img"
   aria-label={`${$l.t('workspace.recallSuccess', { percentage: $l.percent(100) })}: ${$l.number(completed)} / ${$l.number(cards.length)}`}
@@ -31,7 +40,6 @@
 
 <style>
   .folder-progress {
-    --progress-color: #fff;
     position: absolute;
     bottom: 12px;
     inset-inline-end: 12px;
