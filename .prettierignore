@@ -4,9 +4,5 @@
 taskotter/**
 frontend/bindings/**
 frontend/dist/**
-# Hairline's fixed engine and generated standalone bench must remain byte-for-byte intact.
-frontend/public/hairline/kernel.js
-design/hairline/folder.js
-design/hairline/hairline-folder.html
 # Prettier treats .wxs as JavaScript; WiX authoring is XML.
 build/windows/wix/**/*.wxs
