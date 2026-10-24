@@ -19,6 +19,7 @@ import (
 	configuration "raven/internal/features/configuration/domain"
 	desktopports "raven/internal/features/desktop/ports"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
+	reminders "raven/internal/features/reminders/application"
 	"raven/internal/features/reminders/composition"
 	reminderports "raven/internal/features/reminders/ports"
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
@@ -81,11 +82,41 @@ func modules(path string, n *native, e *events) fx.Option {
 
 func waitPublished(t *testing.T, e *events) {
 	t.Helper()
+	// Reconciliation includes durable database writes. Allow slow CI disks
+	// without turning this lifecycle assertion into a one-second benchmark.
 	select {
 	case <-e.published:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("reminder did not publish")
 	}
+}
+
+type delayedPromptSource struct{ reminders.Source }
+
+func (source delayedPromptSource) ClaimNotificationPrompt() (bool, error) {
+	// Durable writes on Windows CI can take longer than one second.
+	time.Sleep(1100 * time.Millisecond)
+	return source.Source.ClaimNotificationPrompt()
+}
+
+func TestLifecyclePublishesAfterSlowPromptPersistence(t *testing.T) {
+	e := &events{published: make(chan struct{}, 1)}
+	n := &native{
+		start: func(context.Context) error { return nil },
+		stop:  func() error { return nil },
+	}
+	var control reminderports.Control
+	graph := fxtest.New(t,
+		modules(filepath.Join(t.TempDir(), "raven.db"), n, e),
+		fx.Decorate(func(source reminders.Source) reminders.Source {
+			return delayedPromptSource{Source: source}
+		}),
+		fx.Populate(&control),
+	)
+	graph.RequireStart()
+	t.Cleanup(func() { graph.RequireStop() })
+	control.Start()
+	waitPublished(t, e)
 }
 
 func TestLifecycleOrderingReadinessAndLockRelease(t *testing.T) {
