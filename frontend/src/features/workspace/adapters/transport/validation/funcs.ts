@@ -121,4 +121,4 @@ export function decodeList<T>(value: unknown, guard: (item: unknown) => item is 
   if (!Array.isArray(value)) throw new Error('Invalid Raven list response');
   return value.map((item: unknown) => decode(item, guard));
 }
-/* eslint-disable security/detect-object-injection -- Field names are fixed transport-schema keys supplied only by this module. */
+ 
