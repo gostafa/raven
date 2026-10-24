@@ -1,7 +1,6 @@
 <script lang="ts">
-  import { useLocalization } from '../../localization';
+  import { useLocalization, type MessageKey } from '../../localization';
   const l = useLocalization();
-  import type { MessageKey } from '../../localization';
   import { CardContent, type Card, type MediaURLPort } from '../../cards';
 
   import WorkspaceIcon from './WorkspaceIcon.svelte';
@@ -32,6 +31,9 @@
     removePart: () => Promise<void>;
     removeSelection: (event: SubmitEvent) => Promise<void>;
   } = $props();
+  function reportFailure() {
+    partError = 'workspace.this_part_could_not_be_removed_please_try_again';
+  }
 </script>
 
 <dialog
@@ -40,7 +42,7 @@
   aria-label={$l.t('workspace.contentPreview')}
   onclose={() => {
     selectedPart = null;
-    void restoreDialogFocus();
+    restoreDialogFocus().catch(reportFailure);
   }}
   oncancel={(event) => {
     if (saving) event.preventDefault();
@@ -98,7 +100,7 @@
   <form
     onsubmit={(event) => {
       event.preventDefault();
-      void removePart();
+      removePart().catch(reportFailure);
     }}
     aria-busy={saving}
   >
@@ -137,11 +139,13 @@
 >
   <form onsubmit={removeSelection} aria-busy={saving}>
     <h2 class="workspace-control" id="delete-title">
-      {$l.t('workspace.deleteTitle', { kind: $l.t(deletion?.cardId ? 'cards.card' : 'cards.folder') })}
+      {$l.t('workspace.deleteTitle', {
+        kind: $l.t((deletion?.cardId?.length ?? 0) > 0 ? 'cards.card' : 'cards.folder'),
+      })}
     </h2>
     <p class="workspace-control workspace-dialog-description">
       {$l.t('workspace.deleteNamed', { name: deletion?.title ?? '' })}
-      {deletion?.cardId
+      {(deletion?.cardId?.length ?? 0) > 0
         ? $l.t('workspace.its_content_and_review_history_will_be_removed')
         : $l.t('workspace.folderDeleted')}
       {$l.t('workspace.this_cannot_be_undone')}

@@ -24,11 +24,17 @@
   let failed = $state(false);
   const active = $derived(hovered && !hidden);
 
+  function previewFailed() {
+    failed = true;
+    preview?.stop();
+  }
   onMount(() => {
     preview = createPreviewPlayback(video, nativeStart);
     ready = video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
     failed = video.error !== null;
-    const hide = () => (hidden = document.hidden);
+    const hide = () => {
+      hidden = document.hidden;
+    };
     document.addEventListener('visibilitychange', hide);
     return () => {
       document.removeEventListener('visibilitychange', hide);
@@ -40,7 +46,7 @@
     if (hovered) hidden = false;
   });
   $effect(() => {
-    if (active) void preview?.start();
+    if (active) preview?.start().catch(previewFailed);
     else preview?.stop();
   });
   onDestroy(() => preview?.stop());
@@ -58,10 +64,18 @@
     preload="auto"
     aria-label={filename || $l.t('cards.video_preview')}
     class:pending={!ready || failed}
-    onloadeddata={() => (ready = true)}
-    oncanplay={() => preview?.retry()}
-    onpause={() => preview?.retry()}
-    onended={() => preview?.retry()}
+    onloadeddata={() => {
+      ready = true;
+    }}
+    oncanplay={() => {
+      preview?.retry().catch(previewFailed);
+    }}
+    onpause={() => {
+      preview?.retry().catch(previewFailed);
+    }}
+    onended={() => {
+      preview?.retry().catch(previewFailed);
+    }}
     onerror={() => {
       failed = true;
       preview?.stop();

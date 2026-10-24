@@ -42,26 +42,33 @@
     message = '';
     waiting = true;
     try {
-      try {
-        await playMedia(audio);
-      } catch (error) {
-        if (!(error instanceof DOMException) || error.name !== 'NotAllowedError' || !nativeStart) throw error;
-        await nativeStart.start(async () => {
-          if (request === attempt) await playMedia(audio);
-        });
-      }
+      await play(request);
     } catch {
       if (request === attempt) message = 'cards.playback_could_not_start_try_again';
     } finally {
       if (request === attempt) waiting = false;
     }
   }
+  async function play(request: number) {
+    try {
+      await playMedia(audio);
+    } catch (error) {
+      if (!(error instanceof DOMException) || error.name !== 'NotAllowedError' || !nativeStart) throw error;
+      await nativeStart.start(async () => {
+        if (request === attempt) await playMedia(audio);
+      });
+    }
+  }
+  function playbackFailed() {
+    message = 'cards.playback_could_not_start_try_again';
+    waiting = false;
+  }
   function toggle() {
     if (playing || waiting) {
       attempt++;
       audio.pause();
       waiting = false;
-    } else void start();
+    } else start().catch(playbackFailed);
   }
   $effect(() => {
     // Reset component state when an editor supplies a different source.
@@ -77,16 +84,16 @@
   });
   $effect(() => {
     if (!src || (!autoplay && !hovered)) return;
-    void start();
+    start().catch(playbackFailed);
     return () => {
       attempt++;
-      audio?.pause();
+      audio.pause();
       waiting = false;
     };
   });
   onDestroy(() => {
     attempt++;
-    audio?.pause();
+    audio.pause();
   });
 </script>
 
@@ -95,12 +102,24 @@
     bind:this={audio}
     {src}
     preload={autoplay ? 'auto' : 'metadata'}
-    onloadedmetadata={() => (duration = audio.duration)}
-    ondurationchange={() => (duration = audio.duration)}
-    ontimeupdate={() => (currentTime = audio.currentTime)}
-    onplay={() => (playing = true)}
-    onplaying={() => (waiting = false)}
-    onwaiting={() => (waiting = true)}
+    onloadedmetadata={() => {
+      duration = audio.duration;
+    }}
+    ondurationchange={() => {
+      duration = audio.duration;
+    }}
+    ontimeupdate={() => {
+      currentTime = audio.currentTime;
+    }}
+    onplay={() => {
+      playing = true;
+    }}
+    onplaying={() => {
+      waiting = false;
+    }}
+    onwaiting={() => {
+      waiting = true;
+    }}
     onpause={() => {
       attempt++;
       playing = false;

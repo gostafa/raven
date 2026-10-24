@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { toggleSelection } from '../../ui';
+  import { toggleSelection, ChoiceMenu, type ChoiceOption } from '../../ui';
   import MemoryTile from './MemoryTile.svelte';
   import FolderActions from './FolderActions.svelte';
   import { useLocalization } from '../../localization';
@@ -15,7 +15,6 @@
     type MediaURLPort,
     type PreviewStartPort,
   } from '../../cards';
-  import { ChoiceMenu, type ChoiceOption } from '../../ui';
   import WorkspaceIcon from './WorkspaceIcon.svelte';
   let {
     selectedFolder,
@@ -106,15 +105,19 @@
     <p class="workspace-control">
       {query
         ? $l.t('workspace.searchResults', { query: search.trim() })
-        : selectedFolder?.description || $l.t('workspace.big_ideas_small_details_and_everything_you_want_to_keep')}
+        : (selectedFolder?.description ?? '') ||
+          $l.t('workspace.big_ideas_small_details_and_everything_you_want_to_keep')}
     </p>
     {#if selectedFolder?.tags.length}<div class="workspace-tags">
         {#each selectedFolder.tags as tag (tag)}<span class="workspace-control"><bdi>{tag}</bdi></span>{/each}
       </div>{/if}
   </div>
   <div class="workspace-heading-actions">
-    <button class="workspace-control workspace-primary-button" onclick={(event) => openCard(event)}
-      ><WorkspaceIcon name="plus" size={17} /> {$l.t('workspace.new_card')}</button
+    <button
+      class="workspace-control workspace-primary-button"
+      onclick={(event) => {
+        openCard(event);
+      }}><WorkspaceIcon name="plus" size={17} /> {$l.t('workspace.new_card')}</button
     >{#if selectedFolder}{@const folder = selectedFolder}<FolderActions
         {folder}
         hasReviews={scheduledItems.some((entry) => entry.card.folderId === folder.id)}
@@ -135,7 +138,9 @@
   <div class="workspace-search-folders">
     {#each visibleFolders as folder (folder.id)}<button
         class="workspace-control workspace-secondary-button"
-        onclick={() => navigate(folder.id)}
+        onclick={() => {
+          navigate(folder.id);
+        }}
         ><WorkspaceIcon name="folder" size={16} /> <bdi>{folder.title}</bdi>
         <WorkspaceIcon name="arrow" size={15} /></button
       >{/each}
@@ -160,7 +165,7 @@
       label={$l.t('workspace.sort')}
       options={cardSortOptions}
       selected={[cardSort]}
-      onselect={(value) => {
+      onselect={(value: CardSort) => {
         cardSort = value;
       }}
     />
@@ -170,7 +175,7 @@
       selected={cardKinds}
       multiple
       hint={$l.t('workspace.cards_match_any_selected_content_type_including_hints')}
-      onselect={(kind) => {
+      onselect={(kind: CardContentKind) => {
         cardKinds = toggleSelection(cardKinds, kind);
       }}
       onclear={() => {
@@ -179,7 +184,7 @@
     />
     <RecallFilter
       range={cardProgressRange}
-      onchange={(range) => {
+      onchange={(range: CardProgressRange) => {
         cardProgressRange = range;
       }}
     />
@@ -259,7 +264,8 @@
         }}>{$l.t('workspace.clear_search')}</button
       >{:else if !hasCardFilters}<button
         class="workspace-control workspace-primary-button"
-        onclick={(event) => openCard(event)}
-        ><WorkspaceIcon name="plus" size={16} /> {$l.t('workspace.createCard')}</button
+        onclick={(event) => {
+          openCard(event);
+        }}><WorkspaceIcon name="plus" size={16} /> {$l.t('workspace.createCard')}</button
       >{/if}
   </div>{/if}

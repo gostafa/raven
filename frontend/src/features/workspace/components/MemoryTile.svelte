@@ -30,17 +30,10 @@
     confirmDelete: (opener: HTMLElement, folderId: string, card: Card) => void;
   } = $props();
   const progress = $derived(cardProgress(card));
-  const borderColor = $derived(
-    progress <= 50
-      ? '#ef4444'
-      : progress <= 80
-        ? `color-mix(in srgb, #ef4444, #eab308 ${((progress - 50) / 30) * 100}%)`
-        : `color-mix(in srgb, #eab308, #22c55e ${Math.min(100, ((progress - 80) / 20) * 100)}%)`,
-  );
 </script>
 
 <li class="workspace-control workspace-memory-tile">
-  <div class="workspace-memory-card" style:--progress-fill="var(--ink)" style:--progress-border={borderColor}>
+  <div class="workspace-memory-card" style:--progress-fill="var(--ink)" style:--progress-border="var(--line-strong)">
     <span
       class="workspace-control workspace-card-progress-percentage"
       aria-label={$l.t('workspace.recallSuccess', { percentage: $l.percent(progress) })}
@@ -52,7 +45,9 @@
         {mediaURL}
         {nativeStart}
         compact
-        onopen={(itemId, opener) => openPart(card, itemId, opener)}
+        onopen={(itemId: string, opener: HTMLElement) => {
+          openPart(card, itemId, opener);
+        }}
       />
     </div>
   </div>
@@ -61,11 +56,23 @@
       label={$l.t('workspace.cardOptions', { name: cardPreview(card) })}
       {disabled}
       actions={[
-        { label: $l.t('workspace.reviewCard'), onselect: (opener) => startReview(opener, card) },
-        { label: $l.t('workspace.edit_card'), onselect: (opener) => editCard(opener, card) },
+        {
+          label: $l.t('workspace.reviewCard'),
+          onselect: (opener: HTMLButtonElement) => {
+            startReview(opener, card);
+          },
+        },
+        {
+          label: $l.t('workspace.edit_card'),
+          onselect: (opener: HTMLButtonElement) => {
+            editCard(opener, card);
+          },
+        },
         {
           label: $l.t('workspace.delete_card'),
-          onselect: (opener) => confirmDelete(opener, card.folderId, card),
+          onselect: (opener: HTMLButtonElement) => {
+            confirmDelete(opener, card.folderId, card);
+          },
         },
       ]}
     /></span

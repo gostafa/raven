@@ -1,4 +1,5 @@
-import type { LanguagePreference, LocalizationState } from '../../../localization';
+import type { LocalizationState } from '../../../localization';
+import { isRecord } from './validation/funcs';
 import type {
   TransportConfiguration,
   TransportCard,
@@ -10,10 +11,9 @@ import type {
   TransportMedia,
   TransportArchiveResult,
 } from './types';
-import type { RuntimeConfiguration } from '../../domain/types';
+import type { RuntimeConfiguration, AppPorts } from '../../domain/types';
 import type { Card } from '../../../cards';
 import type { Folder } from '../../../folders';
-import type { AppPorts } from '../../domain/types';
 import type { ArchiveResult } from '../../../folderarchive';
 
 export function archiveFromTransport(value: TransportArchiveResult): ArchiveResult {
@@ -70,11 +70,7 @@ function itemFromTransport(value: TransportItem, textKind: string): Card['items'
     folderId: value.folder_id,
     cardId: value.card_id,
     kind: value.kind === textKind ? 'text' : value.kind,
-    text: value.text,
-    originalName: value.original_name,
-    mimeType: value.mime_type,
-    relativePath: value.relative_path,
-    byteSize: value.byte_size,
+    ...itemContent(value),
     position: value.position,
     hint: value.hint ?? false,
     lastNotifiedDue: value.last_notified_due,
@@ -83,6 +79,17 @@ function itemFromTransport(value: TransportItem, textKind: string): Card['items'
       automatic: review.automatic,
       log: reviewFromTransport(review.log),
     })),
+  };
+}
+function itemContent(
+  value: TransportItem,
+): Pick<Card['items'][number], 'text' | 'originalName' | 'mimeType' | 'relativePath' | 'byteSize'> {
+  return {
+    text: value.text,
+    originalName: value.original_name,
+    mimeType: value.mime_type,
+    relativePath: value.relative_path,
+    byteSize: value.byte_size,
   };
 }
 export function draftToTransport(
@@ -97,7 +104,7 @@ export function draftToTransport(
     ...(value.hint === undefined ? {} : { hint: value.hint }),
   };
 }
-export function mediaFromTransport(value: TransportMedia) {
+export function mediaFromTransport(value: TransportMedia): Awaited<ReturnType<AppPorts['SelectMediaFiles']>>[number] {
   return {
     sourcePath: value.source_path,
     originalName: value.original_name,
@@ -129,20 +136,19 @@ export function parseTransport(payload: string): unknown {
 }
 
 export function localizationFromTransport(value: unknown): LocalizationState {
-  if (typeof value !== 'object' || value === null) throw new Error('Invalid localization response');
-  const data = value as Record<string, unknown>;
+  if (!isRecord(value)) throw new Error('Invalid localization response');
+  const { preference, locale, direction, revision } = value;
+  if (preference !== 'system' && preference !== 'en' && preference !== 'ar')
+    throw new Error('Invalid localization response');
+  if (locale !== 'en' && locale !== 'ar') throw new Error('Invalid localization response');
+  validateLocalizationMetadata({ direction, revision }, locale);
+  return { preference, locale, direction: locale === 'ar' ? 'rtl' : 'ltr', revision: Number(revision) };
+}
+function validateLocalizationMetadata(data: Record<string, unknown>, locale: string): void {
   if (
-    !['system', 'en', 'ar'].includes(String(data.preference)) ||
-    !['en', 'ar'].includes(String(data.locale)) ||
-    data.direction !== (data.locale === 'ar' ? 'rtl' : 'ltr') ||
+    data.direction !== (locale === 'ar' ? 'rtl' : 'ltr') ||
     !Number.isSafeInteger(data.revision) ||
     Number(data.revision) < 0
   )
     throw new Error('Invalid localization response');
-  return {
-    preference: data.preference as LanguagePreference,
-    locale: data.locale as 'en' | 'ar',
-    direction: data.direction as 'ltr' | 'rtl',
-    revision: Number(data.revision),
-  };
 }

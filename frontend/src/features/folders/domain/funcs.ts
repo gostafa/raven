@@ -1,4 +1,4 @@
-import type { Folder, FolderMetrics, FolderSort, Preferences, PreferencesStorage, Workspace } from './types';
+import type { Folder, FolderSelection, Preferences, PreferencesStorage, Workspace } from './types';
 
 export function emptyWorkspace(): Workspace {
   return { folders: [], selectedFolderId: null, sidebarOpen: true };
@@ -25,8 +25,7 @@ export function loadPreferences(
   if (saved === null) return { selectedFolderId: null, sidebarOpen: true };
 
   const value: unknown = JSON.parse(saved);
-  if (value === null || typeof value !== 'object') throw new Error('Invalid saved preferences');
-  const data = value as Record<string, unknown>;
+  const data = preferencesRecord(value);
   if (
     typeof data.sidebarOpen !== 'boolean' ||
     (data.selectedFolderId !== null && typeof data.selectedFolderId !== 'string')
@@ -38,6 +37,13 @@ export function loadPreferences(
     selectedFolderId: data.selectedFolderId,
     sidebarOpen: data.sidebarOpen,
   };
+}
+function preferencesRecord(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) return value;
+  throw new Error('Invalid saved preferences');
+}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 export function savePreferences(
@@ -59,31 +65,31 @@ export function reconcileFolders(workspace: Workspace, folders: Folder[]): Works
   };
 }
 
-export function selectFolders(
-  folders: Folder[],
-  tags: string[],
-  sort: FolderSort,
-  metrics: ReadonlyMap<string, FolderMetrics>,
-  compare: (left: string, right: string) => number = (left, right) => left.localeCompare(right),
-): Folder[] {
+export function selectFolders(folders: Folder[], selection: FolderSelection): Folder[] {
+  const { tags, sort } = selection;
   const selected = folders.filter((folder) =>
     tags.every((tag) => folder.tags.some((value) => value.toLowerCase() === tag.toLowerCase())),
   );
   if (sort === 'default') return selected;
-  return selected.sort((a, b) => {
-    const left = metrics.get(a.id);
-    const right = metrics.get(b.id);
-    let difference: number;
-    if (sort.startsWith('tags-')) difference = a.tags.length - b.tags.length;
-    else if (sort.startsWith('cards-')) difference = (left?.cardCount ?? 0) - (right?.cardCount ?? 0);
-    else {
-      const leftReview = left?.nextReview ?? null;
-      const rightReview = right?.nextReview ?? null;
-      if (leftReview === null || rightReview === null) {
-        return leftReview === null && rightReview === null ? compare(a.title, b.title) : leftReview === null ? 1 : -1;
-      }
-      difference = leftReview - rightReview;
-    }
-    return (sort.endsWith('-desc') ? -difference : difference) || compare(a.title, b.title);
-  });
+  return selected.sort((left, right) => compareFolders(left, right, selection));
+}
+function compareFolders(left: Folder, right: Folder, selection: FolderSelection): number {
+  const compare = selection.compare ?? ((a: string, b: string) => a.localeCompare(b));
+  const difference = folderDifference(left, right, selection);
+  const leftReview = selection.metrics.get(left.id)?.nextReview ?? null;
+  const rightReview = selection.metrics.get(right.id)?.nextReview ?? null;
+  if (selection.sort.startsWith('review-') && (leftReview === null || rightReview === null))
+    return missingReviewDifference(leftReview, rightReview) || compare(left.title, right.title);
+  return (selection.sort.endsWith('-desc') ? -difference : difference) || compare(left.title, right.title);
+}
+function missingReviewDifference(left: number | null, right: number | null): number {
+  if (left === right) return 0;
+  return left === null ? 1 : -1;
+}
+function folderDifference(left: Folder, right: Folder, selection: FolderSelection): number {
+  if (selection.sort.startsWith('tags-')) return left.tags.length - right.tags.length;
+  const leftMetric = selection.metrics.get(left.id);
+  const rightMetric = selection.metrics.get(right.id);
+  if (selection.sort.startsWith('cards-')) return (leftMetric?.cardCount ?? 0) - (rightMetric?.cardCount ?? 0);
+  return (leftMetric?.nextReview ?? 0) - (rightMetric?.nextReview ?? 0);
 }

@@ -6,7 +6,7 @@ import { createRuntime, loadConfiguration } from './features/workspace/adapters'
 const target = document.getElementById('app');
 if (!target) throw new Error('Raven mount element is missing');
 
-async function start(target: HTMLElement) {
+async function start(container: HTMLElement) {
   const configuration = await loadConfiguration();
   const backend = createRuntime(configuration);
   const localization = createLocalization(backend, {
@@ -16,7 +16,7 @@ async function start(target: HTMLElement) {
     },
   });
   await localization.start();
-  mount(App, { target, props: { backend, localization } });
+  mount(App, { target: container, props: { backend, localization } });
 }
 
 void start(target).catch(() => {

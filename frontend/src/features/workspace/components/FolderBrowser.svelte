@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { toggleSelection } from '../../ui';
+  import { toggleSelection, ChoiceMenu, type ChoiceOption } from '../../ui';
   import FolderActions from './FolderActions.svelte';
   import FolderProgress from './FolderProgress.svelte';
   import { useLocalization } from '../../localization';
@@ -7,7 +7,6 @@
   import { FolderTile, parseTags, selectFolderPapers, type Folder, type FolderSort } from '../../folders';
   import type { Card, MediaURLPort, PreviewStartPort } from '../../cards';
   import type { ReviewItem } from '../../reviews';
-  import { ChoiceMenu, type ChoiceOption } from '../../ui';
   import WorkspaceIcon from './WorkspaceIcon.svelte';
   let {
     saving,
@@ -80,7 +79,7 @@
       label={$l.t('workspace.sort')}
       options={folderSortOptions}
       selected={[folderSort]}
-      onselect={(value) => {
+      onselect={(value: FolderSort) => {
         folderSort = value;
       }}
     />
@@ -91,7 +90,7 @@
       multiple
       searchable
       hint={$l.t('workspace.folders_must_match_every_selected_tag')}
-      onselect={(tag) => {
+      onselect={(tag: string) => {
         folderTags = toggleSelection(folderTags, tag);
       }}
       onclear={() => {
@@ -140,7 +139,12 @@
   {#each filteredFolders as folder (folder.id)}
     <li class="workspace-control workspace-folder-tile">
       <FolderTile papers={selectFolderPapers(cards, folder.id)} {mediaURL} {nativeStart}>
-        <button class="workspace-control workspace-folder-card" onclick={() => navigate(folder.id)}>
+        <button
+          class="workspace-control workspace-folder-card"
+          onclick={() => {
+            navigate(folder.id);
+          }}
+        >
           <div class="workspace-folder-card-content">
             <h3 class="workspace-control"><bdi>{folder.title}</bdi></h3>
             <p class="workspace-control" dir="auto">

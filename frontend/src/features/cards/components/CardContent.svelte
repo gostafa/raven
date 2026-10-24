@@ -42,7 +42,7 @@
   );
   const rowTracks = $derived(
     [...new Array<number>(rows).keys()]
-      .map((row) => `minmax(0, ${active !== null && Math.floor(active / 2) === row ? 3 : 1}fr)`)
+      .map((row) => `minmax(0, ${active !== null && Math.floor(active / 2) === row ? '3' : '1'}fr)`)
       .join(' '),
   );
   function reviewTime(due: string): string {
@@ -52,7 +52,9 @@
       ? $l.t('cards.ready_to_review_now')
       : $l.t('cards.nextReview', { date: $l.date(date) });
   }
-  onDestroy(() => stopMedia(root));
+  onDestroy(() => {
+    stopMedia(root);
+  });
 </script>
 
 <div
@@ -89,7 +91,8 @@
         if (compact) focused = index;
       }}
       onfocusout={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node)) focused = null;
+        if (!event.currentTarget.contains(event.relatedTarget instanceof Node ? event.relatedTarget : null))
+          focused = null;
       }}
     >
       {#if item.kind === 'text'}<p dir="auto">{item.text}</p>
@@ -114,7 +117,9 @@
           hovered={compact && hovered === index}
           {nativeStart}
           src={mediaURL(item)}
-          onerror={() => (failed = [...failed, item.id])}
+          onerror={() => {
+            failed = [...failed, item.id];
+          }}
         />
       {:else if item.kind === 'video'}
         <video
@@ -126,18 +131,22 @@
           preload={reviewing ? 'auto' : 'none'}
           aria-label={item.originalName}
           src={mediaURL(item)}
-          onerror={() => (failed = [...failed, item.id])}
+          onerror={() => {
+            failed = [...failed, item.id];
+          }}
         ></video>{#if !reviewing}<span class="media-name">{item.originalName}</span>{/if}
       {/if}
       {#if compact}<span class="review-time"
-          >{item.hint ? $l.t('cards.hint_for_other_items') : reviewTime(item.schedule.Due)}</span
+          >{item.hint === true ? $l.t('cards.hint_for_other_items') : reviewTime(item.schedule.Due)}</span
         >{/if}
       {#if onopen}
         <button
           class="open-part"
           type="button"
           aria-label={$l.t('cards.openPart', { kind: $l.t(contentKindMessageKeys[item.kind]), count: index + 1 })}
-          onclick={(event) => onopen?.(item.id, event.currentTarget)}
+          onclick={(event) => {
+            onopen?.(item.id, event.currentTarget);
+          }}
         ></button>
       {/if}
     </div>

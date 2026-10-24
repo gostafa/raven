@@ -25,7 +25,7 @@
       widgetPointerStart &&
       Math.hypot(event.screenX - widgetPointerStart.x, event.screenY - widgetPointerStart.y) > 4;
     widgetPointerStart = undefined;
-    if (moved) return;
+    if (moved === true) return;
     try {
       error = '';
       await backend.ToggleFloatingReview();
@@ -33,15 +33,18 @@
       error = 'companion.raven_could_not_complete_that_action_please_try_again';
     }
   }
+  function reportFailure() {
+    error = 'companion.raven_could_not_complete_that_action_please_try_again';
+  }
   function focus() {
-    void refresh();
-    void backend.RefreshReminders();
+    refresh().catch(reportFailure);
+    backend.RefreshReminders().catch(reportFailure);
   }
   onMount(() => {
     const dispose = backend.events.onSchedulesChanged(() => {
-      void refresh();
+      refresh().catch(reportFailure);
     });
-    void refresh();
+    refresh().catch(reportFailure);
     const timer = window.setInterval(() => {
       now = backend.now();
     }, 1000);
@@ -129,7 +132,7 @@
     padding: 0;
     border: 0;
     border-radius: 50%;
-    background: #ff001a;
+    background: #000;
     color: #fff;
     font-size: 12px;
     line-height: 1;

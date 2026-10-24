@@ -85,3 +85,9 @@ export interface MediaPort {
   SelectMediaFiles(kind: MediaKind): Promise<SelectedMedia[]>;
   newKey(): string;
 }
+
+export interface CardSelectionEntry {
+  card: Card;
+  nextReview: number | null;
+  progress: number;
+}

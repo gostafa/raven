@@ -32,7 +32,7 @@ test('loading failures leave the caller snapshot unchanged and allow retry', asy
 
 test('card save retries reuse an already-created folder after a failed card write', async () => {
   let creates = 0;
-  let input = {
+  const input = {
     folderId: '__new',
     newFolderTitle: 'Ideas',
     editing: null,

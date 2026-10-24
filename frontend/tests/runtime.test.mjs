@@ -82,7 +82,7 @@ test('runtime JSON transport preserves requests, records, nullable lists, and pa
   const input = { folderId: 'folder', items: [{ kind: 'text', text: 'Remember' }] };
   assert.equal((await runtime.CreateCard(input)).id, 'card');
   await runtime.UpdateCard({ ...input, cardId: 'card' });
-  await runtime.ReviewItem('folder', 'card', 'item', 3);
+  await runtime.ReviewItem({ folderId: 'folder', cardId: 'card', itemId: 'item', rating: 3 });
   assert.equal((await runtime.SelectMediaFiles('image'))[0].sourcePath, '/test.png');
   const create = globalThis.ravenRuntime.calls.find((call) => call.name === 'CreateCard');
   assert.deepEqual(JSON.parse(create.args[0]), { folder_id: 'folder', items: [{ kind: 'plain', text: 'Remember' }] });
@@ -134,6 +134,7 @@ test('folder archive transport sends complete selections and preserves import mo
 test('runtime consumes configured event names and media routes and releases subscriptions', async (t) => {
   globalThis.ravenRuntime = {
     configuration: {
+      localization_changed: 'custom:language',
       preferences_storage_key: 'custom.preferences',
       media_route_prefix: '/saved/',
       text_kind: 'plain',

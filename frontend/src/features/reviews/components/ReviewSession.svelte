@@ -47,7 +47,9 @@
   $effect(() => {
     if (entry || saving || disabled) return;
     const timer = window.setTimeout(close, 5000);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+    };
   });
 
   function close() {
@@ -56,6 +58,10 @@
     onclose();
   }
 
+  async function focusRating() {
+    await tick();
+    (ratingButton ?? completionButton)?.focus();
+  }
   async function rate(rating: number) {
     if (!entry || saving || disabled) return;
     saving = true;
@@ -69,15 +75,16 @@
       error = 'reviews.your_review_could_not_be_saved_try_again_before_moving_on';
     } finally {
       saving = false;
-      await tick();
-      (ratingButton ?? completionButton)?.focus();
+      await focusRating();
     }
   }
 
   onMount(() => {
     (ratingButton ?? completionButton)?.focus();
   });
-  onDestroy(() => stopMedia(root));
+  onDestroy(() => {
+    stopMedia(root);
+  });
 </script>
 
 <div class="review-session" class:floating class:media-review={mediaReview} bind:this={root}>

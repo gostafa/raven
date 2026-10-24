@@ -35,3 +35,9 @@ export interface FolderMetrics {
   cardCount: number;
   nextReview: number | null;
 }
+export interface FolderSelection {
+  tags: string[];
+  sort: FolderSort;
+  metrics: ReadonlyMap<string, FolderMetrics>;
+  compare?: (left: string, right: string) => number;
+}

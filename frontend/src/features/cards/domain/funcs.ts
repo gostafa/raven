@@ -1,38 +1,39 @@
-import type { Card, CardSelection, ContentItem, ItemDraft, EditorItem } from './types';
+import type { Card, CardSelection, ContentItem, ItemDraft, EditorItem, CardSelectionEntry } from './types';
 
-export function selectCards(cards: readonly Card[], selection: CardSelection): Card[] {
+function selectionEntry(card: Card): CardSelectionEntry {
+  const items = card.items.filter((item) => item.hint !== true);
+  const dates = items.map((item) => new Date(item.schedule.Due).getTime()).filter(Number.isFinite);
+  return { card, nextReview: dates.length ? Math.min(...dates) : null, progress: cardProgress(card) };
+}
+function selectedEntry(entry: CardSelectionEntry, selection: CardSelection): boolean {
   const { minimum = 0, maximum = 100 } = selection.progressRange ?? {};
-  const entries = cards.map((card) => {
-    const items = card.items.filter((item) => item.hint !== true);
-    const dates = items.map((item) => new Date(item.schedule.Due).getTime()).filter(Number.isFinite);
-    return {
-      card,
-      nextReview: dates.length ? Math.min(...dates) : null,
-      progress: cardProgress(card),
-    };
-  });
-  return entries
-    .filter(
-      ({ card, progress }) =>
-        (!selection.kinds.length || card.items.some((item) => selection.kinds.some((kind) => kind === item.kind))) &&
-        progress >= minimum &&
-        progress <= maximum,
-    )
-    .sort((a, b) => {
-      let difference = 0;
-      if (selection.sort.startsWith('review-')) {
-        if (a.nextReview === null || b.nextReview === null) {
-          if (a.nextReview !== b.nextReview) return a.nextReview === null ? 1 : -1;
-        } else difference = a.nextReview - b.nextReview;
-      } else if (selection.sort.startsWith('progress-')) difference = a.progress - b.progress;
-      else difference = a.card.createdAt - b.card.createdAt;
-      if (selection.sort.endsWith('-desc')) difference = -difference;
-      return (
-        difference ||
-        b.card.createdAt - a.card.createdAt ||
-        a.card.folderId.localeCompare(b.card.folderId) ||
-        a.card.id.localeCompare(b.card.id)
-      );
+  const kindsMatch =
+    !selection.kinds.length || entry.card.items.some((item) => selection.kinds.some((kind) => kind === item.kind));
+  return kindsMatch && entry.progress >= minimum && entry.progress <= maximum;
+}
+function reviewDifference(left: CardSelectionEntry, right: CardSelectionEntry): number {
+  if (left.nextReview === right.nextReview) return 0;
+  if (left.nextReview === null) return 1;
+  if (right.nextReview === null) return -1;
+  return left.nextReview - right.nextReview;
+}
+function selectionDifference(left: CardSelectionEntry, right: CardSelectionEntry, sort: CardSelection['sort']): number {
+  if (sort.startsWith('review-')) return reviewDifference(left, right);
+  if (sort.startsWith('progress-')) return left.progress - right.progress;
+  return left.card.createdAt - right.card.createdAt;
+}
+function selectionTie(left: Card, right: Card): number {
+  return (
+    right.createdAt - left.createdAt || left.folderId.localeCompare(right.folderId) || left.id.localeCompare(right.id)
+  );
+}
+export function selectCards(cards: readonly Card[], selection: CardSelection): Card[] {
+  return cards
+    .map(selectionEntry)
+    .filter((entry) => selectedEntry(entry, selection))
+    .sort((left, right) => {
+      const difference = selectionDifference(left, right, selection.sort);
+      return (selection.sort.endsWith('-desc') ? -difference : difference) || selectionTie(left.card, right.card);
     })
     .map(({ card }) => card);
 }
@@ -60,11 +61,12 @@ export function saveItems(items: EditorItem[]): ItemDraft[] {
 }
 
 export function hasContent(items: ItemDraft[]): boolean {
-  return items.some((item) =>
-    item.kind === 'text'
-      ? (item.text?.trim().length ?? 0) > 0
-      : (item.id?.length ?? 0) > 0 || (item.sourcePath?.length ?? 0) > 0,
-  );
+  return items.some(itemHasContent);
+}
+
+function itemHasContent(item: ItemDraft): boolean {
+  if (item.kind === 'text') return (item.text?.trim().length ?? 0) > 0;
+  return (item.id?.length ?? 0) > 0 || (item.sourcePath?.length ?? 0) > 0;
 }
 
 export function moveItem(items: EditorItem[], key: string, direction: -1 | 1): EditorItem[] {

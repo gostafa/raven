@@ -140,10 +140,10 @@ test('legacy workspace folders and preferences are ignored and left untouched', 
 test('folder filters match every selected tag without case sensitivity', () => {
   const folders = [folder, { ...folder, id: 'both', tags: ['personal', 'Work'] }];
   assert.deepEqual(
-    selectFolders(folders, ['PERSONAL', 'work'], 'default', new Map()).map((item) => item.id),
+    selectFolders(folders, { tags: ['PERSONAL', 'work'], sort: 'default', metrics: new Map() }).map((item) => item.id),
     ['both'],
   );
-  assert.equal(selectFolders(folders, ['missing'], 'default', new Map()).length, 0);
+  assert.equal(selectFolders(folders, { tags: ['missing'], sort: 'default', metrics: new Map() }).length, 0);
   assert.equal(folders.length, 2);
 });
 
@@ -167,7 +167,7 @@ test('folder sorting supports counts and review times, keeping unscheduled folde
     ['review-desc', ['a', 'b', 'c']],
   ])
     assert.deepEqual(
-      selectFolders(folders, [], sort, metrics).map((item) => item.id),
+      selectFolders(folders, { tags: [], sort, metrics }).map((item) => item.id),
       expected,
     );
   assert.deepEqual(

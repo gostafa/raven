@@ -17,9 +17,9 @@
     folders: Folder[];
     busy: boolean;
     error: string;
-    onexport(ids: string[]): void;
-    onimport(mode: ImportMode): void;
-    onclose(): void;
+    onexport: (ids: string[]) => void;
+    onimport: (mode: ImportMode) => void;
+    onclose: () => void;
   } = $props();
   let dialog = $state<HTMLDialogElement>();
   let selected = $state<string[]>([]);
@@ -35,11 +35,14 @@
     }
   });
 
+  function submitImport() {
+    if (operation === 'import' && mode) onimport(mode);
+  }
   function submit(event: SubmitEvent) {
     event.preventDefault();
     if (busy) return;
     if (operation === 'export' && selected.length) onexport(selected);
-    if (operation === 'import' && mode) onimport(mode);
+    submitImport();
   }
 </script>
 
@@ -68,7 +71,9 @@
           type="button"
           class="select-all"
           disabled={busy}
-          onclick={() => (selected = selected.length === folders.length ? [] : folders.map((folder) => folder.id))}
+          onclick={() => {
+            selected = selected.length === folders.length ? [] : folders.map((folder) => folder.id);
+          }}
           >{selected.length === folders.length
             ? $l.t('folderarchive.clear_selection')
             : $l.t('folderarchive.select_all')}</button

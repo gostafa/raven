@@ -24,3 +24,9 @@ export interface PreviewEventsPort {
   emit(name: string): Promise<unknown>;
   newKey(): string;
 }
+
+export interface PreviewPlaybackPort {
+  retry(): Promise<void>;
+  start(): Promise<void>;
+  stop(position?: number): void;
+}

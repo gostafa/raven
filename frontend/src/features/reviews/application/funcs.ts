@@ -11,5 +11,5 @@ export async function loadDueReview(
   return { entries: reviewItems(savedCards).filter((entry) => entry.dueAt <= now()), folders: savedFolders };
 }
 export async function saveReview(port: ReviewPort, entry: ReviewItem, rating: number): Promise<Card> {
-  return port.ReviewItem(entry.card.folderId, entry.card.id, entry.item.id, rating);
+  return await port.ReviewItem({ folderId: entry.card.folderId, cardId: entry.card.id, itemId: entry.item.id, rating });
 }

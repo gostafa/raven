@@ -10,10 +10,9 @@
 
 <span
   class="folder-progress"
-  style:--progress-color={`hsl(${progress * 120} 70% 45%)`}
   class:complete={cards.length > 0 && completed === cards.length}
   role="img"
-  aria-label={`${$l.t('workspace.recallSuccess', { percentage: $l.percent(100) })}: ${completed} / ${cards.length}`}
+  aria-label={`${$l.t('workspace.recallSuccess', { percentage: $l.percent(100) })}: ${$l.number(completed)} / ${$l.number(cards.length)}`}
 >
   <svg viewBox="0 0 48 48" aria-hidden="true">
     <circle class="track" cx="24" cy="24" r="20" />
@@ -23,7 +22,7 @@
       cy="24"
       r="20"
       pathLength="100"
-      stroke-dasharray={`${progress * 100} 100`}
+      stroke-dasharray={`${String(progress * 100)} 100`}
       opacity={completed ? 1 : 0}
     />
   </svg>
@@ -32,6 +31,7 @@
 
 <style>
   .folder-progress {
+    --progress-color: #fff;
     position: absolute;
     bottom: 12px;
     inset-inline-end: 12px;

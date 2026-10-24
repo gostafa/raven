@@ -4,7 +4,5 @@ export type PopoverPositioner = (anchor: HTMLElement, panel: HTMLElement, alignm
 export type PopoverTracker = (
   anchor: HTMLElement,
   panel: HTMLElement,
-  alignment: 'start' | 'end',
-  dismiss: () => void,
-  ignorePanelScroll?: boolean,
+  options: { alignment: 'start' | 'end'; dismiss: () => void; ignorePanelScroll?: boolean },
 ) => () => void;

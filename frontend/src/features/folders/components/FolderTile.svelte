@@ -22,10 +22,14 @@
   const active = $derived(hovered || focused);
   onMount(() => {
     const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const update = () => (reducedMotion = preference.matches);
+    const update = () => {
+      reducedMotion = preference.matches;
+    };
     update();
     preference.addEventListener('change', update);
-    return () => preference.removeEventListener('change', update);
+    return () => {
+      preference.removeEventListener('change', update);
+    };
   });
 </script>
 

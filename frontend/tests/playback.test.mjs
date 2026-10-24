@@ -82,7 +82,9 @@ test('a queued native start cannot play after leaving, even after another hover 
 test('a failed native event request removes its listener and rejects the start', async () => {
   let removed = false;
   const starter = createNativePreviewStarter({
-    once: () => () => (removed = true),
+    once: () => () => {
+      removed = true;
+    },
     emit: async () => {
       throw new Error('native window unavailable');
     },

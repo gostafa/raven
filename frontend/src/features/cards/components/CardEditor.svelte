@@ -26,14 +26,22 @@
   let root: HTMLFieldSetElement;
   let removeDialog = $state<HTMLDialogElement>();
   let removal = $state<EditorItem | null>(null);
-  onDestroy(() => stopMedia(root));
+  onDestroy(() => {
+    stopMedia(root);
+  });
 
   $effect(() => {
-    const dialog = root?.closest('dialog');
-    const pause = () => stopMedia(root);
+    const dialog = root.closest('dialog');
+    const pause = () => {
+      stopMedia(root);
+    };
     dialog?.addEventListener('close', pause);
     return () => dialog?.removeEventListener('close', pause);
   });
+
+  function canRemove(target: EditorItem | null): boolean {
+    return !disabled && !selecting && target !== null;
+  }
 
   async function addFiles(kind: MediaKind) {
     selecting = true;
@@ -61,13 +69,17 @@
               type="button"
               aria-label={$l.t('cards.moveUp', { count: index + 1 })}
               disabled={index === 0}
-              onclick={() => (items = moveItem(items, item.key, -1))}>↑</button
+              onclick={() => {
+                items = moveItem(items, item.key, -1);
+              }}>↑</button
             >
             <button
               type="button"
               aria-label={$l.t('cards.moveDown', { count: index + 1 })}
               disabled={index === items.length - 1}
-              onclick={() => (items = moveItem(items, item.key, 1))}>↓</button
+              onclick={() => {
+                items = moveItem(items, item.key, 1);
+              }}>↓</button
             >
             <button
               type="button"
@@ -84,12 +96,15 @@
             type="checkbox"
             role="switch"
             aria-label={$l.t('cards.rememberItem', { count: index + 1 })}
-            checked={!item.hint}
-            onchange={(event) => (item.hint = !event.currentTarget.checked)}
+            checked={item.hint !== true}
+            onchange={(event) => {
+              item.hint = !event.currentTarget.checked;
+            }}
           />
           <span
             >{$l.t('cards.remember_this')}
-            <small>{item.hint ? $l.t('cards.hint_for_other_items') : $l.t('cards.included_in_reviews')}</small></span
+            <small>{item.hint === true ? $l.t('cards.hint_for_other_items') : $l.t('cards.included_in_reviews')}</small
+            ></span
           >
         </label>
         {#if item.kind === 'text'}<textarea
@@ -105,8 +120,11 @@
     {/each}
   </ol>
   <div class="add-actions">
-    <button type="button" onclick={() => (items = [...items, textDraft('', media.newKey())])}
-      >{$l.t('cards.text')}</button
+    <button
+      type="button"
+      onclick={() => {
+        items = [...items, textDraft('', media.newKey())];
+      }}>{$l.t('cards.text')}</button
     >{#each kinds as kind (kind)}<button type="button" onclick={() => addFiles(kind)}
         >+ {kind === 'image'
           ? $l.t('cards.images')
@@ -119,7 +137,13 @@
 <p class="hint">{$l.t('cards.mix_text_and_files_in_any_order_empty_text_blocks_are_skipped')}</p>
 {#if selecting}<p class="hint" role="status">{$l.t('cards.choosing_files')}</p>{/if}
 
-<dialog bind:this={removeDialog} aria-labelledby="remove-item-title" onclose={() => (removal = null)}>
+<dialog
+  bind:this={removeDialog}
+  aria-labelledby="remove-item-title"
+  onclose={() => {
+    removal = null;
+  }}
+>
   <h2 id="remove-item-title">{$l.t('cards.remove_item')}</h2>
   <p>{$l.t('cards.removeDescription')}</p>
   <div class="dialog-actions">
@@ -129,8 +153,9 @@
       class="confirm-button"
       disabled={disabled || selecting || !removal}
       onclick={async () => {
-        if (disabled || selecting || !removal) return;
-        items = items.filter((candidate) => candidate.key !== removal?.key);
+        const target = removal;
+        if (!canRemove(target)) return;
+        items = items.filter((candidate) => candidate.key !== target?.key);
         removeDialog?.close();
         await tick();
         root?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();

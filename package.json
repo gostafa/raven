@@ -13,7 +13,7 @@
     "build": "bun scripts/raven.mjs build",
     "package": "bun scripts/raven.mjs package",
     "check": "bun run --cwd frontend check",
-    "lint": "eslint frontend/src frontend/tests frontend/tooling frontend/test.config.mjs scripts eslint.config.mjs --max-warnings=0",
+    "lint": "eslint . --max-warnings=0",
     "format:check": "prettier --check frontend/src frontend/tests frontend/tooling frontend/test.config.mjs frontend/package.json eslint.config.mjs knip.json tsconfig.json package.json .prettierrc.json scripts/raven.mjs README.md",
     "unused": "knip",
     "conventions": "task conventions:check"

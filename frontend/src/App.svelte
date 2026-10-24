@@ -6,7 +6,9 @@
   import { FloatingReview } from './features/reviews';
   let { backend, localization }: { backend: AppPorts; localization: Localization } = $props();
   provideLocalization(untrack(() => localization));
-  onDestroy(() => localization.dispose());
+  onDestroy(() => {
+    localization.dispose();
+  });
   const view = new URLSearchParams(window.location.search).get('view');
 </script>
 

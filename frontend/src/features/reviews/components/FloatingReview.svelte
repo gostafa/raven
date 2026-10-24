@@ -19,14 +19,23 @@
   let generation = $state(0);
   let root: HTMLElement;
 
-  async function load() {
-    if (saving || closing) return;
-    const request = ++generation;
+  function reportCloseFailure() {
+    closeError = 'reviews.could_not_close_this_review_please_try_again';
+  }
+  function reportLoadFailure() {
+    status = 'error';
+  }
+  function beginLoad() {
     status = 'loading';
     entries = [];
     closeError = '';
+  }
+  async function load() {
+    if (saving || closing) return;
+    const request = ++generation;
+    beginLoad();
     try {
-      const loaded = await loadDueReview(backend, backend, backend.now);
+      const loaded = await loadDueReview(backend, backend, () => backend.now());
       if (request !== generation) return;
       entries = loaded.entries;
       folders = loaded.folders;
@@ -56,20 +65,20 @@
   function handleKey(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault();
-      void close();
+      close().catch(reportCloseFailure);
     }
   }
 
   onMount(() => {
     const open = backend.events.onOpenFloatingReview(() => {
-      void load();
+      load().catch(reportLoadFailure);
     });
     const dismiss = backend.events.onCloseFloatingReview(() => {
-      void close();
+      close().catch(reportCloseFailure);
     });
     // The first native show can precede event subscription. Mount also loads a
     // fresh session so the first click never depends on receiving that event.
-    void load();
+    load().catch(reportLoadFailure);
     return () => {
       ++generation;
       open();
@@ -92,7 +101,7 @@
         disabled={closing}
         bind:saving
         onclose={() => {
-          void close();
+          close().catch(reportCloseFailure);
         }}
       />{/key}
   {:else if status !== 'closed'}

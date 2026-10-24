@@ -5,7 +5,7 @@ export interface ReviewItem {
   dueAt: number;
 }
 export interface ReviewPort {
-  ReviewItem(folderId: string, cardId: string, itemId: string, rating: number): Promise<Card>;
+  ReviewItem(input: { folderId: string; cardId: string; itemId: string; rating: number }): Promise<Card>;
 }
 export interface ReviewEvents {
   onOpenFloatingReview(callback: () => void): () => void;

@@ -11,7 +11,7 @@
 
   // CardContent keys this component by source so replacement media starts fresh.
   onMount(() => {
-    if (image?.complete) {
+    if (image?.complete === true) {
       ready = image.naturalWidth > 0;
       failed = !ready;
     }
@@ -25,10 +25,14 @@
     <img
       bind:this={image}
       {src}
-      alt={filename || $l.t('cards.card_image')}
+      alt={(filename ?? '') || $l.t('cards.card_image')}
       class:pending={!ready}
-      onload={() => (ready = true)}
-      onerror={() => (failed = true)}
+      onload={() => {
+        ready = true;
+      }}
+      onerror={() => {
+        failed = true;
+      }}
     />
     {#if !ready}<div class="placeholder"><Skeleton height="100%" radius="5px" /></div>{/if}
   {/if}

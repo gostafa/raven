@@ -43,6 +43,13 @@
     }
   }
 
+  function focusMenu(event: KeyboardEvent) {
+    event.preventDefault();
+    const buttons = items();
+    const current = buttons.findIndex((button) => button === document.activeElement);
+    const next = menuFocusIndex(event.key, current, buttons.length);
+    if (next !== null) buttons.at(next)?.focus();
+  }
   function menuKey(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -51,25 +58,26 @@
     } else if (event.key === 'Tab') {
       close(true);
     } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-      event.preventDefault();
-      const buttons = items();
-      const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
-      const next = menuFocusIndex(event.key, current, buttons.length);
-      if (next !== null) buttons.at(next)?.focus();
+      focusMenu(event);
     }
   }
 
   $effect(() => {
     const direction = $l.direction;
-    if (!expanded || !direction) return;
-    return trackPopover(trigger, menu, 'end', () => close(), false);
+    if (!expanded || direction.length === 0) return;
+    return trackPopover(trigger, menu, {
+      alignment: 'end',
+      dismiss: () => {
+        close();
+      },
+    });
   });
 </script>
 
 <span
   class="action-menu"
   onfocusout={(event) => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) close();
+    if (!event.currentTarget.contains(event.relatedTarget instanceof Node ? event.relatedTarget : null)) close();
   }}
 >
   <button
@@ -86,7 +94,8 @@
     {disabled}
     onclick={(event) => {
       event.preventDefault();
-      expanded ? close(true) : open();
+      if (expanded) close(true);
+      else open();
     }}
     onkeydown={triggerKey}
   >

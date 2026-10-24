@@ -36,13 +36,13 @@
 
   $effect(() => {
     const direction = $l.direction;
-    if (expanded && direction) return positionPopover(trigger, panel, 'start');
+    if (expanded && direction.length > 0) return positionPopover(trigger, panel, 'start');
   });
 </script>
 
 <svelte:window
   onpointerdown={dismiss}
-  onkeydown={(event) => {
+  onkeydown={(event: KeyboardEvent) => {
     if (event.key === 'Escape' && disclosure.open) {
       event.preventDefault();
       event.stopPropagation();
@@ -54,7 +54,9 @@
 
 <details
   bind:this={disclosure}
-  ontoggle={(event) => (expanded = event.currentTarget.open)}
+  ontoggle={(event) => {
+    expanded = event.currentTarget.open;
+  }}
   onfocusout={(event) => {
     if (event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget))
       disclosure.open = false;
@@ -76,7 +78,9 @@
       <strong>{$l.t('cards.recall_percentage')}</strong><button
         type="button"
         disabled={!active}
-        onclick={() => onchange({ minimum: 0, maximum: 100 })}>{$l.t('cards.reset')}</button
+        onclick={() => {
+          onchange({ minimum: 0, maximum: 100 });
+        }}>{$l.t('cards.reset')}</button
       >
     </div>
     <p>{$l.t('cards.choose_any_range_cards_update_as_you_adjust')}</p>
@@ -85,7 +89,9 @@
         <button
           type="button"
           aria-pressed={range.minimum === preset.minimum && range.maximum === preset.maximum}
-          onclick={() => onchange({ minimum: preset.minimum, maximum: preset.maximum })}>{preset.label}</button
+          onclick={() => {
+            onchange({ minimum: preset.minimum, maximum: preset.maximum });
+          }}>{preset.label}</button
         >
       {/each}
     </div>

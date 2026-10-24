@@ -15,13 +15,17 @@
 {:else if item.previewURL}
   {#if item.kind === 'image'}<img
       src={item.previewURL}
-      alt={item.originalName || $l.t('cards.card_image')}
-      onerror={() => (failed = true)}
+      alt={(item.originalName ?? '') || $l.t('cards.card_image')}
+      onerror={() => {
+        failed = true;
+      }}
     />
   {:else if item.kind === 'audio'}<AudioPlayer
       src={item.previewURL}
       filename={item.originalName}
-      onerror={() => (failed = true)}
+      onerror={() => {
+        failed = true;
+      }}
     />
   {:else if item.kind === 'video'}
     <!-- svelte-ignore a11y_media_has_caption (Imported videos do not include separate caption files.) -->
@@ -32,13 +36,15 @@
       preload="metadata"
       src={item.previewURL}
       aria-label={item.originalName}
-      onerror={() => (failed = true)}
+      onerror={() => {
+        failed = true;
+      }}
     ></video>
   {/if}
 {/if}
 <p class="filename">
   <bdi>{item.originalName}</bdi><span
-    >{item.id ? $l.t('cards.saved_file') : $l.t('cards.will_be_copied_when_you_save')}</span
+    >{(item.id?.length ?? 0) > 0 ? $l.t('cards.saved_file') : $l.t('cards.will_be_copied_when_you_save')}</span
   >
 </p>
 

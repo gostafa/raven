@@ -63,7 +63,9 @@
   <header class="workspace-sidebar-header">
     <button
       class="workspace-control workspace-wordmark"
-      onclick={() => navigate()}
+      onclick={() => {
+        navigate();
+      }}
       aria-label={$l.t('workspace.raven_home')}
       ><span class="workspace-control workspace-brand-icon"
         ><img class="workspace-control" src="/raven.svg" alt="" /></span
@@ -105,21 +107,23 @@
     <div class="workspace-folder-nav-row">
       {#if workspace.sidebarOpen}<button
           class="workspace-control workspace-icon-button workspace-folder-disclosure"
-          class:workspace-expanded={foldersOpen || !!query}
+          class:workspace-expanded={foldersOpen || Boolean(query)}
           aria-label={foldersOpen || query ? $l.t('workspace.collapse_folders') : $l.t('workspace.expand_folders')}
-          aria-expanded={foldersOpen || !!query}
+          aria-expanded={foldersOpen || Boolean(query)}
           aria-controls="folder-navigation"
           onclick={() => {
-            foldersOpen = !(foldersOpen || !!query);
+            foldersOpen = !(foldersOpen || Boolean(query));
             if (query) search = '';
           }}><WorkspaceIcon name="chevron" size={13} /></button
         >{/if}
       <button
         class="workspace-control workspace-nav-item workspace-all-folders"
-        aria-current={!workspace.selectedFolderId ? 'page' : undefined}
+        aria-current={workspace.selectedFolderId === null ? 'page' : undefined}
         aria-label={$l.t('workspace.all_folders')}
         title={$l.t('workspace.all_folders')}
-        onclick={() => navigate()}
+        onclick={() => {
+          navigate();
+        }}
         >{#if workspace.sidebarOpen}<span class="workspace-control workspace-sidebar-label"
             >{$l.t('workspace.all_folders')}</span
           >
@@ -152,7 +156,9 @@
               class:workspace-selected={selectedFolder?.id === folder.id}
               aria-current={selectedFolder?.id === folder.id ? 'page' : undefined}
               title={folder.title}
-              onclick={() => navigate(folder.id)}
+              onclick={() => {
+                navigate(folder.id);
+              }}
               ><WorkspaceIcon name="folder" size={15} /><span class="workspace-control workspace-sidebar-label"
                 ><bdi>{folder.title}</bdi></span
               ><span class="workspace-control workspace-nav-total workspace-sidebar-label"
@@ -179,7 +185,9 @@
         aria-label={$l.t('workspace.import_folders')}
         data-tooltip={$l.t('workspace.import_folders')}
         disabled={saving || status !== 'ready'}
-        onclick={(event) => openArchive(event, 'import')}><WorkspaceIcon name="import" size={18} /></button
+        onclick={(event) => {
+          openArchive(event, 'import');
+        }}><WorkspaceIcon name="import" size={18} /></button
       >
       <button
         class="workspace-control workspace-footer-action"
@@ -187,7 +195,9 @@
         aria-label={$l.t('workspace.export_folders')}
         data-tooltip={$l.t('workspace.export_folders')}
         disabled={saving || status !== 'ready' || !workspace.folders.length}
-        onclick={(event) => openArchive(event, 'export')}><WorkspaceIcon name="export" size={18} /></button
+        onclick={(event) => {
+          openArchive(event, 'export');
+        }}><WorkspaceIcon name="export" size={18} /></button
       >
     </div>
     <div class="workspace-footer-language"><LanguageSelector compact /></div>

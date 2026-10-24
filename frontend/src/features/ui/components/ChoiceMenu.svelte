@@ -47,29 +47,42 @@
     if (restoreFocus) trigger?.focus();
   }
 
+  function closeAfterFailure() {
+    close(true);
+  }
+
   function items() {
     return Array.from(panel.querySelectorAll<HTMLButtonElement>('[data-choice]'));
   }
 
+  function focusOption(last: boolean) {
+    const buttons = items();
+    const checked = buttons.find((button) => button.getAttribute('aria-checked') === 'true');
+    (last ? buttons.at(-1) : (checked ?? buttons[0]))?.focus();
+  }
   async function open(last = false, focusChoice = false) {
     search = '';
     await tick();
     panel.showPopover();
     if (searchable && !focusChoice) searchInput?.focus();
-    else {
-      const buttons = items();
-      const checked = buttons.find((button) => button.getAttribute('aria-checked') === 'true');
-      (last ? buttons.at(-1) : (checked ?? buttons[0]))?.focus();
-    }
+    else focusOption(last);
   }
 
   function triggerKey(event: KeyboardEvent) {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      void open(event.key === 'ArrowUp', true);
+      open(event.key === 'ArrowUp', true).catch(closeAfterFailure);
     }
   }
 
+  function focusPanel(event: KeyboardEvent) {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const buttons = items();
+    const current = buttons.findIndex((button) => button === document.activeElement);
+    const next = menuFocusIndex(event.key, current, buttons.length);
+    if (next !== null) buttons.at(next)?.focus();
+  }
   function panelKey(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -79,25 +92,26 @@
     }
     const inSearch = event.target === searchInput;
     if (inSearch && !['ArrowDown', 'ArrowUp'].includes(event.key)) return;
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const buttons = items();
-    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    const next = menuFocusIndex(event.key, current, buttons.length);
-    if (next !== null) buttons.at(next)?.focus();
+    focusPanel(event);
   }
 
   $effect(() => {
     const direction = $l.direction;
-    if (!expanded || !direction || !trigger) return;
-    return trackPopover(trigger, panel, 'start', () => close(), true);
+    if (!expanded || direction.length === 0 || !trigger) return;
+    return trackPopover(trigger, panel, {
+      alignment: 'start',
+      dismiss: () => {
+        close();
+      },
+      ignorePanelScroll: true,
+    });
   });
 </script>
 
 <div
   class="choice-menu"
   onfocusout={(event) => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) close();
+    if (!event.currentTarget.contains(event.relatedTarget instanceof Node ? event.relatedTarget : null)) close();
   }}
 >
   <ChoiceTrigger
@@ -109,9 +123,10 @@
     {expanded}
     {id}
     {disabled}
-    onclick={(event) => {
+    onclick={(event: MouseEvent) => {
       event.preventDefault();
-      expanded ? close(true) : void open();
+      if (expanded) close(true);
+      else open().catch(closeAfterFailure);
     }}
     onkeydown={triggerKey}
   />
@@ -135,7 +150,9 @@
           class="clear-button"
           type="button"
           disabled={!selected.length}
-          onclick={() => onclear?.()}>{$l.t('ui.clear')}</button
+          onclick={() => {
+            onclear?.();
+          }}>{$l.t('ui.clear')}</button
         >{/if}
     </div>
     {#if searchable}<div class="choice-search">
@@ -162,7 +179,7 @@
       {selected}
       {multiple}
       {search}
-      onselect={(value) => {
+      onselect={(value: Value) => {
         onselect(value);
         if (!multiple) close(true);
       }}

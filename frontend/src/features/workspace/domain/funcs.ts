@@ -16,47 +16,56 @@ function choice<T extends string>(value: unknown, options: readonly T[], fallbac
   return options.find((option) => option === value) ?? fallback;
 }
 
-export function parseViewPreferences(value: unknown): ViewPreferences {
-  const defaults = defaultViewPreferences();
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return defaults;
-  const data = value as Record<string, unknown>;
-  const range = data.cardProgressRange as Record<string, unknown> | null | undefined;
-  const validRange =
-    typeof range?.minimum === 'number' &&
-    typeof range.maximum === 'number' &&
-    Number.isFinite(range.minimum) &&
-    Number.isFinite(range.maximum) &&
-    range.minimum >= 0 &&
-    range.maximum <= 100 &&
-    range.minimum <= range.maximum;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+function progressRange(value: unknown): ViewPreferences['cardProgressRange'] {
+  if (!isRecord(value)) return { minimum: 0, maximum: 100 };
+  const { minimum, maximum } = value;
+  if (!validPercentage(minimum) || !validPercentage(maximum) || minimum > maximum) return { minimum: 0, maximum: 100 };
+  return { minimum, maximum };
+}
+function validPercentage(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+function folderTags(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((tag): tag is string => typeof tag === 'string' && tag.length > 0))]
+    : [];
+}
+function cardKinds(value: unknown): ViewPreferences['cardKinds'] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value.filter(
+        (kind): kind is ViewPreferences['cardKinds'][number] =>
+          kind === 'text' || kind === 'image' || kind === 'audio' || kind === 'video',
+      ),
+    ),
+  ];
+}
+function sorting(data: Record<string, unknown>): Pick<ViewPreferences, 'folderSort' | 'cardSort'> {
   return {
-    search: typeof data.search === 'string' ? data.search : defaults.search,
-    foldersOpen: typeof data.foldersOpen === 'boolean' ? data.foldersOpen : defaults.foldersOpen,
-    folderTags: Array.isArray(data.folderTags)
-      ? [...new Set(data.folderTags.filter((tag): tag is string => typeof tag === 'string' && tag.length > 0))]
-      : defaults.folderTags,
     folderSort: choice(
       data.folderSort,
       ['default', 'tags-desc', 'tags-asc', 'cards-desc', 'cards-asc', 'review-asc', 'review-desc'],
-      defaults.folderSort,
+      'default',
     ),
     cardSort: choice(
       data.cardSort,
       ['created-desc', 'created-asc', 'review-asc', 'review-desc', 'progress-asc', 'progress-desc'],
-      defaults.cardSort,
+      'created-desc',
     ),
-    cardKinds: Array.isArray(data.cardKinds)
-      ? [
-          ...new Set(
-            data.cardKinds.filter(
-              (kind): kind is ViewPreferences['cardKinds'][number] =>
-                typeof kind === 'string' && ['text', 'image', 'audio', 'video'].includes(kind),
-            ),
-          ),
-        ]
-      : defaults.cardKinds,
-    cardProgressRange: validRange
-      ? { minimum: range.minimum as number, maximum: range.maximum as number }
-      : defaults.cardProgressRange,
+  };
+}
+export function parseViewPreferences(value: unknown): ViewPreferences {
+  if (!isRecord(value)) return defaultViewPreferences();
+  return {
+    search: typeof value.search === 'string' ? value.search : '',
+    foldersOpen: typeof value.foldersOpen === 'boolean' ? value.foldersOpen : true,
+    folderTags: folderTags(value.folderTags),
+    cardKinds: cardKinds(value.cardKinds),
+    cardProgressRange: progressRange(value.cardProgressRange),
+    ...sorting(value),
   };
 }

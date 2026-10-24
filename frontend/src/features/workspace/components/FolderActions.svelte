@@ -33,12 +33,29 @@
       ? [
           {
             label: $l.t('workspace.full_review'),
-            onselect: (opener: HTMLButtonElement) => startFolderReview(opener, folder.id),
+            onselect: (opener: HTMLButtonElement) => {
+              startFolderReview(opener, folder.id);
+            },
           },
         ]
       : []),
-    { label: $l.t('workspace.export_folder'), onselect: (opener) => exportSingleFolder(opener, folder.id) },
-    { label: $l.t('workspace.edit_folder'), onselect: (opener) => editFolder(opener, folder) },
-    { label: $l.t('workspace.delete_folder'), onselect: (opener) => confirmDelete(opener, folder.id) },
+    {
+      label: $l.t('workspace.export_folder'),
+      onselect: (opener: HTMLButtonElement) => {
+        exportSingleFolder(opener, folder.id);
+      },
+    },
+    {
+      label: $l.t('workspace.edit_folder'),
+      onselect: (opener: HTMLButtonElement) => {
+        editFolder(opener, folder);
+      },
+    },
+    {
+      label: $l.t('workspace.delete_folder'),
+      onselect: (opener: HTMLButtonElement) => {
+        confirmDelete(opener, folder.id);
+      },
+    },
   ]}
 />

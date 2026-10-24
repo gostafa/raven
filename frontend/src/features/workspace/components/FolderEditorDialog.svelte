@@ -24,31 +24,39 @@
   let formError = $state<MessageKey | ''>('');
   let titleInput: HTMLInputElement;
 
-  export function open(folder: Folder | null = null) {
+  export function open(folder: Folder | null = null): void {
     editingFolder = folder;
+    fillFolder(folder);
+    formError = '';
+    folderDialog?.showModal();
+    titleInput.focus();
+  }
+
+  function fillFolder(folder: Folder | null) {
     title = folder?.title ?? '';
     description = folder?.description ?? '';
     tags = folder?.tags.join(', ') ?? '';
-    formError = '';
-    folderDialog?.showModal();
-    titleInput?.focus();
   }
-
+  function validateFolder(): boolean {
+    if (title.trim()) return true;
+    formError = 'workspace.give_your_folder_a_name';
+    titleInput.focus();
+    return false;
+  }
+  async function writeFolder(): Promise<Folder> {
+    const input = { title, description, tags: parseTags(tags) };
+    return editingFolder
+      ? await backend.UpdateFolder({ ...input, id: editingFolder.id })
+      : await backend.CreateFolder(input);
+  }
   async function saveFolder(event: SubmitEvent) {
     event.preventDefault();
     if (saving) return;
-    if (!title.trim()) {
-      formError = 'workspace.give_your_folder_a_name';
-      titleInput?.focus();
-      return;
-    }
+    if (!validateFolder()) return;
     saving = true;
     formError = '';
     try {
-      const input = { title, description, tags: parseTags(tags) };
-      const folder = editingFolder
-        ? await backend.UpdateFolder({ ...input, id: editingFolder.id })
-        : await backend.CreateFolder(input);
+      const folder = await writeFolder();
       onsaved(folder, editingFolder !== null);
       folderDialog?.close();
     } catch {
@@ -96,7 +104,7 @@
       placeholder={$l.t('workspace.e_g_everyday_spanish')}
       disabled={saving}
       required
-      aria-invalid={!!formError && !title.trim()}
+      aria-invalid={Boolean(formError) && !title.trim()}
     />
     <label class="workspace-control" for="folder-description"
       >{$l.t('workspace.a_little_context')} <span class="workspace-control">{$l.t('workspace.optional')}</span></label

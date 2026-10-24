@@ -40,7 +40,9 @@
     title={hintsVisible ? $l.t('reviews.hide_hints') : $l.t('reviews.show_hints')}
     aria-expanded={hintsVisible}
     {disabled}
-    onclick={() => (hintsVisible = !hintsVisible)}
+    onclick={() => {
+      hintsVisible = !hintsVisible;
+    }}
   >
     <svg
       class="hint-icon"
@@ -65,19 +67,24 @@
           aria-label={$l.t('reviews.openHint', {
             count: hintIndex + 1,
             name:
-              hint.kind === 'text' ? (hint.text ?? '') : hint.originalName || $l.t(contentKindMessageKeys[hint.kind]),
+              hint.kind === 'text'
+                ? (hint.text ?? '')
+                : (hint.originalName ?? '') || $l.t(contentKindMessageKeys[hint.kind]),
           })}
           aria-haspopup="dialog"
           {disabled}
           onclick={() => showHint(hint)}
         >
           {#if hint.kind === 'image'}
-            <img src={mediaURL(hint)} alt={hint.originalName || $l.t('reviews.hintNumber', { count: hintIndex + 1 })} />
+            <img
+              src={mediaURL(hint)}
+              alt={(hint.originalName ?? '') || $l.t('reviews.hintNumber', { count: hintIndex + 1 })}
+            />
           {:else if hint.kind === 'text'}
             <span class="hint-preview">{hint.text}</span>
           {:else}
             <span class="hint-media-icon" aria-hidden="true">{hint.kind === 'audio' ? '♪' : '▶'}</span>
-            <bdi class="hint-media-name">{hint.originalName || $l.t(contentKindMessageKeys[hint.kind])}</bdi>
+            <bdi class="hint-media-name">{(hint.originalName ?? '') || $l.t(contentKindMessageKeys[hint.kind])}</bdi>
           {/if}
         </button>
       {/each}

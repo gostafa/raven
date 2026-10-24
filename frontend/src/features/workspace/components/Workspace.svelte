@@ -18,7 +18,7 @@
   import type { AppPorts } from '../domain/types';
   import { loadWorkspace as loadData, deleteSelection } from '../application/funcs';
 
-  import { ReviewSession } from '../../reviews';
+  import { ReviewSession, reviewItems, shuffledReviewItems, type ReviewItem } from '../../reviews';
 
   import {
     ArchiveDialog,
@@ -28,7 +28,6 @@
     type ImportMode,
   } from '../../folderarchive';
   import { cardPreview, selectCards, matchesCard, mergeCardSnapshot, removeCardPart } from '../../cards';
-  import { reviewItems, shuffledReviewItems, type ReviewItem } from '../../reviews';
   import {
     selectFolders,
     emptyWorkspace,
@@ -72,7 +71,12 @@
     ),
   );
   const filteredFolders = $derived(
-    selectFolders(workspace.folders, view.folderTags, view.folderSort, folderMetrics, $l.compare),
+    selectFolders(workspace.folders, {
+      tags: view.folderTags,
+      sort: view.folderSort,
+      metrics: folderMetrics,
+      compare: (left, right) => $l.compare(left, right),
+    }),
   );
   const query = $derived(view.search.trim().toLowerCase());
   const visibleFolders = $derived(
@@ -112,6 +116,9 @@
   let archiveOperation = $state<'import' | 'export' | null>(null);
   let archiveError = $state<MessageKey | ''>('');
 
+  function reportActionFailure() {
+    error = 'companion.raven_could_not_complete_that_action_please_try_again';
+  }
   function openArchive(event: MouseEvent, operation: 'import' | 'export') {
     if (saving || status !== 'ready') return;
     rememberOpener(event);
@@ -149,20 +156,20 @@
 
   function exportSingleFolder(opener: HTMLElement, folderId: string) {
     rememberOpener(opener);
-    void transferArchive(() => exportFolders(backend, [folderId]));
+    transferArchive(() => exportFolders(backend, [folderId])).catch(reportActionFailure);
   }
 
   function exportSelectedFolders(ids: string[]) {
-    void transferArchive(() => exportFolders(backend, ids));
+    transferArchive(() => exportFolders(backend, ids)).catch(reportActionFailure);
   }
 
   function importArchivedFolders(mode: ImportMode) {
-    void transferArchive(() => importFolders(backend, mode, refreshImportedFolders));
+    transferArchive(() => importFolders(backend, mode, refreshImportedFolders)).catch(reportActionFailure);
   }
 
   async function refreshCards() {
     try {
-      cards = (await backend.ListCards()) ?? [];
+      cards = await backend.ListCards();
       now = backend.now();
     } catch {
       /* Preserve the last snapshot; loadWorkspace reports initial errors. */
@@ -174,17 +181,17 @@
     await openReview([...dueCards]);
   }
   function refreshOnFocus() {
-    void refreshCards();
-    void backend.RefreshReminders();
+    refreshCards().catch(reportActionFailure);
+    backend.RefreshReminders().catch(reportActionFailure);
   }
   onMount(() => {
     const unsubscribe = backend.events.onSchedulesChanged(() => {
-      void refreshCards();
+      refreshCards().catch(reportActionFailure);
     });
     const unsubscribeReview = backend.events.onShowReviews(() => {
-      void showReviews();
+      showReviews().catch(reportActionFailure);
     });
-    void loadWorkspace();
+    loadWorkspace().catch(reportActionFailure);
     const timer = window.setInterval(() => {
       now = backend.now();
     }, 1000);
@@ -244,27 +251,23 @@
     searchInput?.select();
   }
 
+  function hasOpenDialog(): boolean {
+    return (
+      [folderDialog, cardDialog, partDialog, partDeleteDialog, deleteDialog, reviewDialog].some(
+        (dialog) => dialog?.open === true,
+      ) || archiveOperation !== null
+    );
+  }
   function handleShortcut(event: KeyboardEvent) {
-    if (
-      folderDialog?.open ||
-      cardDialog?.open ||
-      partDialog?.open ||
-      partDeleteDialog?.open ||
-      deleteDialog?.open ||
-      reviewDialog?.open ||
-      archiveOperation !== null ||
-      !(event.metaKey || event.ctrlKey) ||
-      event.key.toLowerCase() !== 'k'
-    )
-      return;
+    if (hasOpenDialog() || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
     event.preventDefault();
-    void focusSearch();
+    focusSearch().catch(reportActionFailure);
   }
 
   function navigate(folderId: string | null = null) {
     workspace = { ...workspace, selectedFolderId: folderId };
     persistPreferences();
-    if (window.matchMedia('(max-width: 600px)').matches) void setSidebarOpen(false);
+    if (window.matchMedia('(max-width: 600px)').matches) setSidebarOpen(false).catch(reportActionFailure);
   }
 
   function folderName(id: string) {
@@ -273,23 +276,23 @@
   function cardsInFolder(id: string) {
     return cards.filter((card) => card.folderId === id);
   }
+  function tileButton(tile: Element | null | undefined): HTMLElement | null {
+    return tile?.querySelector<HTMLElement>('button') ?? null;
+  }
   function rememberOpener(source: MouseEvent | HTMLElement) {
-    dialogOpener = source instanceof HTMLElement ? source : (source.currentTarget as HTMLElement);
-    const tile = dialogOpener.closest('li');
-    dialogFallback =
-      tile?.nextElementSibling?.querySelector<HTMLElement>('button') ??
-      tile?.previousElementSibling?.querySelector<HTMLElement>('button') ??
-      null;
+    const opener = source instanceof HTMLElement ? source : source.currentTarget;
+    if (!(opener instanceof HTMLElement)) return;
+    dialogOpener = opener;
+    const tile = opener.closest('li');
+    dialogFallback = tileButton(tile?.nextElementSibling) ?? tileButton(tile?.previousElementSibling);
   }
   async function restoreDialogFocus() {
     await tick();
-    const target = dialogOpener?.isConnected
-      ? dialogOpener
-      : dialogFallback?.isConnected
-        ? dialogFallback
-        : document.querySelector<HTMLElement>(
-            '.workspace-folder-grid button, .workspace-memory-grid button, .workspace-library-heading .workspace-primary-button',
-          );
+    const target =
+      [dialogOpener, dialogFallback].find((element) => element?.isConnected === true) ??
+      document.querySelector<HTMLElement>(
+        '.workspace-folder-grid button, .workspace-memory-grid button, .workspace-library-heading .workspace-primary-button',
+      );
     (target ?? sidebarToggle)?.focus();
   }
 
@@ -354,48 +357,57 @@
     partDialog?.showModal();
   }
 
+  function beginPartRemoval() {
+    saving = true;
+    partError = '';
+  }
+  function applyPartRemoval(card: Card, saved: Card | null) {
+    cards = saved
+      ? mergeCardSnapshot(cards, saved)
+      : cards.filter((candidate) => candidate.folderId !== card.folderId || candidate.id !== card.id);
+    now = backend.now();
+    partDeleteDialog?.close();
+    partDialog?.close();
+  }
   async function removePart() {
     if (!selectedPart || saving) return;
     const { card, itemId } = selectedPart;
-    saving = true;
-    partError = '';
+    beginPartRemoval();
     try {
-      const saved = await removeCardPart(backend, card, itemId);
-      if (saved) {
-        cards = mergeCardSnapshot(cards, saved);
-      } else {
-        cards = cards.filter((candidate) => candidate.folderId !== card.folderId || candidate.id !== card.id);
-      }
-      now = backend.now();
-      partDeleteDialog?.close();
-      partDialog?.close();
+      applyPartRemoval(card, await removeCardPart(backend, card, itemId));
     } catch {
       partError = 'workspace.this_part_could_not_be_removed_please_try_again';
     } finally {
       saving = false;
     }
   }
-
+  function beginDeletion() {
+    saving = true;
+    deleteError = '';
+  }
+  function applyDeletion(target: { folderId: string; cardId?: string }) {
+    cards = cards.filter(
+      (card) => card.folderId !== target.folderId || ((target.cardId?.length ?? 0) > 0 && card.id !== target.cardId),
+    );
+    if ((target.cardId?.length ?? 0) === 0) removeFolderSnapshot(target.folderId);
+    now = backend.now();
+    deleteDialog?.close();
+  }
+  function removeFolderSnapshot(folderId: string) {
+    workspace = reconcileFolders(
+      workspace,
+      workspace.folders.filter((folder) => folder.id !== folderId),
+    );
+    persistPreferences();
+  }
   async function removeSelection(event: SubmitEvent) {
     event.preventDefault();
     if (!deletion || saving) return;
-    saving = true;
-    deleteError = '';
     const target = deletion;
+    beginDeletion();
     try {
       await deleteSelection(backend, target);
-      cards = cards.filter(
-        (card) => card.folderId !== target.folderId || (!!target.cardId && card.id !== target.cardId),
-      );
-      if (!target.cardId) {
-        workspace = reconcileFolders(
-          workspace,
-          workspace.folders.filter((folder) => folder.id !== target.folderId),
-        );
-        persistPreferences();
-      }
-      now = backend.now();
-      deleteDialog?.close();
+      applyDeletion(target);
     } catch {
       deleteError = 'workspace.could_not_delete_this_item_please_try_again';
     } finally {
@@ -406,13 +418,13 @@
   function startReview(event: MouseEvent | HTMLElement, card?: Card) {
     if (reviewOpen) return;
     rememberOpener(event);
-    void openReview(card ? reviewItems([card]) : [...dueCards]);
+    openReview(card ? reviewItems([card]) : [...dueCards]).catch(reportActionFailure);
   }
 
   function startFolderReview(opener: HTMLElement, folderId: string) {
     if (reviewOpen) return;
     rememberOpener(opener);
-    void openReview(shuffledReviewItems(cardsInFolder(folderId)));
+    openReview(shuffledReviewItems(cardsInFolder(folderId))).catch(reportActionFailure);
   }
 
   async function openReview(entries: ReviewItem[]) {
@@ -431,7 +443,7 @@
   function closeReview() {
     reviewOpen = false;
     reviewQueue = [];
-    void restoreDialogFocus();
+    restoreDialogFocus().catch(reportActionFailure);
   }
 </script>
 
@@ -466,7 +478,7 @@
           {$l.t(workspaceError)}
         </p>{/if}
       {#if status === 'loading'}
-        <WorkspaceSkeleton cardsView={workspace.selectedFolderId !== null || !!query} />
+        <WorkspaceSkeleton cardsView={workspace.selectedFolderId !== null || Boolean(query)} />
       {:else if status === 'error'}<div class="workspace-empty-state">
           <div class="workspace-empty-icon"><WorkspaceIcon name="cards" size={26} /></div>
           <h1 class="workspace-control">{$l.t('workspace.let_s_reconnect')}</h1>
@@ -537,7 +549,7 @@
   onimport={importArchivedFolders}
   onclose={() => {
     archiveOperation = null;
-    void restoreDialogFocus();
+    restoreDialogFocus().catch(reportActionFailure);
   }}
 />
 
@@ -572,7 +584,7 @@
   bind:saving
   bind:selectingFiles
   onsaved={cardSaved}
-  onfoldercreated={(folder) => {
+  onfoldercreated={(folder: Folder) => {
     workspace = reconcileFolders(workspace, [...workspace.folders, folder]);
   }}
   onclose={restoreDialogFocus}

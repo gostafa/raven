@@ -17,7 +17,14 @@ export function saveViewPreferences(
 ): void {
   storage.setItem(`${key}.view`, JSON.stringify(preferences));
 }
-export async function loadWorkspace(ports: AppPorts, workspace: Workspace) {
+export async function loadWorkspace(
+  ports: AppPorts,
+  workspace: Workspace,
+): Promise<{
+  workspace: Workspace;
+  cards: Card[];
+  now: number;
+}> {
   const [folders, cards] = await Promise.all([ports.ListFolders(), ports.ListCards()]);
   return { workspace: reconcileFolders(workspace, folders), cards, now: ports.now() };
 }
@@ -25,9 +32,8 @@ export async function saveCard(
   ports: AppPorts,
   input: { folderId: string; newFolderTitle: string; editing: Card | null; items: ItemDraft[] },
   onFolderCreated: (folder: Awaited<ReturnType<AppPorts['CreateFolder']>>) => void,
-) {
-  if (!hasContent(input.items) || (input.folderId === '__new' && !input.newFolderTitle.trim()))
-    throw new Error('Add something you want to remember and choose a folder for this card.');
+): Promise<Card> {
+  if (!validCardInput(input)) throw new Error('Add something you want to remember and choose a folder for this card.');
   let folderId = input.folderId;
   if (folderId === '__new') {
     const folder = await ports.CreateFolder({ title: input.newFolderTitle, description: '', tags: [] });
@@ -35,10 +41,13 @@ export async function saveCard(
     onFolderCreated(folder);
   }
   return input.editing
-    ? ports.UpdateCard({ folderId: input.editing.folderId, cardId: input.editing.id, items: input.items })
-    : ports.CreateCard({ folderId, items: input.items });
+    ? await ports.UpdateCard({ folderId: input.editing.folderId, cardId: input.editing.id, items: input.items })
+    : await ports.CreateCard({ folderId, items: input.items });
 }
-export async function deleteSelection(ports: AppPorts, target: { folderId: string; cardId?: string }) {
+function validCardInput(input: { items: ItemDraft[]; folderId: string; newFolderTitle: string }): boolean {
+  return hasContent(input.items) && (input.folderId !== '__new' || input.newFolderTitle.trim().length > 0);
+}
+export async function deleteSelection(ports: AppPorts, target: { folderId: string; cardId?: string }): Promise<void> {
   if (target.cardId !== undefined && target.cardId.length > 0) await ports.DeleteCard(target.folderId, target.cardId);
   else await ports.DeleteFolder(target.folderId);
 }

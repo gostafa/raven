@@ -1,6 +1,5 @@
 <script lang="ts">
   import { useLocalization } from '../adapters/svelte/funcs';
-  import type { LanguagePreference } from '../domain/types';
   let { compact = false }: { compact?: boolean } = $props();
   const l = useLocalization();
   let saving = $state(false);
@@ -11,11 +10,14 @@
   const description = $derived($l.t('common.choice', { label: $l.t('common.language'), value: currentLanguage }));
 
   async function change(event: Event) {
-    const select = event.currentTarget as HTMLSelectElement;
+    const select = event.currentTarget;
+    if (!(select instanceof HTMLSelectElement)) return;
     saving = true;
     failed = false;
     try {
-      await l.change(select.value as LanguagePreference);
+      const preference = select.value;
+      if (preference !== 'system' && preference !== 'en' && preference !== 'ar') throw new Error('Invalid language');
+      await l.change(preference);
     } catch {
       select.value = $l.preference;
       failed = true;
@@ -44,7 +46,11 @@
       aria-busy={saving}
       value={$l.preference}
       disabled={saving}
-      onchange={(event) => void change(event)}
+      onchange={(event) => {
+        change(event).catch(() => {
+          failed = true;
+        });
+      }}
     >
       <option value="system">{$l.t('common.system')}</option>
       <option value="en" lang="en">English</option>

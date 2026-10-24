@@ -34,39 +34,59 @@
   let newFolderTitle = $state('');
   let formError = $state<MessageKey | ''>('');
 
-  export function open(card: Card | null = null) {
+  export function open(card: Card | null = null): void {
     editingCard = card;
     editorItems = card ? editItems(card, backend.mediaURL) : [textDraft('', backend.newKey())];
-    cardFolder = card?.folderId ?? selectedFolderId ?? folders[0]?.id ?? '__new';
+    cardFolder = initialFolder(card);
     newFolderTitle = folders.length ? '' : $l.t('workspace.everyday_learning');
     formError = '';
     cardDialog?.showModal();
-    void tick().then(() => cardDialog?.querySelector('textarea')?.focus());
+    tick()
+      .then(() => cardDialog?.querySelector('textarea')?.focus())
+      .catch(reportFailure);
   }
 
+  function initialFolder(card: Card | null): string {
+    return card?.folderId ?? selectedFolderId ?? folders.at(0)?.id ?? '__new';
+  }
+  function reportFailure() {
+    formError = 'workspace.your_card_could_not_be_saved_your_entries_are_still_here_try_again';
+  }
+  function validCard(): boolean {
+    const content = hasContent(saveItems(editorItems));
+    return content && (cardFolder !== '__new' || newFolderTitle.trim().length > 0);
+  }
+  function folderCreated(folder: Folder) {
+    cardFolder = folder.id;
+    onfoldercreated(folder);
+  }
+  async function writeCard(): Promise<Card> {
+    return await saveCard(
+      backend,
+      {
+        folderId: cardFolder,
+        newFolderTitle,
+        editing: editingCard,
+        items: saveItems(editorItems),
+      },
+      folderCreated,
+    );
+  }
   async function createCard(event: SubmitEvent) {
     event.preventDefault();
     if (saving || selectingFiles) return;
-    const items = saveItems(editorItems);
-    if (!hasContent(items) || (cardFolder === '__new' && !newFolderTitle.trim())) {
+    if (!validCard()) {
       formError = 'workspace.add_something_you_want_to_remember_and_choose_a_folder_for_this_card';
       return;
     }
     saving = true;
     formError = '';
     try {
-      const card = await saveCard(
-        backend,
-        { folderId: cardFolder, newFolderTitle, editing: editingCard, items },
-        (folder) => {
-          cardFolder = folder.id;
-          onfoldercreated(folder);
-        },
-      );
+      const card = await writeCard();
       onsaved(card, editingCard !== null);
       cardDialog?.close();
     } catch {
-      formError = 'workspace.your_card_could_not_be_saved_your_entries_are_still_here_try_again';
+      reportFailure();
     } finally {
       saving = false;
     }
@@ -104,7 +124,9 @@
       bind:items={editorItems}
       bind:selecting={selectingFiles}
       disabled={saving}
-      onerror={(message) => (formError = message)}
+      onerror={(message: MessageKey | '') => {
+        formError = message;
+      }}
     />
     {#if cardFolder === '__new'}<label class="workspace-control" for="card-new-folder"
         >{$l.t('workspace.new_folder_name')}</label
@@ -116,7 +138,7 @@
         placeholder={$l.t('workspace.e_g_everyday_spanish')}
         disabled={saving}
         required
-        aria-invalid={!!formError && !newFolderTitle.trim()}
+        aria-invalid={Boolean(formError) && !newFolderTitle.trim()}
       />{/if}
     <p class="workspace-control workspace-save-note">
       <WorkspaceIcon name="clock" size={15} />
