@@ -130,7 +130,7 @@
     padding: 0;
     border: 0;
     border-radius: 50%;
-    background: #000;
+    background: #ff002f;
     color: #fff;
     font-size: 12px;
     line-height: 1;
