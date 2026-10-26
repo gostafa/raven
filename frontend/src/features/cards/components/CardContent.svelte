@@ -8,6 +8,7 @@
   import { stopMedia } from '../../ui';
   import AudioPlayer from './AudioPlayer.svelte';
   import VideoPreview from './VideoPreview.svelte';
+  import ExpandedVideo from './ExpandedVideo.svelte';
   import ImagePreview from './ImagePreview.svelte';
   import type { PreviewStartPort } from '../ports/types';
 
@@ -15,6 +16,7 @@
     card,
     mediaURL,
     compact = false,
+    expanded = false,
     reviewing = false,
     nativeStart,
     onopen,
@@ -22,6 +24,7 @@
     card: Card;
     mediaURL: MediaURLPort;
     compact?: boolean;
+    expanded?: boolean;
     reviewing?: boolean;
     nativeStart?: PreviewStartPort;
     onopen?: (itemId: string, opener: HTMLElement) => void;
@@ -60,6 +63,7 @@
 <div
   class="card-content"
   class:compact
+  class:expanded
   bind:this={root}
   style:grid-template-columns={compact ? columns : undefined}
   style:grid-template-rows={compact ? rowTracks : undefined}
@@ -97,12 +101,19 @@
     >
       {#if item.kind === 'text'}<p dir="auto">{item.text}</p>
       {:else if item.kind === 'image'}
-        {#key mediaURL(item)}<ImagePreview src={mediaURL(item)} filename={item.originalName} {compact} />{/key}
+        {#key mediaURL(item)}<ImagePreview
+            src={mediaURL(item)}
+            filename={item.originalName}
+            {compact}
+            {expanded}
+            active={active === index}
+          />{/key}
       {:else if item.kind === 'video' && compact}<div class="video-slot">
           {#key mediaURL(item)}<VideoPreview
               src={mediaURL(item)}
               filename={item.originalName}
               hovered={hovered === index}
+              focused={focused === index}
               {nativeStart}
             />{/key}
         </div>
@@ -115,8 +126,17 @@
           autoplay={reviewing}
           hideFilename={reviewing}
           hovered={compact && hovered === index}
+          focused={compact && focused === index}
           {nativeStart}
           src={mediaURL(item)}
+          onerror={() => {
+            failed = [...failed, item.id];
+          }}
+        />
+      {:else if item.kind === 'video' && expanded}
+        <ExpandedVideo
+          src={mediaURL(item)}
+          filename={item.originalName}
           onerror={() => {
             failed = [...failed, item.id];
           }}
@@ -161,6 +181,42 @@
   .content-item {
     position: relative;
     min-width: 0;
+  }
+  .expanded {
+    width: max-content;
+    max-width: calc(100vw - 26px);
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .expanded .content-item {
+    display: flex;
+    flex-direction: column;
+    justify-content: safe center;
+    min-height: 0;
+    max-height: calc(100svh - 26px);
+    overflow-y: auto;
+  }
+  .expanded .content-item > p {
+    width: max-content;
+    max-width: min(100%, 64ch);
+    box-sizing: border-box;
+    margin-inline: auto;
+    padding: 64px 24px 24px;
+    text-align: center;
+    font-size: clamp(18px, 2.2vw, 28px);
+    line-height: 1.7;
+  }
+  .expanded .media-item {
+    overflow: hidden;
+  }
+  .expanded .audio-item {
+    padding-top: 64px;
+  }
+  .expanded .audio-item :global(.audio-player) {
+    box-sizing: border-box;
+    width: min(720px, calc(100vw - 26px));
+    margin: auto;
   }
   .open-part {
     position: absolute;

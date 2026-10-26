@@ -216,6 +216,7 @@ func (*bindingWindows) ResetWidget()                {}
 func (*bindingWindows) PositionFloatingReview()     {}
 func (*bindingWindows) RequestFloatingReviewClose() {}
 func (*bindingWindows) ToggleFloatingReview()       {}
+func (*bindingWindows) SyncFloatingReview()         {}
 func (*bindingWindows) HideFloatingReview()         {}
 func (*bindingWindows) Quit()                       {}
 

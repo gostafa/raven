@@ -13,6 +13,7 @@ import (
 	reminders "raven/internal/features/reminders/application"
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
 	libraryports "raven/internal/shared/boltstore/ports"
+	cacheports "raven/internal/shared/cache/ports"
 	localizationports "raven/internal/shared/localization/ports"
 )
 
@@ -21,6 +22,10 @@ type (
 	DatabasePath string
 	storeParams  struct {
 		fx.In
+
+		Chunks      cacheports.Chunks
+		Snapshots   cacheports.Loading[string, string]
+		MediaLookup cacheports.Loading[string, libraryports.MediaRecord]
 
 		Batch     libraryports.BatchExecutor
 		Lifecycle fx.Lifecycle

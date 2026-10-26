@@ -95,6 +95,13 @@ export function ListFolders(): $CancellablePromise<string> {
 }
 
 /**
+ * Notify displays an application message through native OS notifications.
+ */
+export function Notify(title: string, body: string): $CancellablePromise<void> {
+    return $Call.ByID(3391907746, title, body);
+}
+
+/**
  * Quit terminates Raven.
  */
 export function Quit(): $CancellablePromise<void> {
@@ -151,10 +158,24 @@ export function ShowReviews(): $CancellablePromise<void> {
 }
 
 /**
+ * SyncFloatingReview synchronizes an open review after the frontend subscribes.
+ */
+export function SyncFloatingReview(): $CancellablePromise<void> {
+    return $Call.ByID(3779478126);
+}
+
+/**
  * ToggleFloatingReview opens or requests closing the floating review window.
  */
 export function ToggleFloatingReview(): $CancellablePromise<void> {
     return $Call.ByID(3616707221);
+}
+
+/**
+ * TransferCards atomically copies or moves cards described by JSON.
+ */
+export function TransferCards(input: string): $CancellablePromise<string> {
+    return $Call.ByID(2682438931, input);
 }
 
 /**

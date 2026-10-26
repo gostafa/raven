@@ -14,6 +14,8 @@ func newRegistry(params registryParams, settings configuration.Settings) *deskto
 	return desktopmedia.NewRegistry(
 		params.Batch,
 		&desktopmedia.Dependencies{
+			Chunks: params.Chunks,
+			Retry:  params.Retry,
 			Saved:  func() http.Handler { return params.Store.MediaHandler() },
 			Logger: params.Logger,
 		},

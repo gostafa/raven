@@ -1,5 +1,6 @@
 import type {
   TransportArchiveResult,
+  TransportTransferResult,
   TransportCard,
   TransportConfiguration,
   TransportFolder,
@@ -125,4 +126,19 @@ export function decodeList<T>(value: unknown, guard: (item: unknown) => item is 
   if (value === null) return [];
   if (!Array.isArray(value)) throw new Error('Invalid Raven list response');
   return value.map((item: unknown) => decode(item, guard));
+}
+
+export function isTransferResult(value: unknown): value is TransportTransferResult {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.entries) &&
+    value.entries.length > 0 &&
+    value.entries.every(
+      (entry: unknown) =>
+        isRecord(entry) &&
+        isRecord(entry.source) &&
+        fields(entry.source, 'folder_id card_id', 'string') &&
+        isCard(entry.card),
+    )
+  );
 }

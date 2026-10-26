@@ -10,16 +10,20 @@
     papers,
     mediaURL,
     nativeStart,
+    selecting = false,
+    selected = false,
   }: {
     children: Snippet;
     papers: readonly FolderPaper[];
     mediaURL: MediaURLPort;
     nativeStart?: PreviewStartPort;
+    selecting?: boolean;
+    selected?: boolean;
   } = $props();
   let hovered = $state(false);
   let focused = $state(false);
   let reducedMotion = $state(false);
-  const active = $derived(hovered || focused);
+  const active = $derived(!selecting && (hovered || focused));
   onMount(() => {
     const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
     const update = () => {
@@ -53,7 +57,7 @@
     if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) focused = false;
   }}
 >
-  <AnimatedFolder {active} {papers} {mediaURL} {nativeStart} {reducedMotion} />
+  <AnimatedFolder {active} {selected} {papers} {mediaURL} {nativeStart} {reducedMotion} />
   <div class="folder-surface" class:active>
     {@render children()}
   </div>

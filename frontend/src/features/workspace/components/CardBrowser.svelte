@@ -1,5 +1,6 @@
 <script lang="ts">
   import { toggleSelection, ChoiceMenu, type ChoiceOption } from '../../ui';
+  import { reference, referenceKey, type CardReference } from '../../cardtransfer';
   import MemoryTile from './MemoryTile.svelte';
   import FolderActions from './FolderActions.svelte';
   import { useLocalization } from '../../localization';
@@ -40,7 +41,35 @@
     openPart,
     startReview,
     editCard,
+    selectingCards,
+    selectedCards,
+    canPaste,
+    clearClipboard,
+    toggleSelectionMode,
+    toggleSelected,
+    selectAllShown,
+    clearSelection,
+    moveSelected,
+    copySelected,
+    reviewSelected,
+    moveCard,
+    copyCard,
+    pasteCards,
   }: {
+    selectingCards: boolean;
+    selectedCards: CardReference[];
+    canPaste: boolean;
+    clearClipboard: () => void;
+    toggleSelectionMode: () => void;
+    toggleSelected: (card: Card) => void;
+    selectAllShown: () => void;
+    clearSelection: () => void;
+    moveSelected: (opener: HTMLElement) => void;
+    copySelected: (opener: HTMLElement) => void;
+    reviewSelected: (opener: HTMLElement) => void;
+    moveCard: (opener: HTMLElement, card: Card) => void;
+    copyCard: (opener: HTMLElement, card: Card) => void;
+    pasteCards: (opener: HTMLElement, folderId?: string) => void;
     selectedFolder: Folder | undefined;
     query: string;
     search: string;
@@ -65,6 +94,8 @@
     startReview: (opener: HTMLElement, card: Card) => void;
     editCard: (opener: HTMLElement, card: Card) => void;
   } = $props();
+
+  const selectedKeys = $derived(new Set(selectedCards.map(referenceKey)));
 
   const cardSortOptions: ChoiceOption<CardSort>[] = $derived([
     { value: 'created-desc', label: $l.t('workspace.newest_first') },
@@ -113,6 +144,20 @@
       </div>{/if}
   </div>
   <div class="workspace-heading-actions">
+    {#if canPaste}<button
+        type="button"
+        class="workspace-control workspace-secondary-button"
+        disabled={saving || selectingFiles}
+        onclick={(event) => {
+          pasteCards(event.currentTarget, selectedFolder?.id);
+        }}>{$l.t('transfer.paste')}</button
+      >
+      <button
+        type="button"
+        class="workspace-control workspace-text-button"
+        disabled={saving || selectingFiles}
+        onclick={clearClipboard}>{$l.t('transfer.clear_clipboard')}</button
+      >{/if}
     <button
       class="workspace-control workspace-primary-button"
       onclick={(event) => {
@@ -126,6 +171,8 @@
         {exportSingleFolder}
         {editFolder}
         {confirmDelete}
+        {canPaste}
+        {pasteCards}
       />{/if}
   </div>
 </section>
@@ -156,7 +203,7 @@
         search = '';
       }}>{$l.t('workspace.clear_search')} <WorkspaceIcon name="close" size={14} /></button
     >{:else}<span class="workspace-control workspace-section-note"
-      >{$l.t('workspace.select_a_card_to_practice_recall')}</span
+      >{$l.t(selectingCards ? 'transfer.selection_help' : 'workspace.select_a_card_to_practice_recall')}</span
     >{/if}
 </div>
 <div class="workspace-folder-controls" aria-label={$l.t('workspace.card_controls')}>
@@ -188,6 +235,12 @@
         cardProgressRange = range;
       }}
     />
+    {#if !selectingCards}<button
+        type="button"
+        class="workspace-control workspace-secondary-button workspace-selection-toggle"
+        disabled={saving || selectingFiles || !visibleCards.length}
+        onclick={toggleSelectionMode}><WorkspaceIcon name="check" size={15} />{$l.t('transfer.select_cards')}</button
+      >{/if}
   </div>
   <span class="workspace-control workspace-folder-result-count" role="status" aria-live="polite">
     {$l.t('common.cardsOfTotal', { count: matchingCards.length, shown: $l.number(visibleCards.length) })}
@@ -226,10 +279,68 @@
       >{$l.t('workspace.clear_filters')}</button
     >
   </div>{/if}
+{#if selectingCards}<div class="workspace-transfer-toolbar" role="group" aria-label={$l.t('transfer.select_cards')}>
+    <div class="workspace-selection-summary">
+      <button
+        type="button"
+        class="workspace-control workspace-primary-button"
+        disabled={saving || selectingFiles}
+        onclick={toggleSelectionMode}><WorkspaceIcon name="check" size={15} />{$l.t('transfer.done_selecting')}</button
+      >
+      <span class="workspace-selection-count" role="status"
+        >{$l.t('transfer.selected_count', { count: selectedCards.length })}</span
+      >
+    </div>
+    <div class="workspace-selection-utilities">
+      <button
+        type="button"
+        class="workspace-control workspace-text-button"
+        disabled={saving || selectingFiles || !visibleCards.length}
+        onclick={selectAllShown}>{$l.t('transfer.select_all_shown')}</button
+      >
+      <button
+        type="button"
+        class="workspace-control workspace-text-button"
+        disabled={saving || selectingFiles || !selectedCards.length}
+        onclick={clearSelection}>{$l.t('transfer.clear_selection')}</button
+      >
+    </div>
+    <div class="workspace-selection-actions">
+      <button
+        type="button"
+        class="workspace-control workspace-secondary-button"
+        disabled={saving || selectingFiles || !selectedCards.length}
+        onclick={(event) => {
+          moveSelected(event.currentTarget);
+        }}><WorkspaceIcon name="folder" size={15} />{$l.t('transfer.move_to')}</button
+      >
+      <button
+        type="button"
+        class="workspace-control workspace-secondary-button"
+        disabled={saving || selectingFiles || !selectedCards.length}
+        onclick={(event) => {
+          copySelected(event.currentTarget);
+        }}>{$l.t('transfer.copy')}</button
+      >
+      <button
+        type="button"
+        class="workspace-control workspace-secondary-button"
+        disabled={saving || selectingFiles || !selectedCards.length}
+        onclick={(event) => {
+          reviewSelected(event.currentTarget);
+        }}>{$l.t('workspace.review_now')}</button
+      >
+    </div>
+  </div>{/if}
 {#if visibleCards.length}<ul class="workspace-memory-grid" aria-label={$l.t('workspace.memory_cards')}>
     {#each visibleCards as card (`${card.folderId}/${card.id}`)}
       <MemoryTile
         {card}
+        selecting={selectingCards}
+        selected={selectedKeys.has(referenceKey(reference(card)))}
+        {toggleSelected}
+        {moveCard}
+        {copyCard}
         {mediaURL}
         {nativeStart}
         disabled={saving || selectingFiles}

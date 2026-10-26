@@ -25,6 +25,7 @@ import (
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	mediaapi "raven/api/media"
+	transferapplication "raven/internal/features/cardtransfer/application"
 	companion "raven/internal/features/companion/domain"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
@@ -55,6 +56,36 @@ func TestExecutableModuleResolvesFeaturePorts(t *testing.T) {
 type facadeArchives struct {
 	result  archive.Result
 	failure error
+}
+
+type facadeNotifications struct {
+	title, body string
+	failure     error
+}
+
+func (notifier *facadeNotifications) Notify(title, body string) error {
+	notifier.title, notifier.body = title, body
+	return notifier.failure
+}
+
+func TestFacadeNativeNotifications(t *testing.T) {
+	missing := newService(serviceParams{}, configurationFixture())
+	if err := missing.Notify("Raven", "Message"); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &facadeNotifications{}
+	service := newService(serviceParams{Notifications: notifier}, configurationFixture())
+	if err := service.Notify("Raven", "تم نسخ بطاقتين"); err != nil ||
+		notifier.title != "Raven" || notifier.body != "تم نسخ بطاقتين" {
+		t.Fatalf("notification was not forwarded: %+v %v", notifier, err)
+	}
+	notifier.failure = errors.New("native failure")
+	err := service.Notify("Raven", "Message")
+	var public *ServiceError
+	if !errors.As(err, &public) || public.Code != actionFailedCode ||
+		errors.Is(err, notifier.failure) {
+		t.Fatalf("native failure escaped facade: %v", err)
+	}
 }
 
 func (archives *facadeArchives) ExportFolders(string) (archive.Result, error) {
@@ -165,6 +196,8 @@ func (windows *facadeWindows) Quit() { windows.calls = append(windows.calls, "qu
 
 func (windows *facadeWindows) ToggleFloatingReview() { windows.calls = append(windows.calls, "toggle") }
 
+func (windows *facadeWindows) SyncFloatingReview() { windows.calls = append(windows.calls, "sync") }
+
 func (windows *facadeWindows) HideFloatingReview() {
 	windows.calls = append(windows.calls, "hide-review")
 }
@@ -207,12 +240,13 @@ func TestFacadeWindowCommandsAndDeletionEvents(t *testing.T) {
 	service.ResetWidget()
 	service.Quit()
 	service.ToggleFloatingReview()
+	service.SyncFloatingReview()
 	service.HideFloatingReview()
 	service.ShowReviews()
 	service.RefreshReminders()
 	if !reflect.DeepEqual(
 		windows.calls,
-		[]string{"show", "hide", "reset", "quit", "toggle", "hide-review", "show"},
+		[]string{"show", "hide", "reset", "quit", "toggle", "sync", "hide-review", "show"},
 	) {
 		t.Fatal(windows.calls)
 	}
@@ -714,5 +748,73 @@ func TestLocalizationFacadeAndSafeErrors(t *testing.T) {
 	}
 	if serviceOptions().MarshalError == nil {
 		t.Fatal("missing error serializer")
+	}
+}
+
+func TestFacadeCardTransfersPublishOnlyCommittedChanges(t *testing.T) {
+	missing := newService(serviceParams{}, configurationFixture())
+	if _, err := missing.TransferCards("{}"); err == nil {
+		t.Fatal("missing transfer service accepted")
+	}
+	repository, openErr := boltstore.Open(
+		filepath.Join(t.TempDir(), "raven.db"),
+		boltstore.NewDependencies(
+			cffbatch.New(),
+			scheduling.New(new(configuration.Library(configurationFixture()))),
+			storeSettingsFixture(),
+		),
+	)
+	if openErr != nil {
+		t.Fatal(openErr)
+	}
+	t.Cleanup(func() {
+		if err := repository.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	folderJSON, err := repository.CreateFolder(`{"title":"Transfer"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var folder folderapi.Folder
+	if err = json.Unmarshal([]byte(folderJSON), &folder); err != nil {
+		t.Fatal(err)
+	}
+	cardJSON, err := repository.CreateCard(
+		fmt.Sprintf(`{"folder_id":%q,"items":[{"kind":"text","text":"Remember"}]}`, folder.ID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var card cardapi.Card
+	if err = json.Unmarshal([]byte(cardJSON), &card); err != nil {
+		t.Fatal(err)
+	}
+	events, reminders := &facadeEvents{}, &facadeReminders{}
+	service := newService(
+		serviceParams{
+			Transfers: transferapplication.New(repository),
+			Events:    events,
+			Reminders: reminders,
+		},
+		configurationFixture(),
+	)
+	input := fmt.Sprintf(
+		`{"operation":"copy","sources":[{"folder_id":%q,"card_id":%q}],"destination_folder_id":%q}`,
+		folder.ID,
+		card.ID,
+		folder.ID,
+	)
+	if result, failure := service.TransferCards(
+		input,
+	); failure != nil || !strings.Contains(result, `"entries"`) || len(events.names) != 1 ||
+		reminders.wakes != 1 {
+		t.Fatal("transfer event", result, failure)
+	}
+	_, err = service.TransferCards("{}")
+	var public *ServiceError
+	if !errors.As(err, &public) || errors.Unwrap(err) != nil || len(events.names) != 1 ||
+		reminders.wakes != 1 {
+		t.Fatal("transfer error leaked or published changes", err)
 	}
 }

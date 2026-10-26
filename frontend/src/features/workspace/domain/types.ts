@@ -4,6 +4,7 @@ import type { ReviewPort, ReviewEvents } from '../../reviews';
 import type { WindowPort } from '../../companion';
 import type { ArchivePort } from '../../folderarchive';
 import type { LocalizationPort } from '../../localization';
+import type { TransferPort } from '../../cardtransfer';
 interface AppEvents extends ReviewEvents {
   onSchedulesChanged(callback: () => void): () => void;
   onShowReviews(callback: () => void): () => void;
@@ -28,10 +29,11 @@ export interface RuntimeConfiguration {
   closeFloatingReview: string;
 }
 export interface AppPorts
-  extends CardPort, FolderPort, MediaPort, ReviewPort, WindowPort, ArchivePort, LocalizationPort {
+  extends CardPort, FolderPort, MediaPort, ReviewPort, WindowPort, ArchivePort, LocalizationPort, TransferPort {
   configuration: RuntimeConfiguration;
   previewStart: PreviewStartPort;
   preferences: PreferencesStorage;
   events: AppEvents;
   now(): number;
+  Notify(title: string, body: string): Promise<void>;
 }

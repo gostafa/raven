@@ -88,3 +88,7 @@ export interface TransportMedia {
   preview_url: string;
   byte_size: number;
 }
+
+export interface TransportTransferResult {
+  entries: { source: { folder_id: string; card_id: string }; card: TransportCard }[];
+}

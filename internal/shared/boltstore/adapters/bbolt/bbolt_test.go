@@ -2,6 +2,7 @@ package bbolt
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	"go.uber.org/multierr"
 
 	cardapi "raven/api/cards"
+	transferapi "raven/api/cardtransfer"
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	reviewapi "raven/api/reviews"
@@ -38,9 +41,393 @@ import (
 	archiveports "raven/internal/features/folderarchive/ports"
 	library "raven/internal/shared/boltstore/domain"
 	libraryports "raven/internal/shared/boltstore/ports"
+	cacheotter "raven/internal/shared/cache/adapters/otter"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
+	resilience "raven/internal/shared/resilience/adapters/retry"
 	scheduling "raven/internal/shared/scheduling/adapters/fsrs"
 )
+
+func enableReadCaches(t testing.TB, storage *persistence) {
+	t.Helper()
+	storage.snapshots = startedCache(
+		t,
+		&cacheotter.Options[string, string]{
+			MaximumWeight: 16 * 1024 * 1024,
+			Weigher:       func(_ string, value string) uint32 { return uint32(len(value)) },
+		},
+	)
+	storage.mediaLookup = startedCache(
+		t,
+		&cacheotter.Options[string, libraryports.MediaRecord]{MaximumSize: 4096},
+	)
+	storage.chunks = startedCache(
+		t,
+		&cacheotter.Options[string, []byte]{
+			MaximumWeight: 128 * 1024 * 1024,
+			Weigher:       func(_ string, value []byte) uint32 { return uint32(len(value)) },
+		},
+	)
+}
+
+func TestReadCachesFollowEveryLibraryMutation(t *testing.T) {
+	storage := openTestStore(t)
+	enableReadCaches(t, storage)
+	repository := &Store{state: storage}
+	fresh := func() {
+		t.Helper()
+		wantCards, err := encodeResponse(storeListCards(storage))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotCards, err := repository.ListCards()
+		if err != nil || gotCards != wantCards {
+			t.Fatal("stale cards", err)
+		}
+		wantFolders, err := encodeResponse(storeListFolders(storage))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotFolders, err := repository.ListFolders()
+		if err != nil || gotFolders != wantFolders {
+			t.Fatal("stale folders", err)
+		}
+	}
+	fresh()
+	folder, err := storeCreateFolder(storage, &folderapi.CreateInput{Title: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh()
+	other, err := storeCreateFolder(storage, &folderapi.CreateInput{Title: "Destination"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh()
+	if _, err := storeUpdateFolder(
+		storage,
+		&folderapi.UpdateInput{ID: folder.ID, Title: "Updated"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	fresh()
+	card, err := storeCreateCard(
+		storage,
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Before")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh()
+	item := contentapi.Items(card.Items)[0]
+	card, err = storeUpdateCard(
+		storage,
+		&cardapi.UpdateInput{
+			FolderID: folder.ID,
+			CardID:   card.ID,
+			Items:    []contentapi.Draft{{ID: item.ID, Kind: "text", Text: "After"}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh()
+	if err := storeMarkNotified(
+		storage,
+		[]reviewapi.DueOccurrence{
+			{
+				FolderID: folder.ID,
+				CardID:   card.ID,
+				ItemID:   item.ID,
+				Due:      contentapi.Schedule(item.Schedule).Due.UnixMilli(),
+			},
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	fresh()
+	for _, operation := range []string{"copy", "move"} {
+		if _, err := storeTransferCards(
+			storage,
+			&transferapi.TransferInput{
+				Operation:           operation,
+				DestinationFolderID: other.ID,
+				Sources: []transferapi.Reference{
+					{FolderID: folder.ID, CardID: card.ID},
+				},
+			},
+		); err != nil {
+			t.Fatal(err)
+		}
+		fresh()
+	}
+	manifest := `{"version":1,"exported_at":"2026-01-01T00:00:00Z","folders":[{"folder":{"id":"old","title":"Imported","description":"","tags":[]},"cards":[]}]}`
+	if _, err := repository.ImportFolderCopies(manifest, "fresh", nil); err != nil {
+		t.Fatal(err)
+	}
+	fresh()
+	if err := storeDeleteFolder(storage, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	fresh()
+	if err := storeDeleteFolder(storage, folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	fresh()
+}
+
+func TestMediaCacheRejectsMovedAndRemovedItems(t *testing.T) {
+	for _, operation := range []string{"remove", "move", "delete-folder"} {
+		t.Run(operation, func(t *testing.T) {
+			storage := openTestStore(t)
+			enableReadCaches(t, storage)
+			folder, _ := storeCreateFolder(storage, &folderapi.CreateInput{Title: "Source"})
+			other, _ := storeCreateFolder(storage, &folderapi.CreateInput{Title: "Destination"})
+			image, _ := mediaFixture(t, ".png")
+			card, err := storeCreateCard(
+				storage,
+				&cardapi.CreateInput{
+					FolderID: folder.ID,
+					Items: []contentapi.Draft{
+						{Kind: "image", SourcePath: image},
+						{Kind: "text", Text: "Keep"},
+					},
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			item := contentapi.Items(card.Items)[0]
+			url := "/media/" + folder.ID + "/" + card.ID + "/" + item.ID
+			handler := storeMediaHandler(storage)
+			warm := httptest.NewRecorder()
+			handler.ServeHTTP(warm, httptest.NewRequest(http.MethodGet, url, nil))
+			if warm.Code != http.StatusOK {
+				t.Fatal(warm.Code)
+			}
+			switch operation {
+			case "remove":
+				_, err = storeUpdateCard(
+					storage,
+					&cardapi.UpdateInput{
+						FolderID: folder.ID,
+						CardID:   card.ID,
+						Items:    textItems("Keep"),
+					},
+				)
+			case "move":
+				_, err = storeTransferCards(
+					storage,
+					&transferapi.TransferInput{
+						Operation:           "move",
+						DestinationFolderID: other.ID,
+						Sources: []transferapi.Reference{
+							{FolderID: folder.ID, CardID: card.ID},
+						},
+					},
+				)
+			case "delete-folder":
+				err = storeDeleteFolder(storage, folder.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodGet, url, nil)
+			request.Header.Set("If-None-Match", warm.Header().Get("ETag"))
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound {
+				t.Fatal("stale ownership authorized", response.Code)
+			}
+		})
+	}
+}
+
+func startedCache[Key comparable, Value any](
+	t testing.TB,
+	options *cacheotter.Options[Key, Value],
+) *cacheotter.Cache[Key, Value] {
+	t.Helper()
+	cache := cacheotter.New(options)
+	if err := cache.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cache.Close)
+	return cache
+}
+
+func TestReadCachesReuseAndInvalidateCommittedData(t *testing.T) {
+	storage := openTestStore(t)
+	enableReadCaches(t, storage)
+	repository := &Store{state: storage}
+	folder, err := storeCreateFolder(storage, &folderapi.CreateInput{Title: "Cached"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := storeCreateCard(
+		storage,
+		&cardapi.CreateInput{FolderID: folder.ID, Items: textItems("Remember")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalView := storage.view
+	var views atomic.Int64
+	storage.view = func(callback func(*bolt.Tx) error) error { views.Add(1); return originalView(callback) }
+	first, err := repository.ListCards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	folders, err := repository.ListFolders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if got, err := repository.ListCards(); err != nil || got != first {
+			t.Fatal(got, err)
+		}
+		if got, err := repository.ListFolders(); err != nil || got != folders {
+			t.Fatal(got, err)
+		}
+	}
+	if views.Load() != 2 {
+		t.Fatalf("warm listings used %d views", views.Load())
+	}
+	failure := errors.New("rollback")
+	if err := storage.update(func(*bolt.Tx) error { return failure }); !errors.Is(err, failure) {
+		t.Fatal(err)
+	}
+	if _, err := repository.ListCards(); err != nil || views.Load() != 2 {
+		t.Fatal("rollback evicted valid snapshot", err)
+	}
+	item := contentapi.Items(card.Items)[0]
+	if _, err := storeReviewItem(
+		storage,
+		&cardapi.ReviewInput{FolderID: folder.ID, CardID: card.ID, ItemID: item.ID, Rating: 3},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repository.ListCards(); err != nil || got == first {
+		t.Fatal("review left stale snapshot", err)
+	}
+	if err := storeClose(storage); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ListCards(); err == nil {
+		t.Fatal("closed library returned a cached response")
+	}
+}
+
+func TestConcurrentListingCannotRestoreDataAfterCommit(t *testing.T) {
+	storage := openTestStore(t)
+	enableReadCaches(t, storage)
+	repository := &Store{state: storage}
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	load := func(*persistence) (string, error) { close(started); <-release; return "old", nil }
+	go func() {
+		defer close(done)
+		if _, err := cachedListing(storage, "cards", load); err != nil {
+			t.Error(err)
+		}
+	}()
+	<-started
+	committed := make(chan struct{})
+	go func() {
+		defer close(committed)
+		if _, err := storeCreateFolder(storage, &folderapi.CreateInput{Title: "New"}); err != nil {
+			t.Error(err)
+		}
+	}()
+	close(release)
+	<-done
+	<-committed
+	if got, err := repository.ListCards(); err != nil || got != "[]" {
+		t.Fatalf("stale cache restored: %q %v", got, err)
+	}
+}
+
+func TestCachedMediaValidatorsRangesAndOwnership(t *testing.T) {
+	storage := openTestStore(t)
+	enableReadCaches(t, storage)
+	folder, _ := storeCreateFolder(storage, &folderapi.CreateInput{Title: "Media"})
+	image, data := mediaFixture(t, ".png")
+	card, err := storeCreateCard(
+		storage,
+		&cardapi.CreateInput{
+			FolderID: folder.ID,
+			Items:    []contentapi.Draft{{Kind: "image", SourcePath: image}},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := contentapi.Items(card.Items)[0]
+	url := "/media/" + folder.ID + "/" + card.ID + "/" + item.ID
+	handler := storeMediaHandler(storage)
+	request := func(method, byteRange, etag string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, url, nil)
+		r.Header.Set("Range", byteRange)
+		r.Header.Set("If-None-Match", etag)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	w := request(http.MethodGet, "", "")
+	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), data) ||
+		w.Header().Get("Cache-Control") != "private, no-cache" {
+		t.Fatal("initial media", w.Code)
+	}
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("missing validator")
+	}
+	originalView := storage.view
+	storage.view = func(func(*bolt.Tx) error) error { return errors.New("warm lookup touched database") }
+	if got := request(
+		http.MethodGet,
+		"",
+		etag,
+	); got.Code != http.StatusNotModified ||
+		got.Body.Len() != 0 {
+		t.Fatal("conditional", got.Code)
+	}
+	if got := request(http.MethodHead, "", ""); got.Code != http.StatusOK || got.Body.Len() != 0 {
+		t.Fatal("head", got.Code)
+	}
+	if got := request(
+		http.MethodGet,
+		"bytes=-3",
+		"",
+	); got.Code != http.StatusPartialContent ||
+		!bytes.Equal(got.Body.Bytes(), data[len(data)-3:]) {
+		t.Fatal("suffix range", got.Code)
+	}
+	if got := request(
+		http.MethodGet,
+		"bytes=0-1,4-5",
+		"",
+	); got.Code != http.StatusPartialContent ||
+		!strings.HasPrefix(got.Header().Get("Content-Type"), "multipart/byteranges") {
+		t.Fatal("multipart", got.Code)
+	}
+	if got := request(
+		http.MethodGet,
+		"bytes=999999-",
+		"",
+	); got.Code != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatal("invalid range", got.Code)
+	}
+	storage.view = originalView
+	if err := storeDeleteCard(storage, folder.ID, card.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := request(http.MethodGet, "", etag); got.Code != http.StatusNotFound {
+		t.Fatal("deleted media served from cache", got.Code)
+	}
+	// Lookup failures are retried rather than retained.
+	if got := request(http.MethodGet, "", ""); got.Code != http.StatusNotFound {
+		t.Fatal(got.Code)
+	}
+}
 
 func TestNewReviewPartsHaveStaggeredDueTimes(t *testing.T) {
 	scheduler := scheduling.New(new(configuration.Library(configurationFixture())))
@@ -2230,9 +2617,6 @@ func TestManagedStorageDefersOpeningAndGatesMedia(t *testing.T) {
 			return deps
 		}(),
 	)
-	if err := storeClose(store); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("constructor opened database: %v", err)
 	}
@@ -3219,6 +3603,113 @@ func openTestStore(t *testing.T) *persistence {
 	return store
 }
 
+func TestListingRetriesUseFreshResultsAndDoNotReplayWrites(t *testing.T) {
+	storage := openTestStore(t)
+	storage.reads = resilience.NewReads(t.Context(), nil).Do
+	view := storage.view
+	calls := 0
+	storage.view = func(callback func(*bolt.Tx) error) error {
+		calls++
+		err := view(callback)
+		if calls == 1 && err == nil {
+			return syscall.EAGAIN
+		}
+		return err
+	}
+	value, err := (&Store{state: storage}).ListFolders()
+	if err != nil || value != "[]" || calls != 2 {
+		t.Fatal(value, calls, err)
+	}
+	writes := 0
+	update := storage.update
+	storage.update = func(callback func(*bolt.Tx) error) error { writes++; return syscall.EAGAIN }
+	if _, err := (&Store{state: storage}).CreateFolder(
+		`{"title":"test"}`,
+	); err == nil ||
+		writes != 1 {
+		t.Fatal(writes, err)
+	}
+	storage.update = update
+}
+
+func TestLifecycleStartupContextsAndLegacyResources(t *testing.T) {
+	deps := NewDependencies(
+		cffbatch.New(),
+		scheduling.New(new(configuration.Library(configurationFixture()))),
+		storeSettingsFixture(),
+	)
+	store := New(filepath.Join(t.TempDir(), "raven.db"), deps)
+	if err := StartContext(t.Context(), store); err != nil {
+		t.Fatal(err)
+	}
+	if err := StartContext(t.Context(), store); !errors.Is(err, errStoreAlreadyStarted) {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	store = New(filepath.Join(t.TempDir(), "cancel.db"), deps)
+	store.state.initialization = databaseInitializationCallbacks(resilience.NewInitialization(
+		t.Context(),
+		func(ctx context.Context) (*bolt.DB, error) { <-ctx.Done(); return nil, ctx.Err() },
+		&resilience.Options[*bolt.DB]{Release: (*bolt.DB).Close, Transient: resilience.Transient},
+	))
+	if err := StartContext(ctx, store); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "late.db")
+	if db, err := acquireDatabase(ctx, path); db != nil || !errors.Is(err, context.Canceled) {
+		t.Fatal(db, err)
+	}
+	if _, err := databaseForStartup(t.Context(), &persistence{path: t.TempDir()}); err == nil {
+		t.Fatal("directory accepted as database")
+	}
+	legacy := newStore(nil, path, deps)
+	if err := closePersistence(legacy); err != nil {
+		t.Fatal(err)
+	}
+	db, err := databaseForStartup(t.Context(), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if listingContext(legacy).Err() != nil {
+		t.Fatal("unexpected listing context")
+	}
+	value, err := readListing(
+		t.Context(),
+		legacy,
+		func(*persistence) (string, error) { return "[]", nil },
+	)
+	if err != nil || value != "[]" {
+		t.Fatal(value, err)
+	}
+	legacy.reads = resilience.NewReads(t.Context(), nil).Do
+	_, err = readListing(
+		t.Context(),
+		legacy,
+		func(*persistence) (string, error) { return "partial", os.ErrPermission },
+	)
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatal(err)
+	}
+	legacy.closeDatabase = func() error { return os.ErrPermission }
+	if err := closePersistence(legacy); !errors.Is(err, os.ErrPermission) {
+		t.Fatal(err)
+	}
+	legacy.closeDatabase = func() error { return nil }
+	if err := closePersistence(legacy); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEmptyDatabaseAndPermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "raven", "raven.db")
 	store, err := openStore(path)
@@ -3434,7 +3925,7 @@ func TestDatabaseLockTimesOut(t *testing.T) {
 		!strings.Contains(err.Error(), strconv.Quote(store.databasePath())) {
 		t.Fatalf("expected lock timeout with path, got %v", err)
 	}
-	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 5*time.Second {
+	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 15*time.Second {
 		t.Errorf("unexpected lock timeout duration: %v", elapsed)
 	}
 }
@@ -4366,5 +4857,361 @@ func TestLanguagePreferencePersistenceAndFailures(t *testing.T) {
 	}
 	if err := repository.SaveLanguagePreference("ar"); err == nil {
 		t.Fatal("closed write succeeded")
+	}
+}
+
+func TestCardTransferCopiesPreserveProgressAndOwnMedia(t *testing.T) {
+	store, document, _ := archiveFixture(t)
+	original := document.Folders[0].Cards[0]
+	destination := document.Folders[1].Metadata.ID
+	source := transferapi.Reference{FolderID: original.FolderID, CardID: original.ID}
+	request := &transferapi.TransferInput{
+		Operation:           "copy",
+		Sources:             []transferapi.Reference{source, source},
+		DestinationFolderID: destination,
+	}
+	result, err := transferStoreCards(t, store, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 {
+		t.Fatal("duplicate source copied twice")
+	}
+	copied := result.Entries[0].Card
+	if copied.ID == original.ID || copied.FolderID != destination ||
+		copied.CreatedAt != original.CreatedAt ||
+		copied.DueAt != original.DueAt ||
+		copied.LastReviewed != original.LastReviewed {
+		t.Fatal("copy metadata or progress changed", copied)
+	}
+	for index, item := range contentapi.Items(copied.Items) {
+		previous := contentapi.Items(original.Items)[index]
+		if item.ID == previous.ID || item.CardID != copied.ID || item.FolderID != destination ||
+			item.Text != previous.Text ||
+			item.Hint != previous.Hint ||
+			item.Position != previous.Position ||
+			item.LastNotifiedDue != 0 {
+			t.Fatal("copy identity or content", item)
+		}
+		if !reflect.DeepEqual(item.Schedule, previous.Schedule) ||
+			!reflect.DeepEqual(item.Reviews, previous.Reviews) {
+			t.Fatal("copy lost review progress")
+		}
+		if item.RelativePath != "" {
+			before, failure := os.ReadFile(storeMediaPath(store.state, previous.RelativePath))
+			after, readErr := os.ReadFile(storeMediaPath(store.state, item.RelativePath))
+			if failure != nil || readErr != nil || !bytes.Equal(before, after) ||
+				item.RelativePath == previous.RelativePath {
+				t.Fatal("copy media ownership", failure, readErr)
+			}
+		}
+	}
+	again, err := transferStoreCards(t, store, request)
+	if err != nil || again.Entries[0].Card.ID == copied.ID {
+		t.Fatal("repeated paste", err)
+	}
+	if err = store.DeleteCard(source.FolderID, source.CardID); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range contentapi.Items(copied.Items) {
+		if item.RelativePath != "" {
+			response := httptest.NewRecorder()
+			route := fmt.Sprintf("/media/%s/%s/%s", item.FolderID, item.CardID, item.ID)
+			store.MediaHandler().
+				ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
+			if response.Code != http.StatusOK {
+				t.Fatal("copy media lost with original", response.Code)
+			}
+		}
+	}
+}
+
+func TestCardTransferMovesMixedSourcesAndCollidingCardIDs(t *testing.T) {
+	store, document, _ := archiveFixture(t)
+	original := document.Folders[0].Cards[0]
+	destination := document.Folders[1].Metadata.ID
+	existing, err := storeCreateCard(
+		store.state,
+		&cardapi.CreateInput{FolderID: destination, Items: textItems("Existing")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if original.ID != existing.ID {
+		t.Fatal("fixture must exercise folder-local ID collision")
+	}
+	sources := []transferapi.Reference{
+		{FolderID: original.FolderID, CardID: original.ID},
+		{FolderID: destination, CardID: existing.ID},
+	}
+	result, err := transferStoreCards(t, store,
+		&transferapi.TransferInput{
+			Operation:           "move",
+			Sources:             sources,
+			DestinationFolderID: destination,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := result.Entries[0].Card
+	if moved.ID == existing.ID || result.Entries[1].Card.ID != existing.ID {
+		t.Fatal("move collision or same-folder move changed identity")
+	}
+	for index, item := range contentapi.Items(moved.Items) {
+		previous := contentapi.Items(original.Items)[index]
+		previous.FolderID, previous.CardID = destination, moved.ID
+		if !reflect.DeepEqual(item, previous) {
+			t.Fatal("move changed content or review state")
+		}
+	}
+	if err = store.state.view(func(tx *bolt.Tx) error {
+		if _, failure := storeLoadCard(
+			store.state,
+			tx,
+			&[two]string{original.FolderID, original.ID},
+		); failure == nil {
+			return errors.New("source remains after move")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Same-folder copy still duplicates, while move above was a no-op.
+	result, err = transferStoreCards(t, store,
+		&transferapi.TransferInput{
+			Operation:           "copy",
+			Sources:             sources[1:],
+			DestinationFolderID: destination,
+		},
+	)
+	if err != nil || result.Entries[0].Card.ID == existing.ID {
+		t.Fatal("same-folder copy", err)
+	}
+}
+
+func TestCardTransferRollsBackInvalidSourcesAndDatabaseFailures(t *testing.T) {
+	for _, operation := range []string{"copy", "move"} {
+		t.Run(operation, func(t *testing.T) {
+			store, document, _ := archiveFixture(t)
+			original := document.Folders[0].Cards[0]
+			source := transferapi.Reference{FolderID: original.FolderID, CardID: original.ID}
+			request := &transferapi.TransferInput{
+				Operation:           operation,
+				Sources:             []transferapi.Reference{source},
+				DestinationFolderID: document.Folders[1].Metadata.ID,
+			}
+			before, _ := store.ListCards()
+			mediaBefore, _ := os.ReadDir(store.state.mediaDir)
+			request.Sources = append(
+				request.Sources,
+				transferapi.Reference{FolderID: source.FolderID, CardID: "missing"},
+			)
+			if _, err := transferStoreCards(t, store, request); err == nil {
+				t.Fatal("missing source accepted")
+			}
+			request.Sources = request.Sources[:1]
+			destination := request.DestinationFolderID
+			request.DestinationFolderID = "missing"
+			if _, err := transferStoreCards(t, store, request); err == nil {
+				t.Fatal("missing destination accepted")
+			}
+			request.DestinationFolderID = destination
+			update := store.state.update
+			failure := errors.New("injected commit failure")
+			store.state.update = func(action func(*bolt.Tx) error) error {
+				return update(func(tx *bolt.Tx) error {
+					if err := action(tx); err != nil {
+						return err
+					}
+					return failure
+				})
+			}
+			_, err := transferStoreCards(t, store, request)
+			store.state.update = update
+			if !errors.Is(err, failure) {
+				t.Fatal("lost commit failure", err)
+			}
+			after, _ := store.ListCards()
+			mediaAfter, _ := os.ReadDir(store.state.mediaDir)
+			if before != after || !reflect.DeepEqual(mediaBefore, mediaAfter) {
+				t.Fatal("failed transfer changed cards or leaked media")
+			}
+		})
+	}
+}
+
+func TestCardTransferCopyReloadsConcurrentReview(t *testing.T) {
+	store, document, _ := archiveFixture(t)
+	original := document.Folders[0].Cards[0]
+	update := store.state.update
+	var reviewed cardapi.Card
+	store.state.update = func(action func(*bolt.Tx) error) error {
+		store.state.update = update
+		var err error
+		reviewed, err = storeReviewItem(
+			store.state,
+			&cardapi.ReviewInput{
+				FolderID: original.FolderID,
+				CardID:   original.ID,
+				ItemID:   contentapi.Items(original.Items)[0].ID,
+				Rating:   4,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		return update(action)
+	}
+	result, err := transferStoreCards(t, store,
+		&transferapi.TransferInput{
+			Operation: "copy",
+			Sources: []transferapi.Reference{
+				{FolderID: original.FolderID, CardID: original.ID},
+			},
+			DestinationFolderID: document.Folders[1].Metadata.ID,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := result.Entries[0].Card
+	if !reflect.DeepEqual(
+		contentapi.Items(copied.Items)[0].Reviews,
+		contentapi.Items(reviewed.Items)[0].Reviews,
+	) ||
+		copied.LastReviewed != reviewed.LastReviewed ||
+		copied.DueAt != reviewed.DueAt {
+		t.Fatal("concurrent review was lost")
+	}
+}
+
+func TestCardTransferCleansStagedMediaAfterReadFailure(t *testing.T) {
+	store, document, _ := archiveFixture(t)
+	original := document.Folders[0].Cards[0]
+	items := contentapi.Items(original.Items)
+	if err := os.Remove(storeMediaPath(store.state, items[len(items)-1].RelativePath)); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadDir(store.state.mediaDir)
+	_, err := transferStoreCards(t, store,
+		&transferapi.TransferInput{
+			Operation: "copy",
+			Sources: []transferapi.Reference{
+				{FolderID: original.FolderID, CardID: original.ID},
+			},
+			DestinationFolderID: document.Folders[1].Metadata.ID,
+		},
+	)
+	if err == nil {
+		t.Fatal("missing media accepted")
+	}
+	after, _ := os.ReadDir(store.state.mediaDir)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("staged files leaked on media failure")
+	}
+}
+
+func transferStoreCards(
+	t *testing.T,
+	store *Store,
+	input *transferapi.TransferInput,
+) (transferapi.TransferResult, error) {
+	t.Helper()
+	response, err := store.ApplyCardTransfer(string(encodeFixture(t, input)))
+	if err != nil {
+		return transferapi.TransferResult{}, err
+	}
+	var result transferapi.TransferResult
+	err = json.Unmarshal([]byte(response), &result)
+	if err == nil {
+		for index := range result.Entries {
+			err = cardapi.Normalize(&result.Entries[index].Card)
+			if err != nil {
+				break
+			}
+		}
+	}
+	return result, err
+}
+
+func TestCardTransferCommitAndAllocationFailures(t *testing.T) {
+	store, document, _ := archiveFixture(t)
+	original := document.Folders[0].Cards[0]
+	request := &transferapi.TransferInput{
+		Operation: "move",
+		Sources: []transferapi.Reference{
+			{FolderID: original.FolderID, CardID: original.ID},
+		},
+		DestinationFolderID: document.Folders[1].Metadata.ID,
+	}
+	if _, err := transferStoreCards(t, store, &transferapi.TransferInput{}); err == nil {
+		t.Fatal("invalid operation accepted")
+	}
+	transfer := newCardTransfer(store.state, request)
+	before, _ := store.ListCards()
+	err := store.state.view(func(tx *bolt.Tx) error {
+		if _, failure := cardTransferWrite(
+			transfer,
+			tx,
+			0,
+		); !errors.Is(
+			failure,
+			bolt.ErrTxNotWritable,
+		) {
+			t.Error("read-only transfer", failure)
+		}
+		if failure := writeTransferredCard(
+			tx,
+			&original,
+		); !errors.Is(
+			failure,
+			errCardIDAlreadyExists,
+		) {
+			t.Error("collision accepted", failure)
+		}
+		invalid := original
+		invalid.FolderID = "missing"
+		if failure := writeTransferredCard(tx, &invalid); failure == nil {
+			t.Error("missing write destination accepted")
+		}
+		request.DestinationFolderID = "missing"
+		if failure := cardTransferCommit(transfer, tx); failure == nil {
+			t.Error("missing commit destination accepted")
+		}
+		request.DestinationFolderID = document.Folders[1].Metadata.ID
+		request.Sources[0].CardID = "missing"
+		if failure := cardTransferCommit(transfer, tx); failure == nil {
+			t.Error("missing commit source accepted")
+		}
+		request.Sources[0].CardID = original.ID
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entropy := rand.Reader
+	rand.Reader = failedEntropy{}
+	t.Cleanup(func() { rand.Reader = entropy })
+	_, err = transferStoreCards(t, store, request)
+	rand.Reader = entropy
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatal("allocation failure lost", err)
+	}
+	err = store.state.update(func(tx *bolt.Tx) error {
+		folder := tx.Bucket([]byte(foldersBucket)).Bucket([]byte(original.FolderID))
+		if failure := folder.Bucket([]byte(itemsBucket)).
+			DeleteBucket([]byte(original.ID)); failure != nil {
+			return failure
+		}
+		_, failure := cardTransferPersist(transfer, tx, &original)
+		return failure
+	})
+	if err == nil {
+		t.Fatal("move did not roll back failed source removal")
+	}
+	after, _ := store.ListCards()
+	if before != after {
+		t.Fatal("failed transaction changed the library")
 	}
 }

@@ -6,5 +6,6 @@ export interface WindowPort {
   ShowReviews(): Promise<void>;
   RefreshReminders(): Promise<void>;
   ToggleFloatingReview(): Promise<void>;
+  SyncFloatingReview(): Promise<void>;
   HideFloatingReview(): Promise<void>;
 }

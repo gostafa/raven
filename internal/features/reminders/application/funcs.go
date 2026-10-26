@@ -190,6 +190,8 @@ func Start(source Source, notifier ports.Notifier, callbacks Callbacks) *Coordin
 	signals.done = make(chan struct{})
 
 	runtime := newReconciliation(source, callbacks, signals)
+
+	runtime.available = notificationAvailability(notifier)
 	bindNotifications(runtime, source, notifier)
 
 	go runReconciliation(runtime)
@@ -250,9 +252,9 @@ func stopCoordinator(signals *coordinatorSignals) {
 func runReconciliation(runtime *reconciliation) {
 	defer runtime.finish()
 
-	requestAuthorization(runtime)
-
 	for {
+		requestAuthorization(runtime)
+
 		delay := reconcile(runtime)
 		if !runtime.wait(delay) {
 			return
@@ -260,10 +262,29 @@ func runReconciliation(runtime *reconciliation) {
 	}
 }
 
+func notificationAvailability(notifier ports.Notifier) func() bool {
+	available, ok := notifier.(ports.Availability)
+	if !ok {
+		return nil
+	}
+
+	return available.Available
+}
+
+func notificationsAvailable(runtime *reconciliation) bool {
+	return runtime.available == nil || runtime.available()
+}
+
+func authorizationPending(runtime *reconciliation) bool {
+	return runtime.authorize != nil && !runtime.promptAttempted && notificationsAvailable(runtime)
+}
+
 func requestAuthorization(runtime *reconciliation) {
-	if runtime.authorize == nil {
+	if !authorizationPending(runtime) {
 		return
 	}
+
+	runtime.promptAttempted = true
 
 	prompt, err := runtime.claim()
 	if err != nil || !prompt {
@@ -312,6 +333,10 @@ func reconciliationCards(list func() (string, error)) ([]cardapi.Card, error) {
 }
 
 func deliverPending(runtime *reconciliation, pending []reviewapi.DueOccurrence) {
+	if !notificationsAvailable(runtime) {
+		return
+	}
+
 	if len(pending) == zero || runtime.deliver == nil {
 		return
 	}
@@ -355,17 +380,17 @@ func NewWorker(source Source, notifications Notifications, callbacks Callbacks) 
 		return coordinator.Wake, coordinator.Stop
 	}
 
-	return &Worker{execute: func(operation string) { executeWorker(state, operation) }}
+	worker := &Worker{execute: func(operation string) { executeWorker(state, operation) }}
+
+	if changes, ok := notifications.(ports.AvailabilityChanges); ok {
+		state.unsubscribe = changes.SubscribeAvailability(worker.Wake)
+	}
+
+	return worker
 }
 
 func startAvailable(source Source, notifications Notifications, callbacks Callbacks) *Coordinator {
-	var notifier ports.Notifier
-
-	if notifications.Available() {
-		notifier = notifications
-	}
-
-	return Start(source, notifier, callbacks)
+	return Start(source, notifications, callbacks)
 }
 
 // Enable permits readiness events to start reconciliation.
@@ -426,7 +451,14 @@ func stopWorker(state *workerState) {
 	state.stopped = true
 
 	stop := state.stop
+	unsubscribe := state.unsubscribe
+
+	state.unsubscribe = nil
 	state.mu.Unlock()
+
+	if unsubscribe != nil {
+		unsubscribe()
+	}
 
 	if stop != nil {
 		stop()

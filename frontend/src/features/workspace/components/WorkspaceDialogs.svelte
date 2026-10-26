@@ -37,7 +37,7 @@
 </script>
 
 <dialog
-  class="workspace-control workspace-card-dialog workspace-part-dialog"
+  class="workspace-control workspace-part-dialog"
   bind:this={partDialog}
   aria-label={$l.t('workspace.contentPreview')}
   onclose={() => {
@@ -66,21 +66,19 @@
         class="workspace-control workspace-icon-button"
         disabled={saving}
         onclick={() => partDialog?.close()}
-        aria-label={$l.t('cards.cancel')}
-        title={$l.t('cards.cancel')}><WorkspaceIcon name="close" /></button
+        aria-label={$l.t('common.close_card_part')}
+        title={$l.t('common.close_card_part')}><WorkspaceIcon name="close" /></button
       >
     </div>
     <div class="workspace-part-body">
       <CardContent
+        expanded
         card={{
           ...selectedPart.card,
           items: selectedPart.card.items.filter((item) => item.id === selectedPart?.itemId),
         }}
         {mediaURL}
       />
-      {#if selectedPart.card.items.length === 1}
-        <p class="workspace-control workspace-field-hint">{$l.t('workspace.lastPartHelp')}</p>
-      {/if}
       {#if partError}<p class="workspace-control workspace-error" role="alert">
           {partError ? $l.t(partError) : ''}
         </p>{/if}

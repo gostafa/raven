@@ -6,11 +6,19 @@ package ports
 
 import (
 	"context"
+	"log/slog"
 )
 
 type (
+	// Availability reports whether native initialization succeeded.
+	Availability interface{ Available() bool }
+	// AvailabilityChanges publishes native initialization completion.
+	AvailabilityChanges interface {
+		SubscribeAvailability(changed func()) func()
+	}
 	// RuntimeOptions supplies notification diagnostics and localized messages.
 	RuntimeOptions = struct {
+		Logger   *slog.Logger
 		Warn     func(context.Context, error)
 		Messages Messages
 	}

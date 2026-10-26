@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { loadWorkspace, saveCard, deleteSelection } from '../src/features/workspace/index.ts';
+import { loadWorkspace, saveCard, deleteSelection, reviewSelection } from '../src/features/workspace/index.ts';
 import { saveReview, loadDueReview } from '../src/features/reviews/index.ts';
 
 const folder = { id: 'folder', title: 'Ideas', description: '', tags: [] };
@@ -13,6 +13,27 @@ const card = {
   lastReviewed: 0,
   items: [{ id: 'item', schedule: { Due: new Date(100).toISOString() } }],
 };
+
+test('review now includes future items only from selected cards and excludes hints', () => {
+  const future = {
+    ...card,
+    folderId: 'other-folder',
+    items: [
+      { id: 'future', schedule: { Due: new Date(9_000_000_000_000).toISOString() } },
+      { id: 'hint', hint: true, schedule: { Due: new Date(0).toISOString() } },
+    ],
+  };
+  const selection = [{ folderId: future.folderId, cardId: future.id }];
+  const before = structuredClone([card, future, selection]);
+  const queue = reviewSelection([card, future], selection);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].card, future);
+  assert.equal(queue[0].item.id, 'future');
+  assert.deepEqual(reviewSelection([card, future], []), []);
+  assert.deepEqual(reviewSelection([card, future], [{ folderId: 'missing', cardId: card.id }]), []);
+  assert.equal(reviewSelection([card, future], [...selection, { folderId: card.folderId, cardId: card.id }]).length, 2);
+  assert.deepEqual([card, future, selection], before);
+});
 
 test('loading failures leave the caller snapshot unchanged and allow retry', async () => {
   let failed = true;

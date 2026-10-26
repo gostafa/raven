@@ -2,7 +2,7 @@ import { mount, unmount } from 'svelte';
 import App from './App.svelte';
 import { WorkspaceLoading } from './features/workspace';
 import { createLocalization, configurationFailure } from './features/localization';
-import { createRuntime, loadConfiguration } from './features/workspace/adapters';
+import { createRuntime, loadConfiguration, notify } from './features/workspace/adapters';
 
 const target = document.getElementById('app');
 if (!target) throw new Error('Raven mount element is missing');
@@ -28,8 +28,8 @@ void start(target).catch(async () => {
   const failure = configurationFailure(navigator.languages);
   document.documentElement.lang = failure.locale;
   document.documentElement.dir = failure.direction;
-  const message = document.createElement('p');
-  message.textContent = failure.message;
-  message.style.cssText = 'color:#fff;background:#000;padding:24px';
-  target.replaceChildren(message);
+  target.replaceChildren();
+  await notify('Raven', failure.message).catch(() => {
+    // Native delivery is optional; keep startup failures out of the workspace.
+  });
 });

@@ -8,13 +8,17 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	goruntime "runtime"
+	"strings"
 	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"raven/internal/features/reminders/ports"
+	resilience "raven/internal/shared/resilience/adapters/retry"
 )
 
 // NewRuntime constructs an optional notification runtime without starting it.
@@ -32,82 +36,198 @@ func NewLocalizedRuntime(
 	sound ports.Sound,
 	options *ports.RuntimeOptions,
 ) *Runtime {
-	available := new(atomic.Bool)
+	state := newNotificationLifecycle(native, options)
 	operations := New(native, sound, options.Messages).operations
 
 	operations["start"] = func(ctx context.Context, _ int, _ func()) notificationResult {
-		startNativeNotifications(
-			ctx,
-			native,
-			notificationWarning(options.Warn, available),
-		)
-
-		return notificationResult{allowed: available.Load(), failure: nil}
+		return startManagedNotifications(ctx, state)
 	}
-	bindNotificationLifecycle(operations, native, available)
+	bindManagedNotifications(operations, state)
 
 	return &Runtime{operations: operations}
 }
 
-func notificationWarning(
-	warn func(context.Context, error),
-	available *atomic.Bool,
-) func(context.Context, error) {
-	return func(ctx context.Context, err error) {
-		if err == nil {
-			available.Store(true)
+func newNotificationLifecycle(
+	native NativeRuntime,
+	options *ports.RuntimeOptions,
+) *notificationLifecycle {
+	owner, cancel := context.WithCancel(context.Background())
+	state := new(notificationLifecycle)
 
-			return
-		}
+	state.native, state.owner, state.cancel = native, func() context.Context { return owner }, cancel
+	state.available, state.listeners, state.warn = new(
+		atomic.Bool,
+	), make(
+		map[uint]func(),
+	), options.Warn
+	state.resource = newNotificationResource(state, options)
 
-		warn(ctx, err)
+	return state
+}
+
+func newNotificationResource(
+	state *notificationLifecycle,
+	options *ports.RuntimeOptions,
+) *resilience.Initialization[bool] {
+	return resilience.NewInitialization(
+		state.owner(),
+		func(ctx context.Context) (bool, error) { return startNativeAttempt(ctx, state) },
+		&resilience.Options[bool]{
+			Name:      "notifications",
+			Logger:    options.Logger,
+			Release:   func(bool) error { return state.native.ServiceShutdown() },
+			Transient: notificationTransient,
+		},
+	)
+}
+
+//nolint:contextcheck // Native workers need the owner lifetime, independent of the initialization deadline.
+func startNativeAttempt(ctx context.Context, state *notificationLifecycle) (bool, error) {
+	var options application.ServiceOptions
+
+	err := errors.Join(state.native.ServiceStartup(state.owner(), options), ctx.Err())
+	if err != nil {
+		return false, errors.Join(cleanupNativeFailure(state.native, err))
+	}
+
+	return true, nil
+}
+
+func cleanupNativeFailure(native NativeRuntime, err error) error {
+	cleanup := native.ServiceShutdown()
+	if cleanup != nil {
+		return errors.Join(err, cleanup, errNotificationCleanup)
+	}
+
+	return errors.Join(err)
+}
+
+func startManagedNotifications(
+	ctx context.Context,
+	state *notificationLifecycle,
+) notificationResult {
+	detach := context.AfterFunc(ctx, state.cancel)
+
+	allowed, err := state.resource.Get(ctx)
+	if err != nil {
+		detach()
+		state.cancel()
+
+		err = errors.Join(err, state.resource.Close())
+		state.warn(ctx, err)
+	}
+
+	publishNotificationAvailability(state, allowed)
+
+	return notificationResult{allowed: state.available.Load(), failure: nil, unsubscribe: nil}
+}
+
+func publishNotificationAvailability(state *notificationLifecycle, allowed bool) {
+	state.mu.Lock()
+	state.available.Store(allowed && !state.stopped)
+
+	callbacks := notificationListeners(state)
+	state.mu.Unlock()
+
+	for index := range callbacks {
+		callbacks[index]()
 	}
 }
 
-func startNativeNotifications(
-	ctx context.Context,
-	native NativeRuntime,
-	report func(context.Context, error),
-) {
-	var options application.ServiceOptions
+func closeManagedNotifications(state *notificationLifecycle) error {
+	state.mu.Lock()
 
-	report(ctx, native.ServiceStartup(ctx, options))
+	state.stopped = true
+	state.available.Store(false)
+	state.mu.Unlock()
+	state.cancel()
+
+	return errors.Join(state.resource.Close())
 }
 
-func bindNotificationLifecycle(
+func bindManagedNotifications(
 	operations map[string]func(context.Context, int, func()) notificationResult,
-	native NativeRuntime,
-	available *atomic.Bool,
+	state *notificationLifecycle,
 ) {
 	operations["available"] = func(context.Context, int, func()) notificationResult {
-		return notificationResult{allowed: available.Load(), failure: nil}
+		return notificationResult{allowed: state.available.Load(), failure: nil, unsubscribe: nil}
 	}
 	operations["stop"] = func(context.Context, int, func()) notificationResult {
 		return notificationResult{
-			allowed: false,
-			failure: stopNativeNotifications(native, available),
+			allowed:     false,
+			failure:     closeManagedNotifications(state),
+			unsubscribe: nil,
 		}
 	}
-	operations["review"] = func(_ context.Context, _ int, show func()) notificationResult {
-		native.OnNotificationResponse(func(result notifications.NotificationResult) {
-			notificationResponse(&result, available, show)
-		})
+	bindNotificationSubscription(operations, state)
+	bindNotificationResponses(operations, state)
+}
 
-		return notificationResult{allowed: false, failure: nil}
+func bindNotificationSubscription(
+	operations map[string]func(context.Context, int, func()) notificationResult,
+	state *notificationLifecycle,
+) {
+	operations["subscribe"] = func(_ context.Context, _ int, changed func()) notificationResult {
+		return notificationResult{
+			allowed:     false,
+			failure:     nil,
+			unsubscribe: observeNotifications(state, changed),
+		}
 	}
 }
 
-func stopNativeNotifications(native NativeRuntime, available *atomic.Bool) error {
-	if !available.Swap(false) {
-		return nil
+func bindNotificationResponses(
+	operations map[string]func(context.Context, int, func()) notificationResult,
+	state *notificationLifecycle,
+) {
+	operations["review"] = func(_ context.Context, _ int, show func()) notificationResult {
+		state.native.OnNotificationResponse(
+			func(result notifications.NotificationResult) { notificationResponse(&result, state.available, show) },
+		)
+
+		return notificationResult{allowed: false, failure: nil, unsubscribe: nil}
+	}
+}
+
+func observeNotifications(state *notificationLifecycle, changed func()) func() {
+	state.mu.Lock()
+
+	state.next++
+
+	key := state.next
+
+	state.listeners[key] = changed
+	state.mu.Unlock()
+
+	return func() { state.mu.Lock(); delete(state.listeners, key); state.mu.Unlock() }
+}
+
+func notificationTransient(err error) bool {
+	if goruntime.GOOS == "windows" || errors.Is(err, errNotificationCleanup) {
+		return false
 	}
 
-	err := native.ServiceShutdown()
-	if err != nil {
-		return fmt.Errorf("stop notifications: %w", err)
+	if resilience.Transient(err) {
+		return true
 	}
 
-	return nil
+	var failure *net.OpError
+
+	return errors.As(err, &failure) && failure.Timeout()
+}
+
+func notificationListeners(state *notificationLifecycle) []func() {
+	callbacks := make([]func(), zero, len(state.listeners))
+	for key := range state.listeners {
+		callbacks = append(callbacks, state.listeners[key])
+	}
+
+	return callbacks
+}
+
+// SubscribeAvailability observes native startup completion without coupling the worker to Wails.
+func (runtime *Runtime) SubscribeAvailability(changed func()) func() {
+	return runtime.operations["subscribe"](context.Background(), zero, changed).unsubscribe
 }
 
 func notificationResponse(
@@ -116,6 +236,10 @@ func notificationResponse(
 	show func(),
 ) {
 	if result.Error != nil || !available.Load() {
+		return
+	}
+
+	if strings.HasPrefix(result.Response.ID, "raven-notice-") {
 		return
 	}
 
@@ -168,7 +292,8 @@ func New(native NativeNotifications, sound ports.Sound, messages ...ports.Messag
 		"request": func(context.Context, int, func()) notificationResult { return requestAuthorization(native) },
 		"send": func(_ context.Context, count int, _ func()) notificationResult {
 			return notificationResult{
-				allowed: false,
+				allowed:     false,
+				unsubscribe: nil,
 				failure: sendReminder(
 					native,
 					sound,
@@ -200,26 +325,27 @@ func (notifier Notifier) RequestAuthorization() (bool, error) {
 
 func checkAuthorization(native NativeNotifications) notificationResult {
 	allowed, err := native.CheckNotificationAuthorization()
-	if err != nil {
-		return notificationResult{
-			allowed: allowed,
-			failure: fmt.Errorf("check notification authorization: %w", err),
-		}
-	}
 
-	return notificationResult{allowed: allowed, failure: nil}
+	return authorizationResult(allowed, err, "check notification authorization")
 }
 
 func requestAuthorization(native NativeNotifications) notificationResult {
 	allowed, err := native.RequestNotificationAuthorization()
 	if err != nil {
-		return notificationResult{
-			allowed: false,
-			failure: fmt.Errorf("request authorization: %w", err),
-		}
+		allowed = false
 	}
 
-	return notificationResult{allowed: allowed, failure: nil}
+	return authorizationResult(allowed, err, "request authorization")
+}
+
+func authorizationResult(allowed bool, err error, operation string) notificationResult {
+	result := notificationResult{allowed: allowed, failure: nil, unsubscribe: nil}
+
+	if err != nil {
+		result.failure = fmt.Errorf("%s: %w", operation, err)
+	}
+
+	return result
 }
 
 func sendReminder(native NativeNotifications, sound ports.Sound, delivery *reminderDelivery) error {
@@ -267,5 +393,5 @@ func NewRuntimeOptions(
 	warn func(context.Context, error),
 	messages ports.Messages,
 ) *ports.RuntimeOptions {
-	return &ports.RuntimeOptions{Warn: warn, Messages: messages}
+	return &ports.RuntimeOptions{Warn: warn, Messages: messages, Logger: nil}
 }

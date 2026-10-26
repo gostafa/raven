@@ -11,6 +11,12 @@ import (
 )
 
 type (
+	// MediaRecord contains only the metadata needed to deliver owned media.
+	MediaRecord = struct {
+		RelativePath string
+		MIMEType     string
+		OriginalName string
+	}
 	// BatchExecutor runs independent jobs with bounded concurrency. It returns the
 	// first error in input order and drains started jobs even after cancellation.
 	// Job failures do not skip other jobs; cancellation skips pending jobs.

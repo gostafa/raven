@@ -12,6 +12,7 @@ import (
 
 	companionwails "raven/internal/features/companion/adapters/wails"
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
+	cacheports "raven/internal/shared/cache/ports"
 	desktopmedia "raven/internal/shared/desktopmedia/adapters/wails"
 	mediaports "raven/internal/shared/desktopmedia/ports"
 )
@@ -19,6 +20,9 @@ import (
 type (
 	registryParams struct {
 		fx.In
+
+		Chunks cacheports.Chunks
+		Retry  cacheports.ReadRetry
 
 		Batch  mediaports.BatchExecutor
 		Store  *boltstore.Store

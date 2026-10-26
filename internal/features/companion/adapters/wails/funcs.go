@@ -90,6 +90,7 @@ func newWindowOperations(state *windowState) *Windows {
 		"position":   func() { PositionFloatingReview(state) },
 		"close":      func() { RequestFloatingReviewClose(state) },
 		"toggle":     func() { ToggleFloatingReview(state) },
+		"syncReview": func() { syncFloatingReview(state) },
 		"hideReview": func() { HideFloatingReview(state) }, "quit": func() { Quit(state) },
 	}}
 }
@@ -133,6 +134,9 @@ func (windows *Windows) RequestFloatingReviewClose() { windows.operations["close
 
 // ToggleFloatingReview opens a review or requests its closure.
 func (windows *Windows) ToggleFloatingReview() { windows.operations["toggle"]() }
+
+// SyncFloatingReview recovers an opening event missed during frontend startup.
+func (windows *Windows) SyncFloatingReview() { windows.operations["syncReview"]() }
 
 // HideFloatingReview hides a review after media playback stops.
 func (windows *Windows) HideFloatingReview() { windows.operations["hideReview"]() }
@@ -275,6 +279,16 @@ func ToggleFloatingReview(windows *windowState) {
 // HideFloatingReview is called after the review UI has stopped media playback.
 func HideFloatingReview(windows *windowState) {
 	windows.hideReview()
+}
+
+func syncFloatingReview(windows *windowState) {
+	windows.invoke(func() {
+		if windows.reviewVisible != nil && windows.reviewVisible() {
+			windows.dispatchReview(&application.CustomEvent{
+				Name: windows.openFloatingReview, Data: nil, Sender: "",
+			})
+		}
+	})
 }
 
 func windowLayout(state *windowState) *companion.Layout {

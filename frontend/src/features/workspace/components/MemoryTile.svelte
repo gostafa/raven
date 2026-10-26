@@ -9,6 +9,8 @@
     type PreviewStartPort,
   } from '../../cards';
   import { ActionMenu } from '../../ui';
+  import { reference, referenceKey } from '../../cardtransfer';
+  import WorkspaceIcon from './WorkspaceIcon.svelte';
   const l = useLocalization();
   let {
     card,
@@ -19,7 +21,17 @@
     startReview,
     editCard,
     confirmDelete,
+    selecting,
+    selected,
+    toggleSelected,
+    moveCard,
+    copyCard,
   }: {
+    selecting: boolean;
+    selected: boolean;
+    toggleSelected: (card: Card) => void;
+    moveCard: (opener: HTMLElement, card: Card) => void;
+    copyCard: (opener: HTMLElement, card: Card) => void;
     card: Card;
     mediaURL: MediaURLPort;
     nativeStart: PreviewStartPort;
@@ -39,7 +51,25 @@
   );
 </script>
 
-<li class="workspace-control workspace-memory-tile">
+<li
+  class="workspace-control workspace-memory-tile"
+  class:workspace-card-selecting={selecting}
+  class:workspace-card-selected={selected}
+  data-card-key={referenceKey(reference(card))}
+>
+  {#if selecting}<label class="workspace-card-selection">
+      <input
+        type="checkbox"
+        checked={selected}
+        {disabled}
+        aria-label={$l.t('transfer.select_card', { name: cardPreview(card) })}
+        onchange={() => {
+          toggleSelected(card);
+        }}
+      />
+      <span class="workspace-selection-check"><WorkspaceIcon name="check" size={14} /></span>
+      <span class="workspace-selection-label">{$l.t(selected ? 'transfer.selected' : 'transfer.select')}</span>
+    </label>{/if}
   <div
     class="workspace-memory-card"
     style:--progress-fill={progressColor}
@@ -50,7 +80,7 @@
       aria-label={$l.t('workspace.recallSuccess', { percentage: $l.percent(progress) })}
       title={$l.t('workspace.recallExplanation')}>{$l.percent(progress)}</span
     >
-    <div class="workspace-memory-card-preview">
+    <div class="workspace-memory-card-preview" inert={selecting}>
       <CardContent
         {card}
         {mediaURL}
@@ -62,30 +92,42 @@
       />
     </div>
   </div>
-  <span class="workspace-control workspace-tile-actions"
-    ><ActionMenu
-      label={$l.t('workspace.cardOptions', { name: cardPreview(card) })}
-      {disabled}
-      actions={[
-        {
-          label: $l.t('workspace.reviewCard'),
-          onselect: (opener: HTMLButtonElement) => {
-            startReview(opener, card);
+  {#if !selecting}<span class="workspace-control workspace-tile-actions"
+      ><ActionMenu
+        label={$l.t('workspace.cardOptions', { name: cardPreview(card) })}
+        {disabled}
+        actions={[
+          {
+            label: $l.t('workspace.edit_card'),
+            onselect: (opener: HTMLButtonElement) => {
+              editCard(opener, card);
+            },
           },
-        },
-        {
-          label: $l.t('workspace.edit_card'),
-          onselect: (opener: HTMLButtonElement) => {
-            editCard(opener, card);
+          {
+            label: $l.t('transfer.move_to'),
+            onselect: (opener: HTMLButtonElement) => {
+              moveCard(opener, card);
+            },
           },
-        },
-        {
-          label: $l.t('workspace.delete_card'),
-          onselect: (opener: HTMLButtonElement) => {
-            confirmDelete(opener, card.folderId, card);
+          {
+            label: $l.t('transfer.copy'),
+            onselect: (opener: HTMLButtonElement) => {
+              copyCard(opener, card);
+            },
           },
-        },
-      ]}
-    /></span
-  >
+          {
+            label: $l.t('workspace.review_now'),
+            onselect: (opener: HTMLButtonElement) => {
+              startReview(opener, card);
+            },
+          },
+          {
+            label: $l.t('workspace.delete_card'),
+            onselect: (opener: HTMLButtonElement) => {
+              confirmDelete(opener, card.folderId, card);
+            },
+          },
+        ]}
+      /></span
+    >{/if}
 </li>

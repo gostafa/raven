@@ -2,29 +2,63 @@
   import { onMount } from 'svelte';
   import { useLocalization } from '../../localization';
   import { Skeleton } from '../../ui';
+  import { loadMedia } from './viewport/funcs';
 
   const l = useLocalization();
-  let { src, filename, compact = false }: { src: string; filename?: string; compact?: boolean } = $props();
+  let {
+    src,
+    filename,
+    compact = false,
+    expanded = false,
+    active = false,
+  }: {
+    src: string;
+    filename?: string;
+    compact?: boolean;
+    expanded?: boolean;
+    active?: boolean;
+  } = $props();
+  let resolved = $state<string>();
   let image = $state<HTMLImageElement>();
   let ready = $state(false);
   let failed = $state(false);
 
+  $effect(() => {
+    ready = false;
+    failed = src.length === 0;
+  });
+
   // CardContent keys this component by source so replacement media starts fresh.
   onMount(() => {
-    if (image?.complete === true) {
+    if (image?.complete === true && image.getAttribute('src') !== null) {
       ready = image.naturalWidth > 0;
       failed = !ready;
     }
   });
 </script>
 
-<div class="image-preview" class:compact aria-busy={!ready && !failed}>
+<div
+  class="image-preview"
+  class:compact
+  class:expanded
+  class:loading={!ready && !failed}
+  aria-busy={!ready && !failed}
+  use:loadMedia={{
+    source: src,
+    deferred: compact,
+    active,
+    resolve: (source) => {
+      resolved = source;
+    },
+  }}
+>
   {#if failed}
     <p class="media-error" role="status">{$l.t('cards.mediaFailed', { name: filename ?? '' })}</p>
   {:else}
     <img
       bind:this={image}
-      {src}
+      src={resolved}
+      decoding="async"
       alt={(filename ?? '') || $l.t('cards.card_image')}
       class:pending={!ready}
       onload={() => {
@@ -48,6 +82,22 @@
   }
   .compact {
     height: 100%;
+  }
+  .expanded {
+    width: max-content;
+    max-width: 100%;
+    height: auto;
+  }
+  .expanded.loading {
+    min-width: min(320px, calc(100vw - 26px));
+    min-height: min(180px, calc(100svh - 26px));
+  }
+  .expanded img {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    max-height: calc(100svh - 26px);
+    border-radius: 0;
   }
   img {
     display: block;

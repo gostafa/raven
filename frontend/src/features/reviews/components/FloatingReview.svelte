@@ -10,7 +10,7 @@
   import ReviewSession from './ReviewSession.svelte';
 
   let { backend }: { backend: AppPorts } = $props();
-  let status = $state<'loading' | 'ready' | 'error' | 'closed'>('loading');
+  let status = $state<'loading' | 'ready' | 'error' | 'closed'>('closed');
   let entries = $state<ReviewItem[]>([]);
   let folders = $state<Folder[]>([]);
   let saving = $state(false);
@@ -82,9 +82,9 @@
     const dismiss = backend.events.onCloseFloatingReview(() => {
       close().catch(reportCloseFailure);
     });
-    // The first native show can precede event subscription. Mount also loads a
-    // fresh session so the first click never depends on receiving that event.
-    load().catch(reportLoadFailure);
+    // Recover a show that preceded subscription without mounting media in the
+    // hidden native window at startup.
+    backend.SyncFloatingReview().catch(reportLoadFailure);
     return () => {
       ++generation;
       open();

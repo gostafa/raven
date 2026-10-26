@@ -42,6 +42,7 @@ type (
 		PositionFloatingReview()
 		RequestFloatingReviewClose()
 		ToggleFloatingReview()
+		SyncFloatingReview()
 		HideFloatingReview()
 	}
 )

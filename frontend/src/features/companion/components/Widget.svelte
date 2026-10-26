@@ -56,29 +56,27 @@
 </script>
 
 <svelte:window onfocus={focus} />
-{#if dueCount > 0}
-  <div class="widget" style="--custom-contextmenu: raven;">
-    <button
-      class="widget-logo"
-      class:has-due={dueCount > 0}
-      aria-label={dueCount
-        ? $l.t('widget.reviewLabel', { items: $l.t('common.items', { count: dueCount }) })
-        : $l.t('companion.toggle_floating_review')}
-      title={$l.t('widget.reviewTitle', {
-        items: $l.t('common.items', { count: dueCount }),
-        instructions: $l.t('widget.instructions'),
-      })}
-      onpointerdown={(event) => {
-        if (event.button === 0) widgetPointerStart = { x: event.screenX, y: event.screenY };
-      }}
-      onclick={openFromWidget}
-      ><img src="/raven.svg" alt="" draggable="false" />{#if dueCount}<span class="widget-due" aria-hidden="true"
-          >{dueCount > 9 ? `${$l.number(9)}+` : $l.number(dueCount)}</span
-        >{/if}</button
-    >
-    {#if error}<span class="sr-only" role="alert">{error ? $l.t(error) : ''}</span>{/if}
-  </div>
-{/if}
+<div class="widget" style="--custom-contextmenu: raven;">
+  <button
+    class="widget-logo"
+    class:has-due={dueCount > 0}
+    aria-label={dueCount
+      ? $l.t('widget.reviewLabel', { items: $l.t('common.items', { count: dueCount }) })
+      : $l.t('companion.toggle_floating_review')}
+    title={$l.t('widget.reviewTitle', {
+      items: $l.t('common.items', { count: dueCount }),
+      instructions: $l.t('widget.instructions'),
+    })}
+    onpointerdown={(event) => {
+      if (event.button === 0) widgetPointerStart = { x: event.screenX, y: event.screenY };
+    }}
+    onclick={openFromWidget}
+    ><img src="/raven.svg" alt="" draggable="false" />{#if dueCount}<span class="widget-due" aria-hidden="true"
+        >{dueCount > 9 ? `${$l.number(9)}+` : $l.number(dueCount)}</span
+      >{/if}</button
+  >
+  {#if error}<span class="sr-only" role="alert">{error ? $l.t(error) : ''}</span>{/if}
+</div>
 
 <style>
   .widget {
@@ -132,7 +130,7 @@
     padding: 0;
     border: 0;
     border-radius: 50%;
-    background: #ff001a;
+    background: #000;
     color: #fff;
     font-size: 12px;
     line-height: 1;
@@ -154,7 +152,8 @@
     opacity: 0.8;
   }
   .widget-logo:focus-visible {
-    outline: none;
+    outline: 2px solid #555;
+    outline-offset: -3px;
   }
   .sr-only {
     position: absolute;

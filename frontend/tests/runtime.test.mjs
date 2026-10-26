@@ -35,7 +35,10 @@ const hooks = registerHooks({
         async ListCards() { return transport('ListCards'); },
         async CreateCard(input) { return transport('CreateCard', [input]); },
         async UpdateCard(input) { return transport('UpdateCard', [input]); },
+        async TransferCards(input) { return transport('TransferCards', [input]); },
         async ReviewItem(input) { return transport('ReviewItem', [input]); },
+        async Notify(title, body) { return transport('Notify', [title, body]); },
+        async SyncFloatingReview() { return transport('SyncFloatingReview'); },
         async SelectMediaFiles(kind) { return transport('SelectMediaFiles', [kind]); }
       };`,
       ],
@@ -70,6 +73,10 @@ test('runtime JSON transport preserves requests, records, nullable lists, and pa
   });
   const { createRuntime } = await import('../src/features/workspace/adapters/funcs.ts');
   const runtime = createRuntime({ mediaRoutePrefix: '/media/', textKind: 'plain' });
+  await runtime.Notify('Raven', 'تم نسخ بطاقتين');
+  assert.deepEqual(globalThis.ravenRuntime.calls[0], { name: 'Notify', args: ['Raven', 'تم نسخ بطاقتين'] });
+  await runtime.SyncFloatingReview();
+  assert.deepEqual(globalThis.ravenRuntime.calls.at(-1), { name: 'SyncFloatingReview', args: [] });
   assert.deepEqual(await runtime.ListFolders(), [folder]);
   assert.deepEqual(await runtime.CreateFolder({ title: 'Ideas', description: '', tags: [] }), folder);
   const folderEdit = { ...folder, title: 'Updated ideas', description: 'Context', tags: ['edited'] };
@@ -184,4 +191,42 @@ test('runtime consumes configured event names and media routes and releases subs
   assert.equal(globalThis.ravenRuntime.unsubscribed, 4);
   globalThis.ravenRuntime.failure = new Error('configuration unavailable');
   await assert.rejects(loadConfiguration(), /action_failed/);
+});
+
+test('card transfers serialize references and validate destination mappings', async (t) => {
+  const card = { id: 'new-card', folder_id: 'destination', created_at: 1, due_at: 2, last_reviewed: 0, items: [] };
+  globalThis.ravenRuntime = {
+    calls: [],
+    responses: {
+      TransferCards: JSON.stringify({ entries: [{ source: { folder_id: 'source', card_id: 'card' }, card }] }),
+    },
+  };
+  t.after(() => {
+    delete globalThis.ravenRuntime;
+  });
+  const { createRuntime } = await import('../src/features/workspace/adapters/funcs.ts');
+  const runtime = createRuntime({ mediaRoutePrefix: '/media/', textKind: 'text' });
+  const result = await runtime.TransferCards({
+    operation: 'move',
+    sources: [{ folderId: 'source', cardId: 'card' }],
+    destinationFolderId: 'destination',
+  });
+  assert.deepEqual(JSON.parse(globalThis.ravenRuntime.calls[0].args[0]), {
+    operation: 'move',
+    sources: [{ folder_id: 'source', card_id: 'card' }],
+    destination_folder_id: 'destination',
+  });
+  assert.deepEqual(result.entries[0].source, { folderId: 'source', cardId: 'card' });
+  assert.equal(result.entries[0].card.folderId, 'destination');
+  for (const invalid of [
+    { entries: [] },
+    { entries: [{ source: {}, card }] },
+    { entries: [{ source: { folder_id: 'source', card_id: 'card' }, card: {} }] },
+  ]) {
+    globalThis.ravenRuntime.responses.TransferCards = JSON.stringify(invalid);
+    await assert.rejects(
+      runtime.TransferCards({ operation: 'copy', sources: [], destinationFolderId: 'destination' }),
+      /action_failed/,
+    );
+  }
 });

@@ -34,15 +34,17 @@ type (
 	}
 
 	reconciliation struct {
-		list      func() (string, error)
-		claim     func() (bool, error)
-		authorize func() (bool, error)
-		deliver   func([]byte) error
-		publish   func()
-		warn      func(string, error)
-		wake      func()
-		wait      func(time.Duration) bool
-		finish    func()
+		available       func() bool
+		list            func() (string, error)
+		claim           func() (bool, error)
+		authorize       func() (bool, error)
+		deliver         func([]byte) error
+		publish         func()
+		warn            func(string, error)
+		wake            func()
+		wait            func(time.Duration) bool
+		finish          func()
+		promptAttempted bool
 	}
 
 	// Callbacks publishes schedule changes and reports reminder failures.
@@ -57,12 +59,13 @@ type (
 	Worker struct{ execute func(string) }
 
 	workerState struct {
-		start   func() (func(), func())
-		wake    func()
-		stop    func()
-		mu      sync.Mutex
-		enabled bool
-		stopped bool
+		unsubscribe func()
+		start       func() (func(), func())
+		wake        func()
+		stop        func()
+		mu          sync.Mutex
+		enabled     bool
+		stopped     bool
 	}
 
 	// Notifications combines delivery with the observed native availability.

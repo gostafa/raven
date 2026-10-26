@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { toggleSelection, ChoiceMenu, type ChoiceOption } from '../../ui';
   import FolderActions from './FolderActions.svelte';
   import FolderProgress from './FolderProgress.svelte';
@@ -24,9 +25,16 @@
     cardsInFolder,
     startFolderReview,
     exportSingleFolder,
+    exportFolderSelection,
     editFolder,
     confirmDelete,
+    canPaste,
+    clearClipboard,
+    pasteCards,
   }: {
+    canPaste: boolean;
+    clearClipboard: () => void;
+    pasteCards: (opener: HTMLElement, folderId?: string) => void;
     saving: boolean;
     folders: Folder[];
     filteredFolders: Folder[];
@@ -42,9 +50,36 @@
     cardsInFolder: (id: string) => Card[];
     startFolderReview: (opener: HTMLElement, folderId: string) => void;
     exportSingleFolder: (opener: HTMLElement, folderId: string) => void;
+    exportFolderSelection: (opener: HTMLElement, folderIds: string[]) => void;
     editFolder: (opener: HTMLElement, folder: Folder) => void;
     confirmDelete: (opener: HTMLElement, folderId: string) => void;
   } = $props();
+
+  let selectingFolders = $state(false);
+  let selectedFolderIds = $state<string[]>([]);
+  let selectButton = $state<HTMLButtonElement>();
+  let doneButton = $state<HTMLButtonElement>();
+  const currentSelection = $derived(
+    selectedFolderIds.filter((id) => filteredFolders.some((folder) => folder.id === id)),
+  );
+  const selectedIds = $derived(new Set(currentSelection));
+  $effect(() => {
+    if (currentSelection.length !== selectedFolderIds.length) selectedFolderIds = currentSelection;
+  });
+
+  async function toggleFolderSelectionMode() {
+    if (saving) return;
+    selectingFolders = !selectingFolders;
+    selectedFolderIds = [];
+    await tick();
+    (selectingFolders ? doneButton : selectButton)?.focus();
+  }
+
+  function activateFolder(folderId: string) {
+    if (saving) return;
+    if (selectingFolders) selectedFolderIds = toggleSelection(currentSelection, folderId);
+    else navigate(folderId);
+  }
 
   const folderSortOptions: ChoiceOption<FolderSort>[] = $derived([
     { value: 'default', label: $l.t('workspace.default_order') },
@@ -68,6 +103,17 @@
     <p class="workspace-control">{$l.t('workspace.a_home_for_the_things_you_want_to_remember')}</p>
   </div>
   <div class="workspace-heading-actions">
+    {#if canPaste}<button
+        type="button"
+        class="workspace-control workspace-secondary-button"
+        disabled={saving}
+        onclick={(event) => {
+          pasteCards(event.currentTarget);
+        }}>{$l.t('transfer.paste')}</button
+      >
+      <button type="button" class="workspace-control workspace-text-button" disabled={saving} onclick={clearClipboard}
+        >{$l.t('transfer.clear_clipboard')}</button
+      >{/if}
     <button class="workspace-control workspace-primary-button" disabled={saving} onclick={openFolder}
       ><WorkspaceIcon name="plus" size={17} /> {$l.t('workspace.new_folder')}</button
     >
@@ -97,6 +143,14 @@
         folderTags = [];
       }}
     />
+    {#if !selectingFolders}<button
+        bind:this={selectButton}
+        type="button"
+        class="workspace-control workspace-secondary-button workspace-selection-toggle"
+        disabled={saving || !filteredFolders.length}
+        onclick={toggleFolderSelectionMode}
+        ><WorkspaceIcon name="check" size={15} />{$l.t('workspace.select_folders')}</button
+      >{/if}
   </div>
   <span class="workspace-control workspace-folder-result-count" role="status"
     >{$l.t('common.folders', { count: filteredFolders.length })}{folderTags.length
@@ -126,25 +180,91 @@
 {#if folderTags.length && !filteredFolders.length}<p class="workspace-control workspace-folder-filter-empty">
     {$l.t('workspace.no_folders_match_all_selected_tags')}
   </p>{/if}
-<ul class="workspace-folder-grid" aria-label={$l.t('workspace.your_folders')}>
-  <li class="workspace-control workspace-folder-tile">
-    <FolderTile papers={[]} {mediaURL}>
-      <button class="workspace-control workspace-folder-card workspace-new-folder-card" onclick={openFolder}
-        ><span class="workspace-control"><WorkspaceIcon name="plus" size={22} /></span><strong class="workspace-control"
-          >{$l.t('workspace.a_new_curiosity')}</strong
-        ><span class="workspace-control">{$l.t('workspace.give_it_a_folder')}</span></button
+{#if selectingFolders}<div
+    class="workspace-transfer-toolbar"
+    role="group"
+    aria-label={$l.t('workspace.select_folders')}
+  >
+    <div class="workspace-selection-summary">
+      <button
+        bind:this={doneButton}
+        type="button"
+        class="workspace-control workspace-primary-button"
+        disabled={saving}
+        onclick={toggleFolderSelectionMode}
+        ><WorkspaceIcon name="check" size={15} />{$l.t('transfer.done_selecting')}</button
       >
-    </FolderTile>
-  </li>
+      <span class="workspace-selection-count" role="status"
+        >{$l.t('common.selected', { count: currentSelection.length })}</span
+      >
+    </div>
+    <div class="workspace-selection-utilities">
+      <button
+        type="button"
+        class="workspace-control workspace-text-button"
+        disabled={saving || !filteredFolders.length}
+        onclick={() => {
+          selectedFolderIds = filteredFolders.map((folder) => folder.id);
+        }}>{$l.t('transfer.select_all_shown')}</button
+      >
+      <button
+        type="button"
+        class="workspace-control workspace-text-button"
+        disabled={saving || !currentSelection.length}
+        onclick={() => {
+          selectedFolderIds = [];
+        }}>{$l.t('transfer.clear_selection')}</button
+      >
+    </div>
+    <div class="workspace-selection-actions">
+      <button
+        type="button"
+        class="workspace-control workspace-secondary-button"
+        disabled={saving || !currentSelection.length}
+        onclick={(event) => {
+          exportFolderSelection(event.currentTarget, currentSelection);
+        }}
+        ><WorkspaceIcon name="export" size={15} />{$l.t(
+          saving ? 'archive.exporting' : 'workspace.export_selected_folders',
+        )}</button
+      >
+    </div>
+  </div>{/if}
+<ul class="workspace-folder-grid" aria-label={$l.t('workspace.your_folders')}>
+  {#if !selectingFolders}<li class="workspace-control workspace-folder-tile">
+      <FolderTile papers={[]} {mediaURL}>
+        <button class="workspace-control workspace-folder-card workspace-new-folder-card" onclick={openFolder}
+          ><span class="workspace-control"><WorkspaceIcon name="plus" size={22} /></span><strong
+            class="workspace-control">{$l.t('workspace.a_new_curiosity')}</strong
+          ><span class="workspace-control">{$l.t('workspace.give_it_a_folder')}</span></button
+        >
+      </FolderTile>
+    </li>{/if}
   {#each filteredFolders as folder (folder.id)}
-    <li class="workspace-control workspace-folder-tile">
-      <FolderTile papers={selectFolderPapers(cards, folder.id)} {mediaURL} {nativeStart}>
+    <li
+      class="workspace-control workspace-folder-tile"
+      class:workspace-folder-selecting={selectingFolders}
+      class:workspace-folder-selected={selectedIds.has(folder.id)}
+    >
+      <FolderTile
+        papers={selectFolderPapers(cards, folder.id)}
+        {mediaURL}
+        {nativeStart}
+        selecting={selectingFolders}
+        selected={selectedIds.has(folder.id)}
+      >
         <button
           class="workspace-control workspace-folder-card"
+          disabled={saving}
+          aria-pressed={selectingFolders ? selectedIds.has(folder.id) : undefined}
+          aria-label={selectingFolders ? $l.t('workspace.select_folder', { name: folder.title }) : undefined}
           onclick={() => {
-            navigate(folder.id);
+            activateFolder(folder.id);
           }}
         >
+          {#if selectingFolders}<span class="workspace-selection-check workspace-folder-selection-check"
+              ><WorkspaceIcon name="check" size={14} /></span
+            >{/if}
           <div class="workspace-folder-card-content">
             <h3 class="workspace-control"><bdi>{folder.title}</bdi></h3>
             <p class="workspace-control" dir="auto">
@@ -156,25 +276,29 @@
                       ><bdi>{tag}</bdi></span
                     >{/each}</span
                 >{/if}
-              {#if scheduledItems.some((entry) => entry.card.folderId === folder.id && entry.dueAt <= now)}<span
+              {#if selectingFolders}<span class="workspace-folder-selection-count"
+                  >{$l.t('common.cards', { count: cardsInFolder(folder.id).length })}</span
+                >{:else if scheduledItems.some((entry) => entry.card.folderId === folder.id && entry.dueAt <= now)}<span
                   class="workspace-control workspace-due-dot">{$l.t('workspace.ready_to_review')}</span
                 >{/if}
             </span>
           </div>
-          <FolderProgress cards={cardsInFolder(folder.id)} />
+          {#if !selectingFolders}<FolderProgress cards={cardsInFolder(folder.id)} />{/if}
         </button>
-        <span class="workspace-control workspace-tile-actions"
-          ><FolderActions
-            {folder}
-            hasReviews={scheduledItems.some((entry) => entry.card.folderId === folder.id)}
-            {saving}
-            appearance="quiet"
-            {startFolderReview}
-            {exportSingleFolder}
-            {editFolder}
-            {confirmDelete}
-          /></span
-        >
+        {#if !selectingFolders}<span class="workspace-control workspace-tile-actions"
+            ><FolderActions
+              {folder}
+              hasReviews={scheduledItems.some((entry) => entry.card.folderId === folder.id)}
+              {saving}
+              appearance="quiet"
+              {startFolderReview}
+              {exportSingleFolder}
+              {editFolder}
+              {confirmDelete}
+              {canPaste}
+              {pasteCards}
+            /></span
+          >{/if}
       </FolderTile>
     </li>
   {/each}

@@ -1,5 +1,16 @@
 <script lang="ts">
   import './style.css';
+  import CardTransferDialog from './CardTransferDialog.svelte';
+  import {
+    reference,
+    referenceKey,
+    createClipboard,
+    visibleSelection,
+    applyTransfer,
+    executeTransfer,
+    type CardReference,
+    type CardClipboard,
+  } from '../../cardtransfer';
   import { createViewPreferences } from './preferences/funcs.svelte';
   import FolderEditorDialog from './FolderEditorDialog.svelte';
   import MemoryEditorDialog from './MemoryEditorDialog.svelte';
@@ -13,10 +24,10 @@
   import { useLocalization, type MessageKey } from '../../localization';
   const l = useLocalization();
 
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import type { Card } from '../../cards';
   import type { AppPorts } from '../domain/types';
-  import { loadWorkspace as loadData, deleteSelection } from '../application/funcs';
+  import { loadWorkspace as loadData, deleteSelection, reviewSelection } from '../application/funcs';
 
   import { ReviewSession, reviewItems, shuffledReviewItems, type ReviewItem } from '../../reviews';
 
@@ -41,12 +52,22 @@
   let { backend }: { backend: AppPorts } = $props();
   const viewPreferences = createViewPreferences(() => backend);
   const view = viewPreferences.view;
-  let error = $state<MessageKey | ''>('');
-  let preferencesError = $state<MessageKey | ''>('');
-  const workspaceError = $derived(error || preferencesError || viewPreferences.error);
+  function notify(message: MessageKey, options?: { count: number }) {
+    backend.Notify('Raven', $l.t(message, options)).catch(() => {
+      // Native delivery is optional; a failed notification must not create an in-app message.
+    });
+  }
+  $effect(() => {
+    const message = viewPreferences.error;
+    if (message)
+      untrack(() => {
+        notify(message);
+      });
+  });
   let workspace = $state(restoreWorkspace());
   let status = $state<'loading' | 'ready' | 'error'>('loading');
   let cards = $state<Card[]>([]);
+  let cardsRevision = 0;
   let now = $state(readNow());
   function readNow() {
     return backend.now();
@@ -115,9 +136,220 @@
   let reviewSaving = $state(false);
   let archiveOperation = $state<'import' | 'export' | null>(null);
   let archiveError = $state<MessageKey | ''>('');
+  let selectingCards = $state(false);
+  let selectedCards = $state<CardReference[]>([]);
+  let clipboard = $state<CardClipboard | null>(null);
+  let transferRequest = $state<CardClipboard | null>(null);
+  let transferDialog = $state<HTMLDialogElement>();
+  let transferError = $state<MessageKey | ''>('');
+  const canPaste = $derived(clipboard !== null);
+  const currentSelection = $derived(visibleSelection(selectedCards, visibleCards));
+  $effect(() => {
+    if (currentSelection.length !== selectedCards.length) selectedCards = currentSelection;
+  });
+
+  function toggleSelectionMode() {
+    selectingCards = !selectingCards;
+    selectedCards = [];
+    restoreSelectionFocus();
+  }
+  function toggleSelected(card: Card) {
+    const source = reference(card);
+    const key = referenceKey(source);
+    selectedCards = selectedCards.some((entry) => referenceKey(entry) === key)
+      ? selectedCards.filter((entry) => referenceKey(entry) !== key)
+      : [...selectedCards, source];
+  }
+  function selectAllShown() {
+    selectedCards = visibleCards.map(reference);
+  }
+  function clearSelection() {
+    selectedCards = [];
+  }
+  function clearClipboard() {
+    clipboard = null;
+  }
+  function putClipboard(sources: CardReference[]) {
+    if (saving || selectingFiles || status !== 'ready') return;
+    clipboard = createClipboard('copy', sources);
+    selectedCards = [];
+    transferError = '';
+    notifyClipboard();
+  }
+  function notifyClipboard() {
+    if (clipboard) {
+      notify('transfer.clipboard_copy', {
+        count: clipboard.sources.length,
+      });
+    }
+  }
+  function copyCard(opener: HTMLElement, card: Card) {
+    rememberOpener(opener);
+    putClipboard([reference(card)]);
+  }
+  function copySelected(opener: HTMLElement) {
+    rememberOpener(opener);
+    putClipboard(currentSelection);
+    restoreSelectionFocus();
+  }
+  function restoreSelectionFocus() {
+    tick()
+      .then(() =>
+        document
+          .querySelector<HTMLButtonElement>('.workspace-transfer-toolbar button, .workspace-selection-toggle')
+          ?.focus(),
+      )
+      .catch(reportActionFailure);
+  }
+  function moveCard(opener: HTMLElement, card: Card) {
+    beginMove(opener, [reference(card)]);
+  }
+  function moveSelected(opener: HTMLElement) {
+    beginMove(opener, currentSelection);
+  }
+  function canTransfer() {
+    return !saving && !selectingFiles && status === 'ready';
+  }
+  function showTransferDialog() {
+    transferDialog?.showModal();
+    transferDialog?.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+  }
+  function beginMove(opener: HTMLElement, sources: CardReference[]) {
+    if (!canTransfer()) return;
+    rememberOpener(opener);
+    transferRequest = createClipboard('move', sources);
+    transferError = '';
+    if (transferRequest) tick().then(showTransferDialog).catch(reportActionFailure);
+  }
+  function pasteCards(opener: HTMLElement, folderId?: string) {
+    if (!clipboard || !canTransfer()) return;
+    rememberOpener(opener);
+    transferRequest = createClipboard(clipboard.operation, clipboard.sources);
+    transferError = '';
+    if (folderId !== undefined) performTransfer(folderId).catch(reportActionFailure);
+    else tick().then(showTransferDialog).catch(reportActionFailure);
+  }
+  function beginTransfer() {
+    saving = true;
+    transferError = '';
+  }
+  async function performTransfer(folderId: string) {
+    if (!transferRequest || saving) return;
+    const request = transferRequest;
+    beginTransfer();
+    try {
+      const completed = await executeTransfer(backend, {
+        request: { ...request, destinationFolderId: folderId },
+        clipboard,
+      });
+      applyCompletedTransfer(request, completed);
+      finishTransferFocus();
+    } catch {
+      reportTransferFailure();
+    } finally {
+      saving = false;
+    }
+  }
+  function applyCompletedTransfer(request: CardClipboard, completed: Awaited<ReturnType<typeof executeTransfer>>) {
+    cardsRevision++;
+    cards = applyTransfer(cards, request.operation, completed.result);
+    clipboard = completed.clipboard;
+    selectedCards = [];
+    now = backend.now();
+    notify(request.operation === 'move' ? 'transfer.moved_count' : 'transfer.copied_count', {
+      count: completed.result.entries.length,
+    });
+  }
+  function finishTransferFocus() {
+    if (transferDialog?.open === true) transferDialog.close();
+    else {
+      transferRequest = null;
+      restoreDialogFocus().catch(reportActionFailure);
+    }
+  }
+  function reportTransferFailure() {
+    transferError = 'transfer.transfer_failed';
+    if (transferDialog?.open !== true) {
+      transferRequest = null;
+      notify(transferError);
+    }
+  }
+  function closeTransferDialog() {
+    transferRequest = null;
+    transferError = '';
+    restoreDialogFocus().catch(reportActionFailure);
+  }
+  function shortcutSources(event: KeyboardEvent): CardReference[] {
+    if (currentSelection.length) return currentSelection;
+    const key =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>('[data-card-key]')?.dataset.cardKey
+        : undefined;
+    const card = visibleCards.find((candidate) => referenceKey(reference(candidate)) === key);
+    return card ? [reference(card)] : [];
+  }
+  function editableTarget(target: EventTarget | null) {
+    const selector =
+      'textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button])' +
+      ':not([type=submit]), [contenteditable]:not([contenteditable="false"])';
+    return target instanceof Element && target.closest(selector) !== null;
+  }
+  function transferEventIgnored(event: KeyboardEvent) {
+    return (
+      event.defaultPrevented || event.isComposing || !canTransfer() || hasOpenDialog() || editableTarget(event.target)
+    );
+  }
+  function transferCommand(event: KeyboardEvent) {
+    return (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey;
+  }
+  function handleTransferShortcut(event: KeyboardEvent) {
+    if (transferEventIgnored(event)) return;
+    if (event.key === 'Escape') {
+      handleTransferEscape(event);
+      return;
+    }
+    if (transferCommand(event)) handleTransferCommand(event);
+  }
+  function popoverEvent(target: EventTarget | null) {
+    return (
+      (target instanceof Element && target.closest('[popover]') !== null) ||
+      document.querySelector(':popover-open') !== null
+    );
+  }
+  function handleTransferEscape(event: KeyboardEvent) {
+    if (popoverEvent(event.target)) return;
+    if (selectingCards) {
+      selectedCards = [];
+      selectingCards = false;
+      restoreSelectionFocus();
+      event.preventDefault();
+    }
+  }
+  function handleTransferCommand(event: KeyboardEvent) {
+    const key = event.key.toLowerCase();
+    if (key === 'v') pasteFromShortcut(event);
+    else if (key === 'c') copyFromShortcut(event);
+  }
+  function pasteFromShortcut(event: KeyboardEvent) {
+    if (!clipboard) return;
+    event.preventDefault();
+    const opener = event.target instanceof HTMLElement ? event.target : sidebarToggle;
+    if (opener) pasteCards(opener, selectedFolder?.id);
+  }
+  function hasSelectedText() {
+    return (window.getSelection()?.toString().length ?? 0) > 0;
+  }
+  function copyFromShortcut(event: KeyboardEvent) {
+    const sources = shortcutSources(event);
+    if (!sources.length) return;
+    if (currentSelection.length === 0 && hasSelectedText()) return;
+    event.preventDefault();
+    putClipboard(sources);
+    restoreSelectionFocus();
+  }
 
   function reportActionFailure() {
-    error = 'companion.raven_could_not_complete_that_action_please_try_again';
+    notify('companion.raven_could_not_complete_that_action_please_try_again');
   }
   function openArchive(event: MouseEvent, operation: 'import' | 'export') {
     if (saving || status !== 'ready') return;
@@ -133,7 +365,7 @@
       cards = data.cards;
       now = data.now;
     } catch {
-      error = 'workspace.folders_were_imported_but_the_library_could_not_be_refreshed_reopen_the_library_to_see_them';
+      notify('workspace.folders_were_imported_but_the_library_could_not_be_refreshed_reopen_the_library_to_see_them');
     }
   }
 
@@ -148,7 +380,7 @@
     } catch {
       const message = 'workspace.the_folder_archive_could_not_be_processed_please_try_again';
       if (archiveOperation) archiveError = message;
-      else error = message;
+      else notify(message);
     } finally {
       saving = false;
     }
@@ -163,13 +395,22 @@
     transferArchive(() => exportFolders(backend, ids)).catch(reportActionFailure);
   }
 
+  function exportFolderSelection(opener: HTMLElement, ids: string[]) {
+    if (saving || status !== 'ready' || !ids.length) return;
+    rememberOpener(opener);
+    exportSelectedFolders(ids);
+  }
+
   function importArchivedFolders(mode: ImportMode) {
     transferArchive(() => importFolders(backend, mode, refreshImportedFolders)).catch(reportActionFailure);
   }
 
   async function refreshCards() {
+    const revision = cardsRevision;
     try {
-      cards = await backend.ListCards();
+      const refreshed = await backend.ListCards();
+      if (revision !== cardsRevision) return;
+      cards = refreshed;
       now = backend.now();
     } catch {
       /* Preserve the last snapshot; loadWorkspace reports initial errors. */
@@ -209,14 +450,13 @@
         ...loadPreferences(backend.preferences, backend.configuration.preferencesStorageKey),
       };
     } catch {
-      preferencesError = 'workspace.your_navigation_preferences_could_not_be_loaded';
+      notify('workspace.your_navigation_preferences_could_not_be_loaded');
       return emptyWorkspace();
     }
   }
 
   async function loadWorkspace() {
     status = 'loading';
-    error = '';
     try {
       const loaded = await loadData(backend, workspace);
       workspace = loaded.workspace;
@@ -225,16 +465,15 @@
       status = 'ready';
     } catch {
       status = 'error';
-      error = 'workspace.your_saved_memories_could_not_be_loaded_try_again_to_reconnect_to_your_local_database';
+      notify('workspace.your_saved_memories_could_not_be_loaded_try_again_to_reconnect_to_your_local_database');
     }
   }
 
   function persistPreferences() {
     try {
       savePreferences(backend.preferences, workspace, backend.configuration.preferencesStorageKey);
-      preferencesError = '';
     } catch {
-      preferencesError = 'workspace.your_navigation_preferences_could_not_be_saved_on_this_device';
+      notify('workspace.your_navigation_preferences_could_not_be_saved_on_this_device');
     }
   }
 
@@ -253,18 +492,21 @@
 
   function hasOpenDialog(): boolean {
     return (
-      [folderDialog, cardDialog, partDialog, partDeleteDialog, deleteDialog, reviewDialog].some(
+      [folderDialog, cardDialog, partDialog, partDeleteDialog, deleteDialog, reviewDialog, transferDialog].some(
         (dialog) => dialog?.open === true,
       ) || archiveOperation !== null
     );
   }
   function handleShortcut(event: KeyboardEvent) {
+    handleTransferShortcut(event);
     if (hasOpenDialog() || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
     event.preventDefault();
     focusSearch().catch(reportActionFailure);
   }
 
   function navigate(folderId: string | null = null) {
+    selectedCards = [];
+    selectingCards = false;
     workspace = { ...workspace, selectedFolderId: folderId };
     persistPreferences();
     if (window.matchMedia('(max-width: 600px)').matches) setSidebarOpen(false).catch(reportActionFailure);
@@ -424,6 +666,12 @@
     openReview(card ? reviewItems([card]) : [...dueCards]).catch(reportActionFailure);
   }
 
+  function reviewSelected(opener: HTMLElement) {
+    if (reviewOpen || !canTransfer()) return;
+    rememberOpener(opener);
+    openReview(reviewSelection(cards, currentSelection)).catch(reportActionFailure);
+  }
+
   function startFolderReview(opener: HTMLElement, folderId: string) {
     if (reviewOpen) return;
     rememberOpener(opener);
@@ -477,9 +725,6 @@
       {status === 'loading' ? $l.t('workspace.gathering_your_memories') : ''}
     </p>
     <div class="workspace-page-container" aria-busy={status === 'loading'}>
-      {#if workspaceError}<p class="workspace-control workspace-error" role="alert">
-          {$l.t(workspaceError)}
-        </p>{/if}
       {#if status === 'loading'}
         <WorkspaceSkeleton cardsView={workspace.selectedFolderId !== null || Boolean(query)} />
       {:else if status === 'error'}<div class="workspace-empty-state">
@@ -508,8 +753,12 @@
             {cardsInFolder}
             {startFolderReview}
             {exportSingleFolder}
+            {exportFolderSelection}
             {editFolder}
             {confirmDelete}
+            {canPaste}
+            {pasteCards}
+            {clearClipboard}
           />
         {:else}
           <CardBrowser
@@ -536,12 +785,38 @@
             {openPart}
             {startReview}
             {editCard}
+            {selectingCards}
+            selectedCards={currentSelection}
+            {canPaste}
+            {toggleSelectionMode}
+            {toggleSelected}
+            {selectAllShown}
+            {clearSelection}
+            {moveSelected}
+            {copySelected}
+            {reviewSelected}
+            {moveCard}
+            {copyCard}
+            {pasteCards}
+            {clearClipboard}
           />
         {/if}
       {/if}
     </div>
   </section>
 </main>
+
+<CardTransferDialog
+  bind:dialog={transferDialog}
+  folders={workspace.folders}
+  moving={transferRequest?.operation === 'move'}
+  busy={saving}
+  error={transferError ? $l.t(transferError) : ''}
+  onsubmit={(folderId: string) => {
+    performTransfer(folderId).catch(reportActionFailure);
+  }}
+  onclose={closeTransferDialog}
+/>
 
 <ArchiveDialog
   operation={archiveOperation}

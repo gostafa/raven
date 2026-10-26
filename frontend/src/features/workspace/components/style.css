@@ -786,23 +786,33 @@ h1.workspace-control {
 .workspace-card-dialog {
   width: min(620px, calc(100vw - 36px));
 }
-.workspace-part-dialog {
+dialog.workspace-control.workspace-part-dialog {
+  box-sizing: border-box;
+  width: fit-content;
+  min-width: 112px;
+  max-width: calc(100vw - 24px);
+  height: fit-content;
+  max-height: calc(100svh - 24px);
   padding: 0;
   overflow: hidden;
 }
 .workspace-part-toolbar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 12px;
-  border-bottom: 1px solid var(--line);
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
   background: #000;
+  box-shadow: 0 4px 18px #00000055;
 }
 .workspace-part-toolbar .workspace-icon-button {
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
 }
 .workspace-part-toolbar .workspace-icon-button:hover {
   border-color: var(--line-strong);
@@ -812,9 +822,17 @@ h1.workspace-control {
   outline-offset: 2px;
 }
 .workspace-part-body {
-  max-height: calc(100svh - 98px);
-  overflow-y: auto;
-  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-height: 0;
+  padding: 0;
+}
+.workspace-part-body > .workspace-error {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 12px;
+  text-align: center;
 }
 .workspace-visually-hidden {
   position: absolute;
@@ -1138,4 +1156,204 @@ textarea.workspace-control:focus-visible {
   [dir='rtl'] aside.workspace-control:not(.workspace-collapsed) {
     box-shadow: -15px 0 50px #00000055;
   }
+}
+
+.workspace-transfer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-block: 16px;
+  font-size: 12px;
+}
+.workspace-transfer-toolbar {
+  gap: 12px 20px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #000;
+}
+.workspace-selection-summary,
+.workspace-selection-utilities,
+.workspace-selection-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.workspace-selection-count {
+  color: #fff;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.workspace-selection-actions {
+  margin-inline-start: auto;
+  gap: 8px;
+}
+.workspace-card-selecting .workspace-memory-card {
+  border-color: var(--line);
+}
+.workspace-card-selecting .workspace-card-progress-percentage {
+  color: var(--muted);
+}
+.workspace-card-selecting:hover .workspace-memory-card {
+  border-color: var(--line-strong);
+}
+.workspace-card-selected .workspace-memory-card {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+.workspace-card-selecting:has(input:focus-visible) .workspace-memory-card {
+  outline: 2px solid var(--muted);
+  outline-offset: 3px;
+}
+.workspace-card-selection {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  cursor: pointer;
+}
+.workspace-card-selection input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.workspace-selection-check {
+  position: absolute;
+  top: 11px;
+  inset-inline-start: 12px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #000;
+  color: #000;
+  pointer-events: none;
+}
+.workspace-selection-check svg {
+  visibility: hidden;
+}
+.workspace-folder-selection-check {
+  top: 64px;
+  inset-inline-start: auto;
+  inset-inline-end: 12px;
+  z-index: 6;
+  border-color: var(--line);
+}
+.workspace-folder-selecting .workspace-folder-card:hover .workspace-folder-selection-check {
+  border-color: var(--line-strong);
+}
+.workspace-folder-selecting .workspace-folder-card:focus-visible {
+  outline: none;
+}
+.workspace-folder-selecting .workspace-folder-card:focus-visible .workspace-folder-selection-check {
+  outline: 2px solid var(--muted);
+  outline-offset: 3px;
+}
+.workspace-folder-selecting .workspace-folder-card-bottom {
+  gap: 8px;
+  padding-inline-end: 0;
+}
+.workspace-folder-selecting .workspace-folder-tags {
+  order: 0;
+  width: auto;
+}
+.workspace-folder-selection-count {
+  margin-inline-start: auto;
+  white-space: nowrap;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.workspace-folder-selected .workspace-folder-selection-check {
+  background: #fff;
+  border-color: #fff;
+}
+.workspace-folder-selected .workspace-folder-selection-check svg {
+  visibility: visible;
+}
+.workspace-card-selection input:checked + .workspace-selection-check {
+  background: #fff;
+  border-color: #fff;
+}
+.workspace-card-selection input:checked + .workspace-selection-check svg {
+  visibility: visible;
+}
+.workspace-selection-label {
+  position: absolute;
+  top: 13px;
+  inset-inline-start: 42px;
+  max-width: calc(100% - 100px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+  pointer-events: none;
+}
+.workspace-card-selected .workspace-selection-label {
+  color: #fff;
+}
+.workspace-card-selection:has(input:disabled) {
+  cursor: default;
+  opacity: 0.5;
+}
+.workspace-card-selection input:disabled {
+  cursor: default;
+}
+.workspace-transfer-folder input {
+  width: 18px;
+  height: 18px;
+  accent-color: #fff;
+}
+.workspace-transfer-dialog {
+  width: min(480px, calc(100vw - 32px));
+  background: #000;
+  color: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+}
+.workspace-transfer-dialog::backdrop {
+  background: #000b;
+}
+.workspace-transfer-dialog form {
+  display: grid;
+  gap: 14px;
+}
+.workspace-transfer-dialog input[type='search'] {
+  width: 100%;
+  padding: 10px;
+  background: #000;
+  color: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.workspace-transfer-dialog input:focus-visible {
+  outline: 1px solid var(--line-strong);
+  outline-offset: 2px;
+}
+.workspace-transfer-folders {
+  max-height: 40svh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+}
+.workspace-transfer-folder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px;
+  border-radius: 5px;
+}
+.workspace-transfer-folder:hover {
+  background: var(--hover);
 }

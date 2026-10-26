@@ -17,12 +17,26 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	cardapi "raven/api/cards"
+	transferapi "raven/api/cardtransfer"
 	contentapi "raven/api/content"
 	archive "raven/internal/features/folderarchive/domain"
 	archiveports "raven/internal/features/folderarchive/ports"
+	libraryports "raven/internal/shared/boltstore/ports"
+	cacheports "raven/internal/shared/cache/ports"
 )
 
 type (
+	databaseInitialization = struct {
+		get  func(context.Context) (*bolt.DB, error)
+		stop func() error
+	}
+	cardTransfer = struct {
+		storage *persistence
+		input   *transferapi.TransferInput
+		staged  []cardapi.Card
+		media   *folderImport
+		result  transferapi.TransferResult
+	}
 	archiveSnapshotRequest = struct {
 		document *archive.Document
 		ids      []string
@@ -61,7 +75,13 @@ type (
 		Close() error
 	}
 	// Dependencies supplies stable runtime dependencies and shared persistence settings.
-	Dependencies struct {
+	Dependencies = struct {
+		// Chunks shares bounded payload storage with selected-file previews.
+		Chunks cacheports.Chunks
+		// Snapshots caches immutable serialized library listings.
+		Snapshots cacheports.Loading[string, string]
+		// MediaLookup caches successful ownership checks until the next commit.
+		MediaLookup cacheports.Loading[string, libraryports.MediaRecord]
 		// Batch drains bounded concurrent media jobs.
 		Batch func(context.Context, []func(context.Context) error) error
 		// Initialize allocates the first scheduling state and review log.
@@ -88,23 +108,30 @@ type (
 	}
 
 	// Store owns atomic database and media persistence.
-	persistence struct {
-		batch              func(context.Context, []func(context.Context) error) error
+	persistence = struct {
+		initialization     *databaseInitialization
+		readContext        func() context.Context
+		cancelReads        context.CancelFunc
+		reads              func(context.Context, func(context.Context) error) error
 		settings           any
+		snapshots          cacheports.Loading[string, string]
+		mediaLookup        cacheports.Loading[string, libraryports.MediaRecord]
+		chunks             cacheports.Chunks
+		validateSchedule   func(any) error
+		databaseStats      func() bolt.Stats
 		initializeSchedule func(time.Time) (json.RawMessage, json.RawMessage, error)
 		nextSchedule       func(any, time.Time, int) (json.RawMessage, json.RawMessage, error)
-		validateSchedule   func(any) error
+		batch              func(context.Context, []func(context.Context) error) error
 		logger             *slog.Logger
 		view               func(func(*bolt.Tx) error) error
 		update             func(func(*bolt.Tx) error) error
 		closeDatabase      func() error
 		databasePath       func() string
-		databaseStats      func() bolt.Stats
-
-		path     string
-		mediaDir string
-		mediaMu  sync.Mutex
-		ready    atomic.Bool
+		path               string
+		mediaDir           string
+		cacheMu            sync.RWMutex
+		mediaMu            sync.Mutex
+		ready              atomic.Bool
 	}
 
 	legacyItem struct {
@@ -190,9 +217,11 @@ type (
 		// Answer contains the original answer text.
 		Answer string `json:"answer"`
 	}
-	ownedMedia struct {
-		file *os.File
-		item any
+	ownedMedia = struct {
+		retry  cacheports.ReadRetry
+		chunks cacheports.Chunks
+		file   *os.File
+		item   any
 	}
 	mediaImport struct {
 		item   any

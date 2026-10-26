@@ -1,28 +1,39 @@
 <script lang="ts">
   import { useLocalization } from '../../localization';
   const l = useLocalization();
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { createPreviewPlayback } from '../application/funcs';
   import type { PreviewStartPort } from '../ports/types';
   import { Skeleton } from '../../ui';
+  import { loadMedia } from './viewport/funcs';
 
   let {
     src,
     filename = $l.t('cards.video'),
     hovered = false,
+    focused = false,
     nativeStart,
   }: {
     src: string;
     filename?: string;
     hovered?: boolean;
+    focused?: boolean;
     nativeStart?: PreviewStartPort;
   } = $props();
   let video: HTMLVideoElement;
+  let resolved = $state<string>();
   let preview = $state.raw<ReturnType<typeof createPreviewPlayback>>();
   let hidden = $state(false);
   let ready = $state(false);
   let failed = $state(false);
   const active = $derived(hovered && !hidden);
+  const playbackSource = $derived(active ? resolved : undefined);
+
+  $effect(() => {
+    ready = false;
+    failed = src.length === 0;
+    untrack(() => preview?.stop());
+  });
 
   function previewFailed() {
     failed = true;
@@ -46,18 +57,29 @@
     if (hovered) hidden = false;
   });
   $effect(() => {
-    if (active) preview?.start().catch(previewFailed);
+    if (playbackSource !== undefined && playbackSource.length > 0) preview?.start().catch(previewFailed);
     else preview?.stop();
   });
   onDestroy(() => preview?.stop());
 </script>
 
-<div class="video-preview" aria-busy={!ready && !failed}>
+<div
+  class="video-preview"
+  aria-busy={!ready && !failed}
+  use:loadMedia={{
+    source: src,
+    deferred: true,
+    active: hovered || focused,
+    resolve: (source) => {
+      resolved = source;
+    },
+  }}
+>
   {#if failed}<p class="media-error" role="status">{$l.t('cards.mediaFailed', { name: filename })}</p>{/if}
   <video
     dir="ltr"
     bind:this={video}
-    {src}
+    src={resolved}
     muted
     playsinline
     loop

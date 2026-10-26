@@ -58,3 +58,17 @@ func TestDefaultDatabasePathAndMissingUserDirectory(t *testing.T) {
 		t.Fatal("missing config directory accepted")
 	}
 }
+
+func TestReadCacheProviders(t *testing.T) {
+	lifecycle := fxtest.NewLifecycle(t)
+	snapshots := newSnapshots(lifecycle)
+	lookup := newMediaLookup(lifecycle)
+	lifecycle.RequireStart()
+	lifecycle.RequireStop()
+	if snapshots == nil || lookup == nil || snapshotWeight("cards", "test") != 4 {
+		t.Fatal("missing bounded read caches")
+	}
+	if snapshotWeight("cards", string(make([]byte, snapshotCapacity+2))) != snapshotCapacity+1 {
+		t.Fatal("large snapshot weight was truncated")
+	}
+}

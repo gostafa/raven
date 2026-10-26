@@ -12,7 +12,11 @@
     exportSingleFolder,
     editFolder,
     confirmDelete,
+    canPaste,
+    pasteCards,
   }: {
+    canPaste: boolean;
+    pasteCards: (opener: HTMLElement, folderId?: string) => void;
     folder: Folder;
     hasReviews: boolean;
     saving: boolean;
@@ -29,6 +33,16 @@
   {appearance}
   disabled={saving}
   actions={[
+    ...(canPaste
+      ? [
+          {
+            label: $l.t('transfer.paste_here'),
+            onselect: (opener: HTMLButtonElement) => {
+              pasteCards(opener, folder.id);
+            },
+          },
+        ]
+      : []),
     ...(hasReviews
       ? [
           {

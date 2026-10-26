@@ -9,6 +9,7 @@ import (
 	"go.uber.org/fx"
 
 	autostartcomposition "raven/internal/features/autostart/composition"
+	transfercomposition "raven/internal/features/cardtransfer/composition"
 	companioncomposition "raven/internal/features/companion/composition"
 	configurationcomposition "raven/internal/features/configuration/composition"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
@@ -39,6 +40,7 @@ var (
 			storecomposition.Module,
 			localizationcomposition.Module,
 			archivecomposition.Module,
+			transfercomposition.Module,
 			mediacomposition.Module,
 			schedulingcomposition.Module,
 			batchcomposition.Module,

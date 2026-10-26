@@ -11,6 +11,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	autostartports "raven/internal/features/autostart/ports"
+	transferports "raven/internal/features/cardtransfer/ports"
 	archiveports "raven/internal/features/folderarchive/ports"
 	reminders "raven/internal/features/reminders/application"
 	libraryports "raven/internal/shared/boltstore/ports"
@@ -27,6 +28,7 @@ var (
 	_ localizationports.Preferences = (*Store)(nil)
 	_ libraryports.Repository       = (*Store)(nil)
 	_ archiveports.Library          = (*Store)(nil)
+	_ transferports.Library         = (*Store)(nil)
 	_ autostartports.Settings       = (*Store)(nil)
 	_ reminders.Source              = (*Store)(nil)
 

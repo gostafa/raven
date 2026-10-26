@@ -4,6 +4,8 @@
 package wails
 
 import (
+	"errors"
+
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	reminders "raven/internal/features/reminders/application"
@@ -11,9 +13,11 @@ import (
 )
 
 var (
-	_ reminderports.Sound = (*SoundPlayer)(nil)
+	errNotificationCleanup                     = errors.New("notification startup cleanup failed")
+	_                      reminderports.Sound = (*SoundPlayer)(nil)
 
-	_ NativeRuntime           = (*notifications.NotificationService)(nil)
-	_ reminders.Notifications = (*Runtime)(nil)
-	_ reminderports.Notifier  = (*Notifier)(nil)
+	_ NativeRuntime                     = (*notifications.NotificationService)(nil)
+	_ reminders.Notifications           = (*Runtime)(nil)
+	_ reminderports.AvailabilityChanges = (*Runtime)(nil)
+	_ reminderports.Notifier            = (*Notifier)(nil)
 )

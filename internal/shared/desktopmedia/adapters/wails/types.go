@@ -13,6 +13,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	cacheports "raven/internal/shared/cache/ports"
 	"raven/internal/shared/desktopmedia/ports"
 )
 
@@ -32,14 +33,20 @@ type (
 	// ArchiveDialogs selects portable archive files using Raven's main window.
 	ArchiveDialogs struct{ state *archiveDialogState }
 	// Dependencies supplies saved-media resolution and resource cleanup logging.
-	Dependencies struct {
+	Dependencies = struct {
+		// Chunks shares payload storage with persisted media.
+		Chunks cacheports.Chunks
+		// Retry bounds temporary preview read failures.
+		Retry cacheports.ReadRetry
 		// Saved resolves the handler for persisted library media.
 		Saved func() http.Handler
 		// Logger receives failures encountered while releasing preview resources.
 		Logger *slog.Logger
 	}
 
-	previewRequest struct {
+	previewRequest = struct {
+		retry   cacheports.ReadRetry
+		chunks  cacheports.Chunks
 		writer  http.ResponseWriter
 		request *http.Request
 		path    string
@@ -67,7 +74,9 @@ type (
 		inspect    func([]string, string) (json.RawMessage, error)
 	}
 
-	mediaState struct {
+	mediaState = struct {
+		retry              cacheports.ReadRetry
+		chunks             cacheports.Chunks
 		runBatch           func(context.Context, []func(context.Context) error) error
 		saved              func() http.Handler
 		logger             *slog.Logger

@@ -25,6 +25,10 @@ const hooks = registerHooks({
         './features/workspace/adapters',
         `
         export function loadConfiguration() { return globalThis.ravenBootstrap.loading; }
+        export async function notify(title, body) {
+          globalThis.ravenBootstrap.notifications.push({title, body});
+          if (globalThis.ravenBootstrap.notificationFailure) throw new Error('native notifications unavailable');
+        }
         export function createRuntime(configuration) {
           globalThis.ravenBootstrap.runtimes.push(configuration);
           return configuration;
@@ -45,8 +49,8 @@ function environment(t) {
   globalThis.window = { location: { search: '' } };
   const target = {
     children: [],
-    replaceChildren(child) {
-      this.children = [child];
+    replaceChildren(...children) {
+      this.children = children;
     },
   };
   let resolve, reject;
@@ -54,6 +58,7 @@ function environment(t) {
     mounts: [],
     unmounts: [],
     runtimes: [],
+    notifications: [],
     loading: new Promise((accept, fail) => {
       resolve = accept;
       reject = fail;
@@ -90,7 +95,7 @@ test('the library shows a skeleton immediately while configuration loads', async
   assert.equal(state.mounts[1].props.backend, settings);
 });
 
-test('configuration failure prevents partial initialization and shows a monochrome error', async (t) => {
+test('configuration failure uses native notifications without an in-app message', async (t) => {
   const { state, target, reject } = environment(t);
   await import('../src/main.ts?bootstrap-failure');
   reject(new Error('configuration unavailable'));
@@ -98,6 +103,18 @@ test('configuration failure prevents partial initialization and shows a monochro
   assert.equal(state.mounts.length, 1);
   assert.deepEqual(state.unmounts, [state.mounts[0]]);
   assert.deepEqual(state.runtimes, []);
-  assert.match(target.children[0].textContent, /could not load its configuration/);
-  assert.match(target.children[0].style.cssText, /color:#fff;background:#000/);
+  assert.deepEqual(target.children, []);
+  assert.equal(state.notifications[0].title, 'Raven');
+  assert.match(state.notifications[0].body, /could not load its configuration/);
+});
+
+test('unavailable native notifications do not create a startup banner', async (t) => {
+  const { state, target, reject } = environment(t);
+  state.notificationFailure = true;
+  await import('../src/main.ts?bootstrap-notifications-unavailable');
+  reject(new Error('configuration unavailable'));
+  await new Promise(setImmediate);
+  assert.deepEqual(target.children, []);
+  assert.equal(state.notifications.length, 1);
+  assert.deepEqual(state.runtimes, []);
 });

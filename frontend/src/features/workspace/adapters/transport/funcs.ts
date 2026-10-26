@@ -1,3 +1,4 @@
+import type { TransferResult } from '../../../cardtransfer';
 import type { LocalizationState } from '../../../localization';
 import { isRecord } from './validation/funcs';
 import type {
@@ -10,6 +11,7 @@ import type {
   TransportSchedule,
   TransportMedia,
   TransportArchiveResult,
+  TransportTransferResult,
 } from './types';
 import type { RuntimeConfiguration, AppPorts } from '../../domain/types';
 import type { Card } from '../../../cards';
@@ -156,4 +158,13 @@ function validateLocalizationMetadata(data: Record<string, unknown>, locale: str
     Number(data.revision) < 0
   )
     throw new Error('Invalid localization response');
+}
+
+export function transferFromTransport(value: TransportTransferResult, textKind: string): TransferResult {
+  return {
+    entries: value.entries.map((entry) => ({
+      source: { folderId: entry.source.folder_id, cardId: entry.source.card_id },
+      card: cardFromTransport(entry.card, textKind),
+    })),
+  };
 }

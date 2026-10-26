@@ -11,12 +11,15 @@ import (
 
 	configuration "raven/internal/features/configuration/domain"
 	boltstore "raven/internal/shared/boltstore/adapters/bbolt"
+	libraryports "raven/internal/shared/boltstore/ports"
+	cacheotter "raven/internal/shared/cache/adapters/otter"
+	cachecomposition "raven/internal/shared/cache/composition"
 )
 
 func newStore(params storeParams, settings configuration.Settings) storeResult {
 	store := boltstore.New(string(params.Path), storeDependencies(params, settings))
 	params.Lifecycle.Append(fx.Hook{
-		OnStart: func(context.Context) error { return store.Start() },
+		OnStart: func(ctx context.Context) error { return boltstore.StartContext(ctx, store) },
 		OnStop:  func(context.Context) error { return store.Close() },
 	})
 
@@ -51,7 +54,30 @@ func storeDependencies(
 		})
 
 		deps.Logger = params.Logger
+		deps.Chunks, deps.Snapshots, deps.MediaLookup = params.Chunks, params.Snapshots, params.MediaLookup
 
 		return deps
 	}()
+}
+
+func newSnapshots(lifecycle fx.Lifecycle) *cacheotter.Cache[string, string] {
+	return cachecomposition.Register(lifecycle, &cacheotter.Options[string, string]{
+		MaximumSize:   0,
+		MaximumWeight: snapshotCapacity,
+		Weigher:       snapshotWeight,
+	})
+}
+
+func snapshotWeight(_, value string) uint32 {
+	return uint32(min(len(value), snapshotCapacity+1))
+}
+
+func newMediaLookup(lifecycle fx.Lifecycle) *cacheotter.Cache[string, libraryports.MediaRecord] {
+	return cachecomposition.Register(
+		lifecycle,
+		&cacheotter.Options[string, libraryports.MediaRecord]{
+			MaximumSize:   mediaLookupCapacity,
+			MaximumWeight: 0, Weigher: nil,
+		},
+	)
 }

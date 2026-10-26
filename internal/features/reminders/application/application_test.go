@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +13,83 @@ import (
 	contentapi "raven/api/content"
 	reviewapi "raven/api/reviews"
 )
+
+type dynamicNotifications struct {
+	available atomic.Bool
+	requests  atomic.Int32
+	mu        sync.Mutex
+	changed   func()
+	prompted  chan struct{}
+}
+
+func (native *dynamicNotifications) Available() bool                        { return native.available.Load() }
+func (*dynamicNotifications) CheckNotificationAuthorization() (bool, error) { return false, nil }
+func (*dynamicNotifications) Send(int) error                                { return nil }
+func (native *dynamicNotifications) RequestAuthorization() (bool, error) {
+	native.requests.Add(1)
+	native.prompted <- struct{}{}
+	return false, nil
+}
+
+func (native *dynamicNotifications) SubscribeAvailability(changed func()) func() {
+	native.mu.Lock()
+	native.changed = changed
+	native.mu.Unlock()
+	return func() { native.mu.Lock(); native.changed = nil; native.mu.Unlock() }
+}
+
+func (native *dynamicNotifications) recover() {
+	native.available.Store(true)
+	native.mu.Lock()
+	changed := native.changed
+	native.mu.Unlock()
+	if changed != nil {
+		changed()
+	}
+}
+
+type recoveringSource struct {
+	source
+	claims atomic.Int32
+}
+
+func (backing *recoveringSource) ClaimNotificationPrompt() (bool, error) {
+	return backing.claims.Add(1) == 1, nil
+}
+
+func TestBackgroundAvailabilityEnablesExistingCoordinator(t *testing.T) {
+	native := &dynamicNotifications{prompted: make(chan struct{}, 2)}
+	backing := &recoveringSource{}
+	published := make(chan struct{}, 10)
+	worker := NewWorker(
+		backing,
+		native,
+		Callbacks{
+			Publish: func() { published <- struct{}{} },
+			Warn:    func(message string, err error) { t.Errorf("%s: %v", message, err) },
+		},
+	)
+	worker.Enable()
+	worker.Start()
+	waitPublished(t, published)
+	if backing.claims.Load() != 0 {
+		t.Fatal("unavailable notifications consumed prompt")
+	}
+	native.recover()
+	waitPublished(t, published)
+	waitPublished(t, native.prompted)
+	native.recover()
+	waitPublished(t, published)
+	worker.Stop()
+	if backing.claims.Load() != 1 || native.requests.Load() != 1 {
+		t.Fatal("authorization repeated")
+	}
+	native.mu.Lock()
+	defer native.mu.Unlock()
+	if native.changed != nil {
+		t.Fatal("availability subscription retained")
+	}
+}
 
 type testSource struct {
 	cards                       []cardapi.Card

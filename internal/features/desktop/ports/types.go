@@ -5,6 +5,11 @@
 package ports
 
 type (
+	// Notifications delivers application messages through the operating system.
+	Notifications interface {
+		Notify(title, body string) error
+	}
+
 	// Events publishes frontend notifications.
 	Events interface{ Emit(name string) }
 

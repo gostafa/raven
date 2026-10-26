@@ -4,12 +4,14 @@
 
   let {
     active = false,
+    selected = false,
     papers,
     mediaURL,
     nativeStart,
     reducedMotion = false,
   }: {
     active?: boolean;
+    selected?: boolean;
     papers: readonly FolderPaper[];
     mediaURL: MediaURLPort;
     nativeStart?: PreviewStartPort;
@@ -17,7 +19,7 @@
   } = $props();
 </script>
 
-<div class="folder" class:open={active} aria-hidden="true">
+<div class="folder" class:open={active} class:selected aria-hidden="true">
   <span class="folder-back"></span>
   <span class="paper-stack" style:--paper-count={papers.length}>
     {#each papers as paper, index (paper.key)}
@@ -29,6 +31,7 @@
                 src={mediaURL(paper.item)}
                 filename={paper.item.originalName}
                 hovered={!reducedMotion}
+                focused={active}
                 {nativeStart}
               />
               <span class="video-mark"
@@ -36,7 +39,7 @@
                 ></span
               >
             {:else}
-              <ImagePreview src={mediaURL(paper.item)} filename={paper.item.originalName} compact />
+              <ImagePreview src={mediaURL(paper.item)} filename={paper.item.originalName} compact {active} />
             {/if}
           {/key}
         {/if}
@@ -62,10 +65,16 @@
     isolation: isolate;
     perspective: 1000px;
     --folder-line: var(--line);
+    --folder-background: #000;
   }
 
   .folder.open {
     --folder-line: var(--line-strong);
+  }
+
+  .folder.selected {
+    --folder-line: var(--line-strong);
+    --folder-background: #0a0a0a;
   }
 
   .folder-back,
@@ -154,13 +163,13 @@
     border-bottom: 0;
     border-end-start-radius: 0;
     border-end-end-radius: 0;
-    background: #000;
+    background: var(--folder-background);
   }
 
   .folder-front {
     z-index: 3;
     inset: 48px 0 0;
-    background: #000;
+    background: var(--folder-background);
     border-start-start-radius: 0;
   }
 
@@ -171,7 +180,7 @@
     inset-inline-start: 0;
     width: calc(40% - 1px);
     height: 1px;
-    background: #000;
+    background: var(--folder-background);
   }
 
   .folder.open .paper-stack {

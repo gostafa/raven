@@ -1,7 +1,8 @@
 <script lang="ts">
   import { useLocalization, type MessageKey } from '../../localization';
   const l = useLocalization();
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
+  import { loadMedia } from './viewport/funcs';
   import { playMedia, seekMedia } from '../application/funcs';
   import type { PreviewStartPort } from '../ports/types';
 
@@ -12,6 +13,7 @@
     autoplay = false,
     hideFilename = false,
     hovered = false,
+    focused = false,
     nativeStart,
     onerror,
   }: {
@@ -21,10 +23,12 @@
     autoplay?: boolean;
     hideFilename?: boolean;
     hovered?: boolean;
+    focused?: boolean;
     nativeStart?: PreviewStartPort;
     onerror?: () => void;
   } = $props();
   let audio: HTMLAudioElement;
+  let resolved = $state<string>();
   let playing = $state(false);
   let waiting = $state(false);
   let duration = $state(0);
@@ -38,11 +42,13 @@
     return $l.duration(value);
   }
   async function start() {
+    resolved = src;
     const request = ++attempt;
     message = '';
     waiting = true;
     try {
-      await play(request);
+      await tick();
+      if (request === attempt) await play(request);
     } catch {
       if (request === attempt) message = 'cards.playback_could_not_start_try_again';
     } finally {
@@ -83,7 +89,7 @@
     }
   });
   $effect(() => {
-    if (!src || (!autoplay && !hovered)) return;
+    if (resolved === undefined || resolved.length === 0 || (!autoplay && !hovered)) return;
     start().catch(playbackFailed);
     return () => {
       attempt++;
@@ -97,10 +103,21 @@
   });
 </script>
 
-<div class="audio-player" class:compact>
+<div
+  class="audio-player"
+  class:compact
+  use:loadMedia={{
+    source: src,
+    deferred: compact && !autoplay,
+    active: hovered || focused,
+    resolve: (source) => {
+      resolved = source;
+    },
+  }}
+>
   <audio
     bind:this={audio}
-    {src}
+    src={resolved}
     preload={autoplay ? 'auto' : 'metadata'}
     onloadedmetadata={() => {
       duration = audio.duration;

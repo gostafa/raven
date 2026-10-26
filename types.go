@@ -8,6 +8,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"go.uber.org/fx"
 
+	transferports "raven/internal/features/cardtransfer/ports"
 	companion "raven/internal/features/companion/domain"
 	desktopports "raven/internal/features/desktop/ports"
 	archiveports "raven/internal/features/folderarchive/ports"
@@ -37,13 +38,15 @@ type (
 	serviceParams struct {
 		fx.In
 
-		Localization *localization.Service
-		Repository   libraryports.Repository
-		Media        mediaports.Selection
-		Windows      companion.Windows
-		Events       desktopports.Events
-		Reminders    reminderports.Control
-		Archives     archiveports.Transfer
+		Localization  *localization.Service
+		Repository    libraryports.Repository
+		Media         mediaports.Selection
+		Windows       companion.Windows
+		Events        desktopports.Events
+		Reminders     reminderports.Control
+		Archives      archiveports.Transfer
+		Transfers     transferports.Transfer
+		Notifications desktopports.Notifications
 	}
 	// RavenService exposes Raven operations using injected feature ports.
 	RavenService struct {

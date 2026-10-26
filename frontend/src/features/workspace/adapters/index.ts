@@ -1,1 +1,1 @@
-export { createRuntime, loadConfiguration } from './funcs';
+export { createRuntime, loadConfiguration, notify } from './funcs';

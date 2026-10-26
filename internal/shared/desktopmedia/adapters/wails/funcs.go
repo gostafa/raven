@@ -20,6 +20,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	mediaapi "raven/api/media"
+	mediareader "raven/internal/shared/cache/application"
 	"raven/internal/shared/desktopmedia/ports"
 	localfiles "raven/internal/shared/filesystem"
 )
@@ -67,6 +68,8 @@ func newMediaState(
 	}
 
 	return &mediaState{
+		retry:              dependencies.Retry,
+		chunks:             dependencies.Chunks,
 		runBatch:           batch.Run,
 		saved:              saved,
 		logger:             dependencies.Logger,
@@ -259,7 +262,13 @@ func middleware(picker *mediaState, next http.Handler) http.HandlerFunc {
 			servePreview(
 				request.Context(),
 				picker,
-				&previewRequest{writer: writer, request: request, path: ""},
+				&previewRequest{
+					writer:  writer,
+					request: request,
+					path:    "",
+					chunks:  picker.chunks,
+					retry:   picker.retry,
+				},
 			)
 		case strings.HasPrefix(request.URL.Path, picker.mediaRoutePrefix):
 			serveSaved(picker, writer, request)
@@ -321,7 +330,7 @@ func servePreviewPath(ctx context.Context, picker *mediaState, request *previewR
 	}
 	defer closePreview(ctx, picker, file)
 
-	servePreviewFile(request.writer, request.request, file)
+	serveCachedPreviewFile(ctx, request, file)
 }
 
 func closePreview(ctx context.Context, picker *mediaState, file *os.File) {
@@ -341,7 +350,15 @@ func servePreviewFile(
 	request *http.Request,
 	file *os.File,
 ) {
+	serveCachedPreviewFile(request.Context(), &previewRequest{
+		writer: writer, request: request, chunks: nil, path: "", retry: nil,
+	}, file)
+}
+
+func serveCachedPreviewFile(ctx context.Context, preview *previewRequest, file *os.File) {
+	writer, request := preview.writer, preview.request
 	info, err := file.Stat()
+
 	if err != nil || !info.Mode().IsRegular() {
 		http.NotFound(writer, request)
 
@@ -349,13 +366,31 @@ func servePreviewFile(
 	}
 
 	setPreviewHeaders(writer, info.Name())
-	http.ServeContent(writer, request, info.Name(), info.ModTime(), file)
+
+	source := previewSource(preview, file, info)
+	writer.Header().Set("ETag", source.Version)
+	http.ServeContent(writer, request, info.Name(), info.ModTime(),
+		mediareader.NewReader(ctx, source))
+}
+
+func previewSource(
+	preview *previewRequest,
+	file *os.File,
+	info os.FileInfo,
+) *mediareader.Source {
+	return &mediareader.Source{
+		Retry:   preview.retry,
+		Cache:   preview.chunks,
+		File:    file,
+		Version: mediareader.Version(file.Name(), info),
+		Size:    info.Size(),
+	}
 }
 
 func setPreviewHeaders(writer http.ResponseWriter, name string) {
 	writer.Header().Set("Content-Type", mime.TypeByExtension(strings.ToLower(filepath.Ext(name))))
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
-	writer.Header().Set("Cache-Control", "no-store")
+	writer.Header().Set("Cache-Control", "private, no-cache")
 }
 
 func marshalSelection(value any) ([]byte, error) {

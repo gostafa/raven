@@ -10,6 +10,7 @@ import {
   draftToTransport,
   mediaFromTransport,
   archiveFromTransport,
+  transferFromTransport,
   localizationFromTransport,
 } from './transport/funcs';
 import {
@@ -20,6 +21,7 @@ import {
   isMedia,
   isConfiguration,
   isArchive,
+  isTransferResult,
 } from './transport/validation/funcs';
 
 async function call<T>(action: () => Promise<T>): Promise<T> {
@@ -126,6 +128,22 @@ class Runtime implements AppPorts {
         this.configuration.textKind,
       ),
     );
+  public TransferCards: AppPorts['TransferCards'] = (input) =>
+    call(async () => {
+      const result = decode(
+        parseTransport(
+          await RavenService.TransferCards(
+            JSON.stringify({
+              operation: input.operation,
+              sources: input.sources.map((source) => ({ folder_id: source.folderId, card_id: source.cardId })),
+              destination_folder_id: input.destinationFolderId,
+            }),
+          ),
+        ),
+        isTransferResult,
+      );
+      return transferFromTransport(result, this.configuration.textKind);
+    });
   public DeleteCard: AppPorts['DeleteCard'] = (folder, card) => call(() => RavenService.DeleteCard(folder, card));
   public ReviewItem: AppPorts['ReviewItem'] = (input) =>
     call(async () =>
@@ -151,12 +169,14 @@ class Runtime implements AppPorts {
       decodeList(parseTransport(await RavenService.SelectMediaFiles(kind)), isMedia).map(mediaFromTransport),
     );
   public ShowMain: AppPorts['ShowMain'] = () => call(() => RavenService.ShowMain());
+  public Notify: AppPorts['Notify'] = notify;
   public HideMain: AppPorts['HideMain'] = () => call(() => RavenService.HideMain());
   public ResetWidget: AppPorts['ResetWidget'] = () => call(() => RavenService.ResetWidget());
   public Quit: AppPorts['Quit'] = () => call(() => RavenService.Quit());
   public ShowReviews: AppPorts['ShowReviews'] = () => call(() => RavenService.ShowReviews());
   public RefreshReminders: AppPorts['RefreshReminders'] = () => call(() => RavenService.RefreshReminders());
   public ToggleFloatingReview: AppPorts['ToggleFloatingReview'] = () => call(() => RavenService.ToggleFloatingReview());
+  public SyncFloatingReview: AppPorts['SyncFloatingReview'] = () => call(() => RavenService.SyncFloatingReview());
   public HideFloatingReview: AppPorts['HideFloatingReview'] = () => call(() => RavenService.HideFloatingReview());
   public now = (): number => Date.now();
   public newKey = (): string => crypto.randomUUID();
@@ -179,4 +199,8 @@ export async function loadConfiguration(): Promise<RuntimeConfiguration> {
   return await call(async () =>
     configurationFromTransport(decode(parseTransport(await RavenService.GetConfiguration()), isConfiguration)),
   );
+}
+
+export async function notify(title: string, body: string): Promise<void> {
+  await call(() => RavenService.Notify(title, body));
 }

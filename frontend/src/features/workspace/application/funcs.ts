@@ -1,4 +1,6 @@
 import type { Card, ItemDraft } from '../../cards';
+import { reference, referenceKey, type CardReference } from '../../cardtransfer';
+import { reviewItems, type ReviewItem } from '../../reviews';
 import { hasContent } from '../../cards/domain';
 import type { PreferencesStorage, Workspace } from '../../folders';
 import { reconcileFolders } from '../../folders';
@@ -50,4 +52,9 @@ function validCardInput(input: { items: ItemDraft[]; folderId: string; newFolder
 export async function deleteSelection(ports: AppPorts, target: { folderId: string; cardId?: string }): Promise<void> {
   if (target.cardId !== undefined && target.cardId.length > 0) await ports.DeleteCard(target.folderId, target.cardId);
   else await ports.DeleteFolder(target.folderId);
+}
+
+export function reviewSelection(cards: Card[], selection: readonly CardReference[]): ReviewItem[] {
+  const selected = new Set(selection.map(referenceKey));
+  return reviewItems(cards.filter((card) => selected.has(referenceKey(reference(card)))));
 }

@@ -11,6 +11,7 @@ import (
 	"go.uber.org/fx"
 
 	configuration "raven/internal/features/configuration/domain"
+	desktopnotifications "raven/internal/features/desktop/adapters/notifications"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
 	reminders "raven/internal/features/reminders/application"
 	"raven/internal/shared/lifetime"
@@ -18,15 +19,21 @@ import (
 
 func newNative() *notifications.NotificationService { return notifications.New() }
 
+func newApplicationNotifications(
+	native reminderwails.NativeRuntime,
+	runtime *reminderwails.Runtime,
+) *desktopnotifications.Notifier {
+	return desktopnotifications.New(native, runtime.Available)
+}
+
 //nolint:contextcheck // Native notifications must outlive the bounded startup context.
 func newNotifications(
 	params notificationParams,
-	settings configuration.Settings,
 ) *reminderwails.Runtime {
-	runtime := newNotificationRuntime(params, settings)
+	runtime := newNotificationRuntime(params)
 	params.Lifecycle.Append(fx.Hook{
 		OnStart: func(context.Context) error {
-			runtime.Start(params.Runtime.Context())
+			go runtime.Start(params.Runtime.Context())
 
 			return nil
 		},
@@ -74,15 +81,20 @@ func newSound(runtime *lifetime.Runtime) reminderwails.SoundPlayer {
 
 func newNotificationRuntime(
 	params notificationParams,
-	settings configuration.Settings,
 ) *reminderwails.Runtime {
+	options := reminderwails.NewRuntimeOptions(func(ctx context.Context, err error) {
+		params.Logger.WarnContext(
+			ctx,
+			"desktop notifications unavailable",
+			slog.Any(notificationErrorKey, err),
+		)
+	}, params.Messages)
+
+	options.Logger = params.Logger
+
 	return reminderwails.NewLocalizedRuntime(
 		params.Native,
 		params.Sound,
-		reminderwails.NewRuntimeOptions(func(ctx context.Context, err error) {
-			params.Logger.WarnContext(ctx, "desktop notifications unavailable",
-				//nolint:sloglint // Log field names come from validated embedded configuration.
-				slog.Any(settings.LogErrorKey(), err))
-		}, params.Messages),
+		options,
 	)
 }

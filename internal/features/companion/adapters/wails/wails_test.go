@@ -180,6 +180,28 @@ func TestWindowVisibilityAndReviewEvents(t *testing.T) {
 	windows.RequestFloatingReviewClose()
 }
 
+func TestReviewSynchronizationOnlyLoadsAnOpenWindow(t *testing.T) {
+	windows, _, _, review := testWindows()
+	windows.SyncFloatingReview()
+	if len(review.events) != 0 || review.visible {
+		t.Fatal("hidden startup review received an opening event")
+	}
+	windows.ToggleFloatingReview()
+	review.events = nil
+	review.actions = nil
+	windows.SyncFloatingReview()
+	if !reflect.DeepEqual(review.events, []string{"raven:open-floating-review"}) ||
+		len(review.actions) != 0 {
+		t.Fatal("frontend readiness did not recover an already open review", review)
+	}
+	windows.HideFloatingReview()
+	review.events = nil
+	windows.SyncFloatingReview()
+	if len(review.events) != 0 {
+		t.Fatal("closed review was reopened by synchronization")
+	}
+}
+
 func TestReviewPlacementUsesWidgetScreenAndFallsBackToPrimary(t *testing.T) {
 	windows, _, widget, review := testWindows()
 	review.visible = true

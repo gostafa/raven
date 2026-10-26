@@ -22,17 +22,22 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 	"go.uber.org/multierr"
 
 	cardapi "raven/api/cards"
+	transferapi "raven/api/cardtransfer"
 	contentapi "raven/api/content"
 	folderapi "raven/api/folders"
 	reviewapi "raven/api/reviews"
+	transferdomain "raven/internal/features/cardtransfer/domain"
 	archive "raven/internal/features/folderarchive/domain"
 	archiveports "raven/internal/features/folderarchive/ports"
 	library "raven/internal/shared/boltstore/domain"
 	"raven/internal/shared/boltstore/ports"
+	mediareader "raven/internal/shared/cache/application"
 	localfiles "raven/internal/shared/filesystem"
+	resilience "raven/internal/shared/resilience/adapters/retry"
 )
 
 // New constructs persistence without acquiring resources.
@@ -52,6 +57,32 @@ func Open(path string, dependencies *Dependencies) (*Store, error) {
 
 // Start acquires the database and reconciles existing content.
 func (storage *Store) Start() error { return errors.Join(storeStart(storage.state)) }
+
+// StartContext acquires persistence under the lifecycle startup deadline.
+func StartContext(ctx context.Context, storage *Store) error {
+	return errors.Join(startPersistenceContext(ctx, storage.state))
+}
+
+func startPersistenceContext(ctx context.Context, storage *persistence) error {
+	storage.mediaMu.Lock()
+	defer storage.mediaMu.Unlock()
+
+	err := storeOpenPersistenceContext(ctx, storage)
+
+	return errors.Join(startupFailure(storage, err))
+}
+
+func startupFailure(storage *persistence, err error) error {
+	if retryableStartupFailure(storage, err) {
+		return errors.Join(err, storage.initialization.stop())
+	}
+
+	return errors.Join(err)
+}
+
+func retryableStartupFailure(storage *persistence, err error) bool {
+	return err != nil && !errors.Is(err, errStoreAlreadyStarted) && storage.initialization != nil
+}
 
 // Close releases the database after active media operations finish.
 func (storage *Store) Close() error { return errors.Join(storeClose(storage.state)) }
@@ -126,14 +157,14 @@ func writeLanguagePreference(transaction *bolt.Tx, preference string) error {
 
 // ListFolders returns folder metadata as a JSON array in creation order.
 func (storage *Store) ListFolders() (string, error) {
-	value, err := encodeResponse(storeListFolders(storage.state))
+	value, err := cachedListing(storage.state, "folders", listFoldersJSON)
 
 	return value, errors.Join(err)
 }
 
 // ListCards returns fully hydrated cards as a JSON array.
 func (storage *Store) ListCards() (string, error) {
-	value, err := encodeResponse(storeListCards(storage.state))
+	value, err := cachedListing(storage.state, "cards", listCardsJSON)
 
 	return value, errors.Join(err)
 }
@@ -1662,7 +1693,12 @@ func storeServeOwnedMedia(storage *persistence,
 	}
 	defer storeCloseMediaFile(request.Context(), storage, file)
 
-	media := ownedMedia{file: file, item: &item}
+	media := ownedMedia{
+		file:   file,
+		item:   &item,
+		chunks: storage.chunks,
+		retry:  resilience.Operation(storage.reads),
+	}
 	ownedMediaServe(&media, writer, request)
 }
 
@@ -1678,12 +1714,22 @@ func storeOpenRequestedMedia(
 		return nil, contentapi.Item{}, errMediaNotFound
 	}
 
-	file, item, err := storeOpenOwnedMedia(storage, parts)
+	file, item, err := storeOpenOwnedMedia(request.Context(), storage, parts)
 	if err != nil {
 		return nil, item, fmt.Errorf("open requested media: %w", err)
 	}
 
 	return file, item, nil
+}
+
+func ownedMediaSource(media *ownedMedia, version string, size int64) *mediareader.Source {
+	return &mediareader.Source{
+		Retry:   media.retry,
+		Cache:   media.chunks,
+		File:    media.file,
+		Version: version,
+		Size:    size,
+	}
 }
 
 func ownedMediaServe(media *ownedMedia, writer http.ResponseWriter, request *http.Request) {
@@ -1695,26 +1741,33 @@ func ownedMediaServe(media *ownedMedia, writer http.ResponseWriter, request *htt
 	}
 
 	setMediaHeaders(writer.Header(), itemRecord(media.item).MIMEType)
+
+	version := mediareader.Version(media.file.Name(), info)
+	writer.Header().Set("ETag", version)
 	http.ServeContent(
 		writer,
 		request,
 		itemRecord(media.item).OriginalName,
 		info.ModTime(),
-		media.file,
+		mediareader.NewReader(request.Context(), ownedMediaSource(media, version, info.Size())),
 	)
 }
 
 func setMediaHeaders(header http.Header, mimeType string) {
 	header.Set("Content-Type", mimeType)
 	header.Set("X-Content-Type-Options", "nosniff")
-	header.Set("Cache-Control", "no-store")
+	header.Set("Cache-Control", "private, no-cache")
 }
 
-func storeOpenOwnedMedia(storage *persistence, parts []string) (*os.File, contentapi.Item, error) {
+func storeOpenOwnedMedia(
+	ctx context.Context,
+	storage *persistence,
+	parts []string,
+) (*os.File, contentapi.Item, error) {
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
 
-	item, err := storeReadOwnedMedia(storage, parts)
+	item, err := storeReadOwnedMedia(ctx, storage, parts)
 	if err != nil {
 		return nil, item, fmt.Errorf(loadMediaErrorFormat, err)
 	}
@@ -1727,7 +1780,43 @@ func storeOpenOwnedMedia(storage *persistence, parts []string) (*os.File, conten
 	return file, item, nil
 }
 
-func storeReadOwnedMedia(storage *persistence, parts []string) (contentapi.Item, error) {
+func storeReadOwnedMedia(
+	ctx context.Context,
+	storage *persistence,
+	parts []string,
+) (contentapi.Item, error) {
+	storage.cacheMu.RLock()
+	defer storage.cacheMu.RUnlock()
+
+	if storage.mediaLookup == nil {
+		item, err := readOwnedMedia(storage, parts)
+
+		return item, errors.Join(err)
+	}
+
+	value, err := storage.mediaLookup.Get(ctx, strings.Join(parts, string(filepath.Separator)),
+		func(context.Context) (ports.MediaRecord, error) { return loadMediaRecord(storage, parts) })
+
+	return deliveryItem(&value), errors.Join(err)
+}
+
+func deliveryItem(value *ports.MediaRecord) contentapi.Item {
+	var item contentapi.Item
+
+	item.RelativePath, item.MIMEType, item.OriginalName = value.RelativePath, value.MIMEType, value.OriginalName
+
+	return item
+}
+
+func loadMediaRecord(storage *persistence, parts []string) (ports.MediaRecord, error) {
+	item, err := readOwnedMedia(storage, parts)
+
+	return ports.MediaRecord{
+		RelativePath: item.RelativePath, MIMEType: item.MIMEType, OriginalName: item.OriginalName,
+	}, errors.Join(err)
+}
+
+func readOwnedMedia(storage *persistence, parts []string) (contentapi.Item, error) {
 	var item contentapi.Item
 
 	err := storage.view(func(transaction *bolt.Tx) error {
@@ -1797,8 +1886,52 @@ func newPersistence(path string, deps *Dependencies) *persistence {
 	storage := newStore(nil, path, deps)
 
 	storage.logger = storageLogger([]*slog.Logger{deps.Logger})
+	bindPersistenceLifecycle(storage)
 
 	return storage
+}
+
+func bindPersistenceLifecycle(storage *persistence) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	storage.readContext, storage.cancelReads = func() context.Context { return ctx }, cancel
+	storage.reads = resilience.NewReads(ctx, storage.logger).Do
+
+	resource := resilience.NewInitialization(
+		ctx,
+		func(ctx context.Context) (*bolt.DB, error) { return acquireDatabase(ctx, storage.path) },
+		&resilience.Options[*bolt.DB]{
+			Name:      "database",
+			Logger:    storage.logger,
+			Release:   (*bolt.DB).Close,
+			Transient: databaseTransient,
+		},
+	)
+
+	storage.initialization = databaseInitializationCallbacks(resource)
+}
+
+func databaseInitializationCallbacks(
+	resource *resilience.Initialization[*bolt.DB],
+) *databaseInitialization {
+	return &databaseInitialization{get: resource.Get, stop: resource.Close}
+}
+
+func databaseTransient(err error) bool {
+	return errors.Is(err, bolterrors.ErrTimeout) || resilience.Transient(err)
+}
+
+func acquireDatabase(ctx context.Context, path string) (*bolt.DB, error) {
+	db, err := openDatabase(path, bolt.Open)
+	if err != nil {
+		return nil, errors.Join(err)
+	}
+
+	if ctx.Err() != nil {
+		return nil, errors.Join(ctx.Err(), db.Close())
+	}
+
+	return db, nil
 }
 
 // Start opens, migrates, and reconciles persistence before consumers begin work.
@@ -1815,11 +1948,15 @@ func storeStart(storage *persistence) error {
 }
 
 func storeOpenPersistence(storage *persistence) error {
+	return errors.Join(storeOpenPersistenceContext(context.Background(), storage))
+}
+
+func storeOpenPersistenceContext(ctx context.Context, storage *persistence) error {
 	if storage.closeDatabase != nil {
 		return errStoreAlreadyStarted
 	}
 
-	db, err := openDatabase(storage.path, bolt.Open)
+	db, err := databaseForStartup(ctx, storage)
 	if err != nil {
 		return fmt.Errorf("open library persistence %q: %w", storage.path, err)
 	}
@@ -1834,10 +1971,25 @@ func storeOpenPersistence(storage *persistence) error {
 	return nil
 }
 
+func databaseForStartup(ctx context.Context, storage *persistence) (*bolt.DB, error) {
+	acquire := func(context.Context) (*bolt.DB, error) { return openDatabase(storage.path, bolt.Open) }
+
+	if storage.initialization != nil {
+		acquire = storage.initialization.get
+	}
+
+	value, err := acquire(ctx)
+	if err != nil {
+		return nil, errors.Join(err)
+	}
+
+	return value, nil
+}
+
 func storePrepareOpenedDatabase(storage *persistence) error {
 	err := storePrepare(storage, storage.path)
 	if err != nil {
-		failure := multierr.Append(err, storage.closeDatabase())
+		failure := multierr.Append(err, closePersistence(storage))
 
 		storage.closeDatabase = nil
 
@@ -1953,8 +2105,8 @@ func openReadOnlyDatabase(
 func newStore(db database, path string, deps *Dependencies) *persistence {
 	var storage persistence
 
-	storage.settings = deps.Settings
-	storage.path = path
+	storage.settings, storage.path = deps.Settings, path
+	storage.chunks, storage.snapshots, storage.mediaLookup = deps.Chunks, deps.Snapshots, deps.MediaLookup
 	bindDatabase(&storage, db)
 
 	storage.batch = deps.Batch
@@ -1973,6 +2125,7 @@ func NewDependencies(
 	settings *Settings,
 ) *Dependencies {
 	return &Dependencies{
+		Chunks: nil, Snapshots: nil, MediaLookup: nil,
 		Batch: batch.Run, Initialize: scheduler.Initialize, Next: scheduler.Next,
 		Validate: scheduler.Validate, Settings: *settings, Logger: nil,
 	}
@@ -2055,10 +2208,113 @@ func bindDatabase(storage *persistence, db database) {
 	}
 
 	storage.view = db.View
-	storage.update = db.Update
+	storage.update = func(callback func(*bolt.Tx) error) error {
+		return updateDatabase(storage, db.Update, callback)
+	}
 	storage.closeDatabase = db.Close
 	storage.databasePath = db.Path
 	storage.databaseStats = db.Stats
+}
+
+func cachedListing(
+	storage *persistence,
+	key string,
+	load func(*persistence) (string, error),
+) (string, error) {
+	storage.cacheMu.RLock()
+	defer storage.cacheMu.RUnlock()
+
+	read := func(ctx context.Context) (string, error) { return readListing(ctx, storage, load) }
+	ctx := listingContext(storage)
+
+	if storage.snapshots == nil || !storage.ready.Load() {
+		value, err := read(ctx)
+
+		return value, errors.Join(err)
+	}
+
+	value, err := storage.snapshots.Get(ctx, key, read)
+
+	return value, errors.Join(err)
+}
+
+func listingContext(storage *persistence) context.Context {
+	if storage.readContext == nil {
+		return context.Background()
+	}
+
+	return storage.readContext()
+}
+
+func readListing(
+	ctx context.Context,
+	storage *persistence,
+	load func(*persistence) (string, error),
+) (string, error) {
+	if storage.reads == nil {
+		value, err := load(storage)
+
+		return value, errors.Join(err)
+	}
+
+	value, err := retryListing(ctx, storage, load)
+
+	return value, errors.Join(err)
+}
+
+func retryListing(
+	ctx context.Context,
+	storage *persistence,
+	load func(*persistence) (string, error),
+) (string, error) {
+	var value string
+
+	err := storage.reads(ctx, func(context.Context) error {
+		result, err := load(storage)
+		if err == nil {
+			value = result
+		}
+
+		return errors.Join(err)
+	})
+
+	return value, errors.Join(err)
+}
+
+func listCardsJSON(storage *persistence) (string, error) {
+	value, err := encodeResponse(storeListCards(storage))
+
+	return value, errors.Join(err)
+}
+
+func listFoldersJSON(storage *persistence) (string, error) {
+	value, err := encodeResponse(storeListFolders(storage))
+
+	return value, errors.Join(err)
+}
+
+func updateDatabase(storage *persistence, update func(func(*bolt.Tx) error) error,
+	callback func(*bolt.Tx) error,
+) error {
+	storage.cacheMu.Lock()
+	defer storage.cacheMu.Unlock()
+
+	err := update(callback)
+	if err == nil {
+		invalidateReadCaches(storage)
+	}
+
+	return errors.Join(err)
+}
+
+func invalidateReadCaches(storage *persistence) {
+	if storage.snapshots != nil {
+		storage.snapshots.InvalidateAll()
+	}
+
+	if storage.mediaLookup != nil {
+		storage.mediaLookup.InvalidateAll()
+	}
 }
 
 func storageLogger(loggers []*slog.Logger) *slog.Logger {
@@ -2117,9 +2373,26 @@ func storeReportCleanupFailure(storage *persistence, err error) {
 
 // Close closes library persistence after current media operations finish.
 func storeClose(storage *persistence) error {
+	if storage.cancelReads != nil {
+		storage.cancelReads()
+	}
+
 	storage.ready.Store(false)
 	storage.mediaMu.Lock()
 	defer storage.mediaMu.Unlock()
+
+	storage.cacheMu.Lock()
+	defer storage.cacheMu.Unlock()
+
+	invalidateReadCaches(storage)
+
+	return errors.Join(closePersistence(storage))
+}
+
+func closePersistence(storage *persistence) error {
+	if storage.initialization != nil {
+		return errors.Join(storage.initialization.stop())
+	}
 
 	if storage.closeDatabase == nil {
 		return nil
@@ -4292,4 +4565,267 @@ func newFolderImport(storage *persistence, request *archiveImportRequest) *folde
 		imported:  nil,
 		folderIDs: nil,
 	}
+}
+
+// ApplyCardTransfer atomically moves or copies a batch and its owned media.
+func (storage *Store) ApplyCardTransfer(input string) (string, error) {
+	result, err := changeRecord(storage.state, input, storeTransferCards)
+
+	return result, errors.Join(err)
+}
+
+func storeTransferCards(
+	storage *persistence,
+	input *transferapi.TransferInput,
+) (transferapi.TransferResult, error) {
+	err := transferdomain.Normalize(input)
+	if err != nil {
+		return transferapi.TransferResult{}, fmt.Errorf("validate transfer: %w", err)
+	}
+
+	storage.mediaMu.Lock()
+	defer storage.mediaMu.Unlock()
+
+	result, err := cardTransferExecute(newCardTransfer(storage, input))
+
+	return result, errors.Join(err)
+}
+
+func newCardTransfer(storage *persistence, input *transferapi.TransferInput) *cardTransfer {
+	var transfer cardTransfer
+
+	transfer.storage, transfer.input = storage, input
+	transfer.media = newFolderImport(
+		storage,
+		&archiveImportRequest{mode: archive.Resume, open: nil, manifest: ""},
+	)
+	transfer.media.open = func(name string) (io.ReadCloser, error) { return openTransferMedia(storage, name) }
+
+	return &transfer
+}
+
+func openTransferMedia(storage *persistence, name string) (*os.File, error) {
+	file, err := os.OpenInRoot(storage.mediaDir, filepath.Base(name))
+	if err != nil {
+		return nil, fmt.Errorf("open transfer media: %w", err)
+	}
+
+	return file, nil
+}
+
+func cardTransferExecute(transfer *cardTransfer) (transferapi.TransferResult, error) {
+	defer folderImportDiscard(transfer.media)
+
+	err := cardTransferPrepare(transfer)
+	if err != nil {
+		return transferapi.TransferResult{}, fmt.Errorf("prepare transfer: %w", err)
+	}
+
+	err = transfer.storage.update(
+		func(transaction *bolt.Tx) error { return cardTransferCommit(transfer, transaction) },
+	)
+	if err != nil {
+		return transferapi.TransferResult{}, fmt.Errorf("commit transfer: %w", err)
+	}
+
+	transfer.media.imported = nil
+
+	return transfer.result, nil
+}
+
+func cardTransferPrepare(transfer *cardTransfer) error {
+	err := transfer.storage.view(
+		func(transaction *bolt.Tx) error { return cardTransferRead(transfer, transaction) },
+	)
+	if err != nil {
+		return fmt.Errorf("read transfer: %w", err)
+	}
+
+	return errors.Join(cardTransferStage(transfer))
+}
+
+func cardTransferRead(transfer *cardTransfer, transaction *bolt.Tx) error {
+	err := validateDestinationFolder(transaction, transfer.input.DestinationFolderID)
+	if err != nil {
+		return fmt.Errorf("read transfer destination: %w", err)
+	}
+
+	return errors.Join(cardTransferReadSources(transfer, transaction))
+}
+
+func cardTransferReadSources(transfer *cardTransfer, transaction *bolt.Tx) error {
+	for index := range transfer.input.Sources {
+		source := &transfer.input.Sources[index]
+
+		card, err := storeLoadCard(
+			transfer.storage,
+			transaction,
+			&[two]string{source.FolderID, source.CardID},
+		)
+		if err != nil {
+			return fmt.Errorf("load transfer source: %w", err)
+		}
+
+		transfer.staged = append(transfer.staged, card)
+	}
+
+	return nil
+}
+
+func cardTransferStage(transfer *cardTransfer) error {
+	if transfer.input.Operation != transferdomain.Copy {
+		return nil
+	}
+
+	for index := range transfer.staged {
+		err := folderImportStageCard(transfer.media, &transfer.staged[index])
+		if err != nil {
+			return fmt.Errorf("stage transfer copy: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func cardTransferCommit(transfer *cardTransfer, transaction *bolt.Tx) error {
+	err := validateDestinationFolder(transaction, transfer.input.DestinationFolderID)
+	if err != nil {
+		return fmt.Errorf("commit transfer destination: %w", err)
+	}
+
+	for index := range transfer.input.Sources {
+		card, failure := cardTransferWrite(transfer, transaction, index)
+		if failure != nil {
+			return fmt.Errorf("write transferred card: %w", failure)
+		}
+
+		transfer.result.Entries = append(
+			transfer.result.Entries,
+			transferapi.TransferEntry{Source: transfer.input.Sources[index], Card: card},
+		)
+	}
+
+	return nil
+}
+
+func cardTransferWrite(
+	transfer *cardTransfer,
+	transaction *bolt.Tx,
+	index int,
+) (cardapi.Card, error) {
+	card, err := loadTransferSource(transfer, transaction, index)
+	if err != nil {
+		return cardapi.Card{}, fmt.Errorf("reload transfer source: %w", err)
+	}
+
+	if cardTransferNoop(transfer, &transfer.input.Sources[index]) {
+		return card, nil
+	}
+
+	cardTransferCopyProgress(transfer, &card, index)
+
+	result, err := cardTransferPersist(transfer, transaction, &card)
+
+	return result, errors.Join(err)
+}
+
+func loadTransferSource(
+	transfer *cardTransfer,
+	transaction *bolt.Tx,
+	index int,
+) (cardapi.Card, error) {
+	source := &transfer.input.Sources[index]
+	identity := &[two]string{source.FolderID, source.CardID}
+	card, err := storeLoadCard(transfer.storage, transaction, identity)
+
+	return card, errors.Join(err)
+}
+
+func cardTransferNoop(transfer *cardTransfer, source *transferapi.Reference) bool {
+	return transfer.input.Operation == transferdomain.Move &&
+		source.FolderID == transfer.input.DestinationFolderID
+}
+
+func cardTransferCopyProgress(transfer *cardTransfer, card *cardapi.Card, index int) {
+	if transfer.input.Operation != transferdomain.Copy {
+		return
+	}
+
+	items := contentapi.Items(transfer.staged[index].Items)
+	fresh := contentapi.Items(card.Items)
+
+	for itemIndex := range items {
+		items[itemIndex].Schedule = fresh[itemIndex].Schedule
+		items[itemIndex].Reviews = fresh[itemIndex].Reviews
+	}
+
+	card.Items = items
+}
+
+func cardTransferPersist(
+	transfer *cardTransfer,
+	transaction *bolt.Tx,
+	card *cardapi.Card,
+) (cardapi.Card, error) {
+	source := transferapi.Reference{FolderID: card.FolderID, CardID: card.ID}
+
+	err := cardTransferStore(transfer, transaction, card)
+	if err != nil {
+		return cardapi.Card{}, fmt.Errorf("save transfer destination: %w", err)
+	}
+
+	err = cardTransferRemoveSource(transfer, transaction, &source)
+	if err != nil {
+		return cardapi.Card{}, fmt.Errorf("remove moved source: %w", err)
+	}
+
+	return *card, nil
+}
+
+func cardTransferStore(transfer *cardTransfer, transaction *bolt.Tx, card *cardapi.Card) error {
+	err := allocateTransferredCard(card, transfer.input.DestinationFolderID)
+	if err != nil {
+		return fmt.Errorf("allocate transferred card: %w", err)
+	}
+
+	return errors.Join(writeTransferredCard(transaction, card))
+}
+
+func allocateTransferredCard(card *cardapi.Card, folderID string) error {
+	id, err := newItemID()
+	if err != nil {
+		return fmt.Errorf("allocate transfer identity: %w", err)
+	}
+
+	card.ID, card.FolderID = id, folderID
+	assignContentOwnership(card)
+
+	return nil
+}
+
+func writeTransferredCard(transaction *bolt.Tx, card *cardapi.Card) error {
+	bucket, err := cardBucket(transaction, card.FolderID)
+	if err != nil {
+		return fmt.Errorf("open transfer destination: %w", err)
+	}
+
+	if bucket.Get([]byte(card.ID)) != nil {
+		return errCardIDAlreadyExists
+	}
+
+	return errors.Join(writeCardRecords(transaction, bucket, card))
+}
+
+func cardTransferRemoveSource(
+	transfer *cardTransfer,
+	transaction *bolt.Tx,
+	source *transferapi.Reference,
+) error {
+	if transfer.input.Operation != transferdomain.Move {
+		return nil
+	}
+
+	folder := transaction.Bucket([]byte(foldersBucket)).Bucket([]byte(source.FolderID))
+
+	return errors.Join(deleteOwnedCard(folder, source.CardID))
 }

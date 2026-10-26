@@ -3,7 +3,10 @@ module raven
 go 1.27.2
 
 require (
+	github.com/cenkalti/backoff/v7 v7.0.1
+	github.com/gostafa/singleton v1.1.0
 	github.com/jeandeaual/go-locale v0.0.0-20250612000132-0ef82f21eade
+	github.com/maypok86/otter/v2 v2.4.0
 	github.com/nicksnyder/go-i18n/v2 v2.6.1
 	github.com/open-spaced-repetition/go-fsrs/v4 v4.0.0
 	github.com/wailsapp/wails/v3 v3.0.0-beta.29

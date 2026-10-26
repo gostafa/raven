@@ -3,11 +3,18 @@ package wails
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
+	"runtime"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+
+	desktopnotifications "raven/internal/features/desktop/adapters/notifications"
 )
 
 type fakeRuntime struct {
@@ -15,6 +22,64 @@ type fakeRuntime struct {
 	callback func(notifications.NotificationResult)
 	started  context.Context
 	stops    int
+}
+
+type recoveringNative struct {
+	fakeRuntime
+	attempts       atomic.Int32
+	cleanups       atomic.Int32
+	cleanupFailure error
+}
+
+func (native *recoveringNative) ServiceStartup(context.Context, application.ServiceOptions) error {
+	if native.attempts.Add(1) == 1 {
+		return syscall.EAGAIN
+	}
+	return nil
+}
+
+func (native *recoveringNative) ServiceShutdown() error {
+	native.cleanups.Add(1)
+	return native.cleanupFailure
+}
+
+func TestNotificationStartupRecoveryAndCleanup(t *testing.T) {
+	if notificationTransient(errors.New("unknown")) {
+		t.Fatal("unknown failure retried")
+	}
+	if notificationTransient(
+		&net.OpError{Err: os.ErrDeadlineExceeded},
+	) != (runtime.GOOS != "windows") {
+		t.Fatal("incorrect timeout classification")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows startup does not support reliable rollback")
+	}
+	native := &recoveringNative{}
+	service := NewRuntime(native, &fakeSound{}, func(context.Context, error) {})
+	var changes atomic.Int32
+	unsubscribe := service.SubscribeAvailability(func() { changes.Add(1) })
+	service.Start(t.Context())
+	if !service.Available() || native.attempts.Load() != 2 || native.cleanups.Load() != 1 ||
+		changes.Load() != 1 {
+		t.Fatal("startup did not recover")
+	}
+	unsubscribe()
+	if err := service.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if native.cleanups.Load() != 2 || service.Available() {
+		t.Fatal("resource retained after shutdown")
+	}
+	failed := &recoveringNative{cleanupFailure: errors.New("cleanup failed")}
+	service = NewRuntime(failed, &fakeSound{}, func(context.Context, error) {})
+	service.Start(t.Context())
+	if failed.attempts.Load() != 1 || service.Available() {
+		t.Fatal("retried after failed cleanup")
+	}
+	if err := service.Stop(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type fakeSound struct {
@@ -75,7 +140,8 @@ func TestOptionalNotificationLifecycleAndReviewActions(t *testing.T) {
 		response.Response.ActionIdentifier = notifications.DefaultActionIdentifier
 		native.callback(response)
 		runtime.Start(t.Context())
-		if runtime.Available() == failStart || native.started != t.Context() {
+		if runtime.Available() == failStart || native.started == nil ||
+			native.started.Err() != nil && !failStart {
 			t.Fatal("incorrect startup state or context")
 		}
 		native.callback(notifications.NotificationResult{Error: failure})
@@ -94,7 +160,7 @@ func TestOptionalNotificationLifecycleAndReviewActions(t *testing.T) {
 		if err := runtime.Stop(); err != nil {
 			t.Fatal(err)
 		}
-		if runtime.Available() || native.stops != opened {
+		if runtime.Available() || native.stops != 1 {
 			t.Fatal("incorrect shutdown state")
 		}
 	}
@@ -113,6 +179,7 @@ func TestOptionalNotificationLifecycleAndReviewActions(t *testing.T) {
 
 type fakeNotifications struct {
 	failure        error
+	sendFailure    error
 	options        notifications.NotificationOptions
 	requested      bool
 	requestAllowed bool
@@ -124,7 +191,7 @@ func (native *fakeNotifications) CheckNotificationAuthorization() (bool, error) 
 
 func (native *fakeNotifications) SendNotification(options notifications.NotificationOptions) error {
 	native.options = options
-	return native.failure
+	return errors.Join(native.failure, native.sendFailure)
 }
 
 func (native *fakeNotifications) RequestNotificationAuthorization() (bool, error) {
@@ -206,5 +273,73 @@ func TestLocalizedReminderOptions(t *testing.T) {
 	options := reminderOptions(3, reminderMessages{})
 	if options.Title != "reminderTitle:ar" || options.Body != "reminderBody:ar" {
 		t.Fatal(options)
+	}
+}
+
+func TestApplicationNotificationsUseNativeDeliveryWithoutReviewActions(t *testing.T) {
+	native := &fakeRuntime{}
+	sound := &fakeSound{}
+	runtime := NewRuntime(native, sound, func(context.Context, error) {})
+	notices := desktopnotifications.New(native, runtime.Available)
+	if err := notices.Notify("Raven", "Before startup"); err != nil || native.options.ID != "" {
+		t.Fatalf("unavailable delivery: %v", err)
+	}
+	runtime.Start(t.Context())
+	if err := notices.Notify("Raven", "Permission denied"); err != nil || native.options.ID != "" {
+		t.Fatalf("denied delivery: %v", err)
+	}
+	native.requestAllowed = true
+	if err := notices.Notify("Raven", "تم نسخ بطاقتين"); err != nil {
+		t.Fatal(err)
+	}
+	options := native.options
+	if options.Title != "Raven" || options.Body != "تم نسخ بطاقتين" ||
+		options.ThreadID != "raven-notices" || !strings.HasPrefix(options.ID, "raven-notice-") ||
+		options.Sound == nil || !options.Sound.Silent || sound.plays != 0 {
+		t.Fatalf("incorrect application notification: %+v", options)
+	}
+	opened := 0
+	runtime.OnReview(func() { opened++ })
+	var response notifications.NotificationResult
+	response.Response.ID = options.ID
+	response.Response.ActionIdentifier = notifications.DefaultActionIdentifier
+	native.callback(response)
+	if opened != 0 {
+		t.Fatal("application message opened a review")
+	}
+	if err := notices.Notify(
+		"Raven",
+		"Another message",
+	); err != nil ||
+		native.options.ID == options.ID {
+		t.Fatalf("message replaced an earlier notification: %v", err)
+	}
+	if err := runtime.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	previous := native.options.ID
+	if err := notices.Notify(
+		"Raven",
+		"After shutdown",
+	); err != nil ||
+		native.options.ID != previous {
+		t.Fatalf("stopped runtime delivered a notification: %v", err)
+	}
+}
+
+func TestApplicationNotificationFailuresAreReturned(t *testing.T) {
+	native := &fakeRuntime{}
+	runtime := NewRuntime(native, &fakeSound{}, func(context.Context, error) {})
+	notices := desktopnotifications.New(native, runtime.Available)
+	runtime.Start(t.Context())
+	native.failure = errors.New("native delivery unavailable")
+	if err := notices.Notify("Raven", "Message"); !errors.Is(err, native.failure) {
+		t.Fatalf("native failure hidden: %v", err)
+	}
+	native.failure = nil
+	native.requestAllowed = true
+	native.sendFailure = errors.New("delivery failed")
+	if err := notices.Notify("Raven", "Message"); !errors.Is(err, native.sendFailure) {
+		t.Fatalf("delivery failure hidden: %v", err)
 	}
 }

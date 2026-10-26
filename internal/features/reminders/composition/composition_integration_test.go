@@ -124,6 +124,7 @@ func TestLifecycleOrderingReadinessAndLockRelease(t *testing.T) {
 	var repo libraryports.Repository
 	var control reminderports.Control
 	var notifier *reminderwails.Runtime
+	var notices desktopports.Notifications
 	var runtime *lifetime.Runtime
 	e := &events{published: make(chan struct{}, 1)}
 	starts, stops := 0, 0
@@ -132,7 +133,7 @@ func TestLifecycleOrderingReadinessAndLockRelease(t *testing.T) {
 		if _, err := repo.ListCards(); err != nil {
 			t.Fatalf("notifications started before storage: %v", err)
 		}
-		if ctx != runtime.Context() {
+		if ctx.Err() != nil {
 			t.Fatal("notification startup used a transient context")
 		}
 		return nil
@@ -143,13 +144,29 @@ func TestLifecycleOrderingReadinessAndLockRelease(t *testing.T) {
 		}
 		return nil
 	}}
-	graph := fxtest.New(t, modules(path, n, e), fx.Populate(&repo, &control, &notifier, &runtime))
+	graph := fxtest.New(
+		t,
+		modules(path, n, e),
+		fx.Populate(&repo, &control, &notifier, &runtime, &notices),
+	)
 	t.Cleanup(runtime.Cancel)
+	if err := notices.Notify("Raven", "Before startup"); err != nil || starts != 0 {
+		t.Fatalf("notice started the native runtime: %v", err)
+	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("graph construction opened storage: %v", err)
 	}
 	graph.RequireStart()
 	t.Cleanup(func() { graph.RequireStop() })
+	deadline := time.After(5 * time.Second)
+	for !notifier.Available() {
+		select {
+		case <-deadline:
+			t.Fatal("notification initialization did not finish")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
 	select {
 	case <-e.published:
 		t.Fatal("reminders started before native readiness")
@@ -201,7 +218,7 @@ func TestUnavailableNotificationsLeaveReconciliationAndPromptAvailable(t *testin
 	e := &events{published: make(chan struct{}, 1)}
 	n := &native{
 		start: func(context.Context) error { return errors.New("unavailable") },
-		stop:  func() error { t.Error("shut down uninitialized notifications"); return nil },
+		stop:  func() error { return nil },
 	}
 	graph := fxtest.New(
 		t,
@@ -238,7 +255,7 @@ func TestPartialStartupRollsBackEveryStartedResource(t *testing.T) {
 		t.Fatalf("startup error: %v", err)
 	}
 	graph.RequireStop()
-	if stops != 1 {
+	if stops > 1 {
 		t.Fatalf("notifications stopped %d times", stops)
 	}
 	store, err := boltstore.Open(

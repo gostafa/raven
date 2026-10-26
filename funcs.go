@@ -22,6 +22,7 @@ import (
 	configuration "raven/internal/features/configuration/domain"
 	desktopwails "raven/internal/features/desktop/adapters/wails"
 	desktopcomposition "raven/internal/features/desktop/composition"
+	desktopports "raven/internal/features/desktop/ports"
 	archive "raven/internal/features/folderarchive/domain"
 	libraryports "raven/internal/shared/boltstore/ports"
 	localization "raven/internal/shared/localization/application"
@@ -40,6 +41,24 @@ func newService(deps serviceParams, settings configuration.Settings) *RavenServi
 	bindArchiveOperations(operations, deps, changed)
 
 	return &RavenService{operations: operations}
+}
+
+func bindNotificationOperations(
+	operations map[string]func(string, string) serviceResult[string],
+	notifications desktopports.Notifications,
+) {
+	operations["Notify"] = func(title, body string) serviceResult[string] {
+		if notifications == nil {
+			return serviceResult[string]{value: "", failure: nil}
+		}
+
+		return publicResult("", notifications.Notify(title, body))
+	}
+}
+
+// Notify displays an application message through native OS notifications.
+func (service *RavenService) Notify(title, body string) error {
+	return service.operations["Notify"](title, body).failure
 }
 
 func libraryOperations(
@@ -208,6 +227,7 @@ func windowActions(deps serviceParams) map[string]func() {
 		"ResetWidget":          func() { deps.Windows.ResetWidget() },
 		"Quit":                 func() { deps.Windows.Quit() },
 		"ToggleFloatingReview": func() { deps.Windows.ToggleFloatingReview() },
+		"SyncFloatingReview":   func() { deps.Windows.SyncFloatingReview() },
 		"HideFloatingReview":   func() { deps.Windows.HideFloatingReview() },
 	}
 }
@@ -217,6 +237,9 @@ func bindAuxiliaryOperations(
 	deps serviceParams,
 	settings configuration.Settings,
 ) {
+	bindNotificationOperations(operations, deps.Notifications)
+	bindTransferOperations(operations, deps, func() { schedulesChanged(deps, settings) })
+
 	operations["GetConfiguration"] = func(string, string) serviceResult[string] {
 		return encodePublic(configurationSnapshot(settings))
 	}
@@ -430,6 +453,9 @@ func (service *RavenService) ToggleFloatingReview() {
 // HideFloatingReview hides the floating review window.
 func (service *RavenService) HideFloatingReview() { service.operations["HideFloatingReview"]("", "") }
 
+// SyncFloatingReview synchronizes an open review after the frontend subscribes.
+func (service *RavenService) SyncFloatingReview() { service.operations["SyncFloatingReview"]("", "") }
+
 // SelectMediaFiles returns selected draft media as JSON.
 func (service *RavenService) SelectMediaFiles(kind string) (string, error) {
 	result := service.operations["SelectMediaFiles"](kind, "")
@@ -630,4 +656,28 @@ func serviceOptions() application.ServiceOptions {
 	options.MarshalError = marshalServiceError
 
 	return options
+}
+
+func bindTransferOperations(
+	operations map[string]func(string, string) serviceResult[string],
+	deps serviceParams,
+	changed func(),
+) {
+	operations["TransferCards"] = func(input, _ string) serviceResult[string] {
+		if deps.Transfers == nil {
+			return publicResult(
+				"",
+				&ServiceError{Message: cardStorageIsUnavailable, Code: actionFailedCode},
+			)
+		}
+
+		return changedResult(publicResult(deps.Transfers.TransferCards(input)), changed)
+	}
+}
+
+// TransferCards atomically copies or moves cards described by JSON.
+func (service *RavenService) TransferCards(input string) (string, error) {
+	result := service.operations["TransferCards"](input, "")
+
+	return result.value, result.failure
 }

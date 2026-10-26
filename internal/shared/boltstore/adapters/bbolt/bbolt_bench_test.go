@@ -20,6 +20,33 @@ import (
 
 type sequentialBatch struct{}
 
+func BenchmarkCachedListings(b *testing.B) {
+	for _, warm := range []bool{false, true} {
+		b.Run(fmt.Sprintf("warm=%t", warm), func(b *testing.B) {
+			storage, _ := persistenceFixture(b, 64)
+			enableReadCaches(b, storage)
+			repository := &Store{state: storage}
+			if _, err := repository.ListCards(); err != nil {
+				b.Fatal(err)
+			}
+			original := storage.view
+			var views int64
+			storage.view = func(callback func(*bolt.Tx) error) error { views++; return original(callback) }
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if !warm {
+					storage.snapshots.InvalidateAll()
+				}
+				if _, err := repository.ListCards(); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(views)/float64(b.N), "views/op")
+		})
+	}
+}
+
 // BenchmarkPersistence excludes fixture resets from time and database metrics.
 func BenchmarkPersistence(b *testing.B) {
 	for _, count := range []int{2, 64} {

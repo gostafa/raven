@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -21,9 +22,74 @@ import (
 	mediaapi "raven/api/media"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
+	cacheotter "raven/internal/shared/cache/adapters/otter"
 	cffbatch "raven/internal/shared/cffbatch/adapters/cff"
 	"raven/internal/shared/desktopmedia/ports"
 )
+
+func TestPreviewCacheRevalidatesChangesAndKeepsTokens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preview.png")
+	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cache := cacheotter.New(&cacheotter.Options[string, []byte]{MaximumSize: 2})
+	if err := cache.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	service := testPicker(nil)
+	service.chunks = cache
+	service.previews.Store("selected", path)
+	handler := service.Middleware(http.NotFoundHandler())
+	request := func(method, etag string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/media-preview/selected", nil)
+		r.Header.Set("If-None-Match", etag)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	w := request(http.MethodGet, "")
+	if w.Code != http.StatusOK || w.Body.String() != "first" ||
+		w.Header().Get("Cache-Control") != "private, no-cache" {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	etag := w.Header().Get("ETag")
+	if got := request(
+		http.MethodGet,
+		etag,
+	); got.Code != http.StatusNotModified ||
+		got.Body.Len() != 0 {
+		t.Fatal(got.Code)
+	}
+	if got := request(http.MethodHead, ""); got.Code != http.StatusOK || got.Body.Len() != 0 {
+		t.Fatal(got.Code)
+	}
+	if err := os.WriteFile(path, []byte("other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, time.Now(), time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	changed := request(http.MethodGet, etag)
+	if changed.Code != http.StatusOK || changed.Body.String() != "other" ||
+		changed.Header().Get("ETag") == etag {
+		t.Fatal("preview retained old bytes")
+	}
+	cache.InvalidateAll()
+	if got := request(
+		http.MethodGet,
+		"",
+	); got.Code != http.StatusOK ||
+		got.Body.String() != "other" {
+		t.Fatal("eviction revoked preview token")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := request(http.MethodGet, etag); got.Code != http.StatusNotFound {
+		t.Fatal("deleted file served from byte cache", got.Code)
+	}
+}
 
 func TestNativeChooserConfiguresDialogAndPreservesResult(t *testing.T) {
 	app := application.New(application.Options{})
