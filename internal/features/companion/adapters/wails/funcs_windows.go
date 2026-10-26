@@ -4,7 +4,6 @@ package wails
 
 import (
 	"fmt"
-	"syscall"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"golang.org/x/sys/windows"
@@ -105,11 +104,12 @@ func keepWidgetOnTop(handle uintptr, procedure widgetProcedure) error {
 }
 
 func callWidgetProcedure(procedure widgetProcedure, arguments ...uintptr) widgetProcedureCall {
-	result, _, err := procedure.Call(arguments...)
+	result, lastError, err := procedure.Call(arguments...)
+	_ = lastError
 	if result != zero {
-		return widgetProcedureCall{result: result}
+		return widgetProcedureCall{err: nil, result: result}
 	}
-	if err == nil || err == syscall.Errno(0) {
+	if err == nil || err == widgetNoErrno {
 		err = errWidgetProcedureReturnedZero
 	}
 
