@@ -25,6 +25,7 @@ type (
 	}
 	widgetSurface interface {
 		Show() application.Window
+		Hide() application.Window
 		Position() (int, int)
 		SetPosition(horizontal, vertical int)
 		GetScreen() (*application.Screen, error)
@@ -81,6 +82,7 @@ type (
 		exitMainFullscreen  func()
 		setReviewSize       func(int, int) application.Window
 		showWidget          func() application.Window
+		hideWidget          func() application.Window
 		reviewVisible       func() bool
 		setWidgetPosition   func(int, int)
 		getWidgetScreen     func() (*application.Screen, error)

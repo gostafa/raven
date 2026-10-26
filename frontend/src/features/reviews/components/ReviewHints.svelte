@@ -94,6 +94,9 @@
     class="hint-dialog"
     aria-label={$l.t('reviews.hint')}
     bind:this={hintDialog}
+    onclick={(event) => {
+      if (event.target === hintDialog) hintDialog?.close();
+    }}
     onclose={() => {
       if (hintDialog) stopMedia(hintDialog);
     }}
@@ -257,10 +260,6 @@
   button:disabled {
     opacity: 0.5;
     cursor: default;
-  }
-  button:focus-visible {
-    outline: 2px solid var(--muted);
-    outline-offset: 3px;
   }
 
   h2 {

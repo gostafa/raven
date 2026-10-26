@@ -106,6 +106,9 @@
   bind:this={cardDialog}
   aria-labelledby="card-dialog-title"
   {onclose}
+  onclick={(event) => {
+    if (!saving && !selectingFiles && event.target === cardDialog) cardDialog?.close();
+  }}
   oncancel={(event) => {
     if (saving || selectingFiles) event.preventDefault();
   }}

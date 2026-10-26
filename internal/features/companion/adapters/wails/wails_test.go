@@ -153,17 +153,18 @@ func TestWindowVisibilityAndReviewEvents(t *testing.T) {
 	}
 	windows.PositionFloatingReview()
 	windows.ToggleFloatingReview()
-	if !review.visible || !reflect.DeepEqual(review.actions, []string{"show", "focus"}) ||
+	if widget.visible || !review.visible ||
+		!reflect.DeepEqual(review.actions, []string{"show", "focus"}) ||
 		!reflect.DeepEqual(review.events, []string{"raven:open-floating-review"}) {
-		t.Fatalf("review=%+v", review)
+		t.Fatalf("widget=%+v review=%+v", widget, review)
 	}
 	windows.ToggleFloatingReview()
 	if !review.visible || review.events[len(review.events)-1] != "raven:close-floating-review" {
 		t.Fatal("toggle did not defer close to the frontend")
 	}
 	windows.HideFloatingReview()
-	if review.visible {
-		t.Fatal("review remained visible after frontend acknowledgment")
+	if review.visible || !widget.visible {
+		t.Fatal("review close did not restore the widget")
 	}
 	windows.ResetWidget()
 	if !widget.visible {

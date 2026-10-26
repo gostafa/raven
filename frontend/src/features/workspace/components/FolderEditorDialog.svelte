@@ -75,6 +75,9 @@
   bind:this={folderDialog}
   aria-labelledby="folder-dialog-title"
   {onclose}
+  onclick={(event) => {
+    if (!saving && event.target === folderDialog) folderDialog?.close();
+  }}
   oncancel={(event) => {
     if (saving) event.preventDefault();
   }}

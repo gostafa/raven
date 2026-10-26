@@ -51,6 +51,9 @@
   aria-labelledby="archive-title"
   aria-describedby="archive-description"
   {onclose}
+  onclick={(event) => {
+    if (!busy && event.target === dialog) dialog?.close();
+  }}
   oncancel={(event) => {
     if (busy) event.preventDefault();
   }}
@@ -218,11 +221,6 @@
   }
   button:hover {
     border-color: var(--line-strong);
-  }
-  button:focus-visible,
-  input:focus-visible {
-    outline: 2px solid #a3a3a3;
-    outline-offset: 3px;
   }
   button:disabled {
     opacity: 0.45;

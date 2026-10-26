@@ -33,6 +33,9 @@
   class="workspace-control workspace-transfer-dialog"
   bind:this={dialog}
   aria-labelledby={id}
+  onclick={(event) => {
+    if (!busy && event.target === dialog) dialog?.close();
+  }}
   oncancel={(event) => {
     if (busy) event.preventDefault();
   }}

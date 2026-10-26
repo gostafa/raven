@@ -79,10 +79,6 @@
     border-radius: 7px;
     padding: 6px 9px;
   }
-  label:focus-within {
-    outline: 2px solid var(--focus);
-    outline-offset: 2px;
-  }
   svg {
     flex-shrink: 0;
   }
@@ -95,9 +91,6 @@
     font: inherit;
     padding: 4px;
     cursor: pointer;
-  }
-  select:focus-visible {
-    outline: none;
   }
   p {
     line-height: 1.6;

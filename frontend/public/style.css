@@ -29,6 +29,11 @@
 * {
   box-sizing: border-box;
 }
+*,
+*::before,
+*::after {
+  outline: none !important;
+}
 body {
   margin: 0;
   min-width: 0;
@@ -46,11 +51,6 @@ a {
 button {
   cursor: pointer;
   font: inherit;
-}
-button:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
 }
 img {
   user-select: none;

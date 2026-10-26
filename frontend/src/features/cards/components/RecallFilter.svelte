@@ -278,12 +278,6 @@
     border-top: 1px solid var(--line);
     font-size: 10px;
   }
-  summary:focus-visible,
-  button:focus-visible,
-  input:focus-visible {
-    outline: 1px solid var(--line-strong);
-    outline-offset: 3px;
-  }
   @media (pointer: coarse) {
     summary,
     button,

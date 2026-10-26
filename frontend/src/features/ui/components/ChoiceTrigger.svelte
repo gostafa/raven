@@ -130,14 +130,6 @@
     opacity: 0.4;
     cursor: default;
   }
-
-  button:focus-visible {
-    outline: 1px solid var(--focus, #bdbdbd);
-    outline-offset: -2px;
-  }
-  .choice-trigger:focus-visible {
-    outline-offset: 3px;
-  }
   @media (pointer: coarse) {
     .choice-trigger {
       min-height: 44px;

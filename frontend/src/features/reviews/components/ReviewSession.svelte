@@ -333,10 +333,6 @@
     opacity: 0.5;
     cursor: default;
   }
-  button:focus-visible {
-    outline: 2px solid var(--muted);
-    outline-offset: 3px;
-  }
   .error {
     padding: 10px;
     margin: 12px 0 0;

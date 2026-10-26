@@ -163,10 +163,6 @@
   .menu-trigger.quiet[aria-expanded='true'] {
     background: var(--hover);
   }
-  .menu-trigger.quiet:focus-visible {
-    outline: 1px solid var(--line-strong);
-    outline-offset: 2px;
-  }
   .menu {
     position: fixed;
     inset: auto;
@@ -196,11 +192,7 @@
   }
   .menu button:hover,
   .menu button:focus {
-    outline: none;
     background: var(--selected);
-  }
-  .menu-trigger:focus-visible {
-    outline: none;
   }
   @media (pointer: coarse) {
     .menu-trigger {

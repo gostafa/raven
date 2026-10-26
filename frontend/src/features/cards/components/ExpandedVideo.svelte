@@ -41,8 +41,4 @@
     object-fit: contain;
     background: #000;
   }
-  video:focus-visible {
-    outline: 2px solid var(--muted);
-    outline-offset: -2px;
-  }
 </style>

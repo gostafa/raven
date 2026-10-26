@@ -40,6 +40,9 @@
   class="workspace-control workspace-part-dialog"
   bind:this={partDialog}
   aria-label={$l.t('workspace.contentPreview')}
+  onclick={(event) => {
+    if (!saving && event.target === partDialog) partDialog?.close();
+  }}
   onclose={() => {
     selectedPart = null;
     restoreDialogFocus().catch(reportFailure);
@@ -91,6 +94,9 @@
   bind:this={partDeleteDialog}
   aria-labelledby="part-delete-title"
   aria-describedby="part-delete-description"
+  onclick={(event) => {
+    if (!saving && event.target === partDeleteDialog) partDeleteDialog?.close();
+  }}
   oncancel={(event) => {
     if (saving) event.preventDefault();
   }}
@@ -130,6 +136,9 @@
   class="workspace-control"
   bind:this={deleteDialog}
   aria-labelledby="delete-title"
+  onclick={(event) => {
+    if (!saving && event.target === deleteDialog) deleteDialog?.close();
+  }}
   onclose={restoreDialogFocus}
   oncancel={(event) => {
     if (saving) event.preventDefault();

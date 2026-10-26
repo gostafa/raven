@@ -873,6 +873,9 @@
   bind:this={reviewDialog}
   aria-label={$l.t('workspace.review')}
   onclose={closeReview}
+  onclick={(event) => {
+    if (!reviewSaving && event.target === reviewDialog) reviewDialog?.close();
+  }}
   oncancel={(event) => {
     if (reviewSaving) event.preventDefault();
   }}

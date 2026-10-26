@@ -280,11 +280,6 @@
     font-size: 10px;
     font-variant-numeric: tabular-nums;
   }
-  button:focus-visible,
-  input:focus-visible {
-    outline: 2px solid #a3a3a3;
-    outline-offset: 3px;
-  }
   .compact {
     justify-content: safe center;
     box-sizing: border-box;

@@ -259,7 +259,6 @@
     min-width: 0;
     border: 0;
     padding: 0;
-    outline: none;
     background: transparent;
     color: var(--ink);
     font: inherit;
@@ -267,7 +266,6 @@
   }
   .choice-search:focus-within {
     border-color: var(--line-strong);
-    outline: 1px solid var(--line-strong);
   }
 
   .panel-note {
@@ -278,14 +276,6 @@
     color: var(--muted);
     font-size: 10px;
     line-height: 1.5;
-  }
-
-  button:focus-visible {
-    outline: 1px solid var(--focus, #bdbdbd);
-    outline-offset: -2px;
-  }
-  .clear-button:focus-visible {
-    outline-offset: 3px;
   }
   @media (pointer: coarse) {
     .clear-button {

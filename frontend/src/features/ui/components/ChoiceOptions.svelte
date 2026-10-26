@@ -121,10 +121,6 @@
     color: var(--muted);
     font-size: 11px;
   }
-  button:focus-visible {
-    outline: 1px solid var(--focus, #bdbdbd);
-    outline-offset: -2px;
-  }
 
   @media (pointer: coarse) {
     .choices button {

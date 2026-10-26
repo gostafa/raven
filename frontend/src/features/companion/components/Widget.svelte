@@ -151,10 +151,6 @@
   .widget-logo:hover {
     opacity: 0.8;
   }
-  .widget-logo:focus-visible {
-    outline: 2px solid #555;
-    outline-offset: -3px;
-  }
   .sr-only {
     position: absolute;
     width: 1px;

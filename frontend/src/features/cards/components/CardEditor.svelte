@@ -140,6 +140,9 @@
 <dialog
   bind:this={removeDialog}
   aria-labelledby="remove-item-title"
+  onclick={(event) => {
+    if (event.target === removeDialog) removeDialog?.close();
+  }}
   onclose={() => {
     removal = null;
   }}
@@ -243,10 +246,6 @@
     background: #000;
     transform: translateX(12px);
   }
-  .remember-switch input:focus-visible {
-    outline: 2px solid var(--muted);
-    outline-offset: 3px;
-  }
   .remember-switch small {
     display: block;
     color: var(--muted);
@@ -319,10 +318,6 @@
     font: inherit;
     font-size: 12px;
     line-height: 1.6;
-  }
-  button:focus-visible,
-  textarea:focus-visible {
-    outline: none;
   }
 
   .hint {

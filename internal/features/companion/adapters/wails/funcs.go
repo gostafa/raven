@@ -67,6 +67,7 @@ func observeMainFullscreenExit(state *windowState) {
 
 func bindWidgetWindow(state *windowState, window widgetSurface) {
 	state.showWidget, state.widgetPosition = window.Show, window.Position
+	state.hideWidget = window.Hide
 	state.setWidgetPosition, state.getWidgetScreen = window.SetPosition, window.GetScreen
 }
 
@@ -264,6 +265,7 @@ func ToggleFloatingReview(windows *windowState) {
 		}
 
 		placeFloatingReview(windows)
+		windows.hideWidget()
 		windows.showReview()
 		windows.dispatchReview(
 			&application.CustomEvent{
@@ -279,6 +281,7 @@ func ToggleFloatingReview(windows *windowState) {
 // HideFloatingReview is called after the review UI has stopped media playback.
 func HideFloatingReview(windows *windowState) {
 	windows.hideReview()
+	windows.showWidget()
 }
 
 func syncFloatingReview(windows *windowState) {

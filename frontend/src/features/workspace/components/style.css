@@ -60,11 +60,6 @@
 .workspace-clear-folder-tags:hover {
   color: var(--ink);
 }
-.workspace-filter-chip:focus-visible,
-.workspace-clear-folder-tags:focus-visible {
-  outline: 1px solid var(--focus);
-  outline-offset: 3px;
-}
 .workspace-folder-filter-empty {
   color: var(--muted);
   font-size: 12px;
@@ -175,9 +170,6 @@ aside.workspace-control {
   background: #ffffff08;
   color: var(--muted);
 }
-.workspace-sidebar-search:focus-within {
-  outline: none;
-}
 .workspace-sidebar-search input.workspace-control {
   width: 100%;
   min-width: 0;
@@ -185,10 +177,6 @@ aside.workspace-control {
   border: 0;
   background: transparent;
   font-size: 11px;
-  outline: none;
-}
-.workspace-sidebar-search input.workspace-control:focus-visible {
-  outline: none;
 }
 .workspace-sidebar-search svg.workspace-control {
   flex-shrink: 0;
@@ -571,10 +559,6 @@ h1.workspace-control {
   color: var(--ink);
   text-align: start;
 }
-.workspace-folder-card:focus-visible {
-  outline: 1px solid var(--line-strong);
-  outline-offset: 3px;
-}
 .workspace-folder-card-content {
   position: relative;
   display: flex;
@@ -817,10 +801,6 @@ dialog.workspace-control.workspace-part-dialog {
 .workspace-part-toolbar .workspace-icon-button:hover {
   border-color: var(--line-strong);
 }
-.workspace-part-toolbar .workspace-icon-button:focus-visible {
-  outline: 2px solid var(--muted);
-  outline-offset: 2px;
-}
 .workspace-part-body {
   display: flex;
   flex-direction: column;
@@ -997,10 +977,6 @@ input.workspace-control::placeholder,
 textarea.workspace-control::placeholder {
   color: var(--ink);
   opacity: 1;
-}
-input.workspace-control:focus-visible,
-textarea.workspace-control:focus-visible {
-  outline: none;
 }
 .workspace-control[aria-invalid='true'] {
   border-color: #a3a3a3;
@@ -1203,10 +1179,6 @@ textarea.workspace-control:focus-visible {
   border-color: var(--line-strong);
   box-shadow: 0 0 0 1px var(--line-strong);
 }
-.workspace-card-selecting:has(input:focus-visible) .workspace-memory-card {
-  outline: 2px solid var(--muted);
-  outline-offset: 3px;
-}
 .workspace-card-selection {
   position: absolute;
   inset: 0;
@@ -1248,13 +1220,6 @@ textarea.workspace-control:focus-visible {
 }
 .workspace-folder-selecting .workspace-folder-card:hover .workspace-folder-selection-check {
   border-color: var(--line-strong);
-}
-.workspace-folder-selecting .workspace-folder-card:focus-visible {
-  outline: none;
-}
-.workspace-folder-selecting .workspace-folder-card:focus-visible .workspace-folder-selection-check {
-  outline: 2px solid var(--muted);
-  outline-offset: 3px;
 }
 .workspace-folder-selecting .workspace-folder-card-bottom {
   gap: 8px;
@@ -1334,10 +1299,6 @@ textarea.workspace-control:focus-visible {
   color: #fff;
   border: 1px solid var(--line);
   border-radius: 7px;
-}
-.workspace-transfer-dialog input:focus-visible {
-  outline: 1px solid var(--line-strong);
-  outline-offset: 2px;
 }
 .workspace-transfer-folders {
   max-height: 40svh;

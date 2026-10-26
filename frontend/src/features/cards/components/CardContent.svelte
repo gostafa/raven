@@ -227,10 +227,6 @@
     background: transparent;
     cursor: pointer;
   }
-  .open-part:focus-visible {
-    outline: 2px solid var(--muted);
-    outline-offset: -2px;
-  }
   .audio-item :global(.play),
   .audio-item :global(input) {
     position: relative;
@@ -300,10 +296,6 @@
   .video-slot {
     height: 100%;
     min-height: 0;
-  }
-  .compact .content-item:focus-visible {
-    outline: 2px solid #a3a3a3;
-    outline-offset: -2px;
   }
   .review-time {
     position: absolute;
