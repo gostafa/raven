@@ -118,8 +118,8 @@ test('a failed package command cannot be promoted or expose action outputs', asy
 test('the release workflow requires both native Linux builds and keeps checksums private', async () => {
   const workflow = await readFile(path.join(root, '.github/workflows/release.yml'), 'utf8');
   const publish = workflow.slice(workflow.indexOf('  publish:'));
-  assert.match(workflow, /runner: ubuntu-24\.04\n/);
-  assert.match(workflow, /runner: ubuntu-24\.04-arm\n/);
+  assert.match(workflow, /runner: ubuntu-26\.04\n/);
+  assert.match(workflow, /runner: ubuntu-26\.04-arm\n/);
   assert.match(publish, /if: github.event_name == 'push'/);
   assert.match(publish, /- windows\s+- linux/);
   assert.match(publish, /include-checksums: 'false'/);

@@ -1,6 +1,6 @@
 ---
 name: Build Linux release
-description: Package and verify three Linux installer formats on a matching native Ubuntu 24.04 runner.
+description: Package and verify three Linux installer formats on a matching native Ubuntu 26.04 runner.
 
 inputs:
   tag:
@@ -72,7 +72,7 @@ runs:
         RELEASE_TAG: ${{ inputs.tag }}
         PACKAGE_ARCH: ${{ inputs.arch }}
       run: |
-        # Ubuntu 24.04 restricts user namespaces used by WebKit's sandbox.
+        # Ubuntu restricts unprivileged user namespaces used by WebKit's sandbox.
         # Permit namespaces on this disposable runner while retaining WebKit's sandbox.
         userns_key=kernel.apparmor_restrict_unprivileged_userns
         userns_previous=$(sysctl -n "$userns_key")

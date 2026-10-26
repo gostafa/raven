@@ -104,12 +104,11 @@ func keepWidgetOnTop(handle uintptr, procedure widgetProcedure) error {
 }
 
 func callWidgetProcedure(procedure widgetProcedure, arguments ...uintptr) widgetProcedureCall {
-	result, lastError, err := procedure.Call(arguments...)
-	_ = lastError
+	result, _, err := procedure.Call(arguments...)
 	if result != zero {
 		return widgetProcedureCall{err: nil, result: result}
 	}
-	if err == nil || err == widgetNoErrno {
+	if err == nil || err == errWidgetNoErrno {
 		err = errWidgetProcedureReturnedZero
 	}
 

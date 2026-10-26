@@ -1,6 +1,6 @@
 # Linux Release Tasks
 
-Use a native Ubuntu 24.04 host matching the target architecture: AMD64 or ARM64.
+Use a native Ubuntu 26.04 host matching the target architecture: AMD64 or ARM64.
 Install Task, the Go version in `go.mod`, and the Bun version in `package.json`.
 From the repository root:
 
@@ -10,8 +10,8 @@ task linux:release TAG=v1.2.3 ARCH=amd64
 ```
 
 Use `ARCH=arm64` on ARM64. Cross compilation is rejected because Raven links
-GTK4 and WebKitGTK 6.0 through CGO. GitHub builds on separate `ubuntu-24.04` and
-`ubuntu-24.04-arm` runners. The composite `build-linux` action requires checkout
+GTK4 and WebKitGTK 6.0 through CGO. Dependency setup also supports Ubuntu 24.04.
+GitHub builds on separate `ubuntu-26.04` and `ubuntu-26.04-arm` runners. The composite `build-linux` action requires checkout
 first, sets up pinned Go/Bun versions and Task, caches dependencies, installs
 native tools, then calls `linux:release`.
 

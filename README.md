@@ -21,7 +21,7 @@ Install Go **1.27.2**, Bun **1.4.2**, Node.js **26.12.0+**, Task, and the native
 | --- | --- |
 | macOS | macOS 13+ and Xcode Command Line Tools |
 | Windows | Windows 10/11 and Microsoft Edge WebView2 Runtime |
-| Linux | GTK4 and WebKitGTK 6.0 development libraries; Ubuntu 24.04 is the baseline |
+| Linux | GTK4 and WebKitGTK 6.0 development libraries; Ubuntu 26.04 is the baseline |
 
 From the repository root:
 
@@ -64,7 +64,7 @@ for verification before publication; the GitHub release publishes the DMGs only.
 ### Linux Packaging
 
 Linux releases support AMD64 and ARM64 with Debian (`.deb`), RPM,
-and pacman (`.pkg.tar.zst`) packages. Build natively on Ubuntu 24.04:
+and pacman (`.pkg.tar.zst`) packages. Build natively on Ubuntu 26.04:
 
 ```sh
 task linux:install:deps ARCH=amd64

@@ -53,7 +53,20 @@ func TestNotificationStartupRecoveryAndCleanup(t *testing.T) {
 		t.Fatal("incorrect timeout classification")
 	}
 	if runtime.GOOS == "windows" {
-		t.Skip("Windows startup does not support reliable rollback")
+		var warnings atomic.Int32
+		failed := &recoveringNative{cleanupFailure: errors.New("cleanup failed")}
+		service := NewRuntime(failed, &fakeSound{}, func(context.Context, error) {
+			warnings.Add(1)
+		})
+		service.Start(t.Context())
+		if failed.attempts.Load() != 1 || failed.cleanups.Load() != 1 ||
+			service.Available() || warnings.Load() != 1 {
+			t.Fatal("Windows startup failure was not reported")
+		}
+		if err := service.Stop(); err == nil {
+			t.Fatal("Windows cleanup failure was hidden")
+		}
+		return
 	}
 	native := &recoveringNative{}
 	service := NewRuntime(native, &fakeSound{}, func(context.Context, error) {})
