@@ -7,14 +7,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
+
+	resilience "raven/internal/shared/resilience/adapters/retry"
 )
 
 func reminderSound() *notifications.NotificationSound {
 	return &notifications.NotificationSound{Silent: true, Name: ""}
+}
+
+func notificationTransient(err error) bool {
+	if errors.Is(err, errNotificationCleanup) {
+		return false
+	}
+
+	if resilience.Transient(err) {
+		return true
+	}
+
+	var failure *net.OpError
+
+	return errors.As(err, &failure) && failure.Timeout()
 }
 
 func recordNotificationStartupCleanupFailure(
