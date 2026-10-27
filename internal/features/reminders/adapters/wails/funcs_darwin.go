@@ -17,6 +17,12 @@ func reminderSound() *notifications.NotificationSound {
 	return &notifications.NotificationSound{Silent: true, Name: ""}
 }
 
+func recordNotificationStartupCleanupFailure(
+	_ *notificationLifecycle,
+	_ error,
+) {
+}
+
 func playReminder(ctx context.Context, resolve func() (string, error)) error {
 	executable, err := resolve()
 	if err != nil {
