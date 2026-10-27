@@ -3,6 +3,7 @@
 package wails
 
 import (
+	"errors"
 	"fmt"
 	"syscall"
 
@@ -106,6 +107,7 @@ func keepWidgetOnTop(handle uintptr, procedure widgetProcedure) error {
 
 func callWidgetProcedure(procedure widgetProcedure, arguments ...uintptr) widgetProcedureCall {
 	result, _, err := procedure.Call(arguments...)
+
 	return widgetProcedureResult(result, err)
 }
 
@@ -113,9 +115,11 @@ func widgetProcedureResult(result uintptr, err error) widgetProcedureCall {
 	if result != zero {
 		return widgetProcedureCall{err: nil, result: result}
 	}
-	if err == nil || err == syscall.Errno(zero) {
+
+	if err == nil || errors.Is(err, syscall.Errno(zero)) {
 		err = errWidgetProcedureReturnedZero
 	}
+
 	return widgetProcedureCall{
 		err:    fmt.Errorf("call native widget procedure: %w", err),
 		result: result,
