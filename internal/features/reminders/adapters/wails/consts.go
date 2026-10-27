@@ -10,5 +10,4 @@ import (
 const (
 	zero            = 0
 	playbackTimeout = time.Second
-	windowsPlatform = "windows"
 )

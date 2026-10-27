@@ -7,9 +7,8 @@ type (
 	Widget struct{ configure func() error }
 
 	widgetProcedureCall struct {
-		err          error
-		secondResult uintptr
-		result       uintptr
+		err    error
+		result uintptr
 	}
 
 	widgetProcedure interface {

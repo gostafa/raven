@@ -8,9 +8,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"net"
 	"os"
-	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 
@@ -214,20 +212,6 @@ func observeNotifications(state *notificationLifecycle, changed func()) func() {
 	state.mu.Unlock()
 
 	return func() { state.mu.Lock(); delete(state.listeners, key); state.mu.Unlock() }
-}
-
-func notificationTransient(err error) bool {
-	if goruntime.GOOS == windowsPlatform || errors.Is(err, errNotificationCleanup) {
-		return false
-	}
-
-	if resilience.Transient(err) {
-		return true
-	}
-
-	var failure *net.OpError
-
-	return errors.As(err, &failure) && failure.Timeout()
 }
 
 func notificationListeners(state *notificationLifecycle) []func() {

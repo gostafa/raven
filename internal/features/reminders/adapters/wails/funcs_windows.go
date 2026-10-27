@@ -16,6 +16,8 @@ func reminderSound() *notifications.NotificationSound { return nil }
 
 func playReminder(context.Context, func() (string, error)) error { return nil }
 
+func notificationTransient(error) bool { return false }
+
 func recordNotificationStartupCleanupFailure(
 	state *notificationLifecycle,
 	err error,

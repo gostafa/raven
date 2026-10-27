@@ -67,6 +67,19 @@ func TestNotificationStartupRecoveryAndCleanup(t *testing.T) {
 		if err := service.Stop(); err == nil {
 			t.Fatal("Windows cleanup failure was hidden")
 		}
+
+		native := &fakeRuntime{}
+		service = NewRuntime(native, &fakeSound{}, func(context.Context, error) {})
+		var changes atomic.Int32
+		unsubscribe := service.SubscribeAvailability(func() { changes.Add(1) })
+		service.Start(t.Context())
+		if !service.Available() || native.started == nil || changes.Load() != 1 {
+			t.Fatal("Windows startup did not publish notification availability")
+		}
+		unsubscribe()
+		if err := service.Stop(); err != nil {
+			t.Fatal(err)
+		}
 		return
 	}
 	native := &recoveringNative{}
