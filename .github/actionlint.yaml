@@ -4,6 +4,8 @@
 self-hosted-runner:
   labels:
     - codspeed-macro
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
 
 # Temporary: actionlint 1.7.12 does not recognize GitHub's $/ self-repository
 # uses: form (rhysd/actionlint#711). Remove once a release includes  # 732.
