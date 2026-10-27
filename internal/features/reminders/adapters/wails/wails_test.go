@@ -19,9 +19,10 @@ import (
 
 type fakeRuntime struct {
 	fakeNotifications
-	callback func(notifications.NotificationResult)
-	started  context.Context
-	stops    int
+	callback        func(notifications.NotificationResult)
+	started         context.Context
+	shutdownFailure error
+	stops           int
 }
 
 type recoveringNative struct {
@@ -132,7 +133,7 @@ func (native *fakeRuntime) ServiceStartup(ctx context.Context, _ application.Ser
 
 func (native *fakeRuntime) ServiceShutdown() error {
 	native.stops++
-	return native.failure
+	return native.shutdownFailure
 }
 
 func (native *fakeRuntime) OnNotificationResponse(callback func(notifications.NotificationResult)) {
@@ -181,7 +182,7 @@ func TestOptionalNotificationLifecycleAndReviewActions(t *testing.T) {
 	runtime := NewRuntime(native, &fakeSound{}, func(context.Context, error) {})
 	runtime.Start(t.Context())
 	failure := errors.New("shutdown failure")
-	native.failure = failure
+	native.shutdownFailure = failure
 	if err := runtime.Stop(); !errors.Is(err, failure) {
 		t.Fatalf("shutdown error: %v", err)
 	}

@@ -105,19 +105,20 @@ func keepWidgetOnTop(handle uintptr, procedure widgetProcedure) error {
 }
 
 func callWidgetProcedure(procedure widgetProcedure, arguments ...uintptr) widgetProcedureCall {
-	result, _, err := procedure.Call(arguments...)
-	return widgetProcedureResult(result, err)
+	result, secondResult, err := procedure.Call(arguments...)
+	return widgetProcedureResult(result, secondResult, err)
 }
 
-func widgetProcedureResult(result uintptr, err error) widgetProcedureCall {
+func widgetProcedureResult(result, secondResult uintptr, err error) widgetProcedureCall {
 	if result != zero {
-		return widgetProcedureCall{err: nil, result: result}
+		return widgetProcedureCall{err: nil, secondResult: secondResult, result: result}
 	}
 	if err == nil || err == syscall.Errno(zero) {
 		err = errWidgetProcedureReturnedZero
 	}
 	return widgetProcedureCall{
-		err:    fmt.Errorf("call native widget procedure: %w", err),
-		result: result,
+		err:          fmt.Errorf("call native widget procedure: %w", err),
+		secondResult: secondResult,
+		result:       result,
 	}
 }

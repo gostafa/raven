@@ -30,7 +30,7 @@ tasks:
           FORMAT: all
       - bash taskfiles/linux/funcs.sh release-outputs
   install:deps:
-    desc: Install Ubuntu 24.04 or 26.04 native build and packaging dependencies (requires sudo)
+    desc: Install Ubuntu 26.04 native build and packaging dependencies (requires sudo)
     cmds:
       - bash taskfiles/linux/funcs.sh install-deps
   install:tooling:

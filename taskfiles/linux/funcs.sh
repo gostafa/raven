@@ -71,8 +71,8 @@ install_deps() {
   validate_host
   # shellcheck source=/dev/null
   source /etc/os-release
-  [[ $ID == ubuntu && $VERSION_ID =~ ^(24\.04|26\.04)$ ]] ||
-    fail 'Automatic dependency setup requires Ubuntu 24.04 or 26.04.'
+  [[ $ID == ubuntu && $VERSION_ID == 26.04 ]] ||
+    fail 'Automatic dependency setup requires Ubuntu 26.04.'
   local elevate=()
   if (( EUID != 0 )); then elevate=(sudo); fi
   "${elevate[@]}" apt-get update
