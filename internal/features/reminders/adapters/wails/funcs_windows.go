@@ -27,6 +27,7 @@ func recordNotificationStartupCleanupFailure(
 	}
 
 	state.mu.Lock()
+
 	state.startupCleanupError = err
 	state.mu.Unlock()
 }
