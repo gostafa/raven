@@ -50,16 +50,17 @@ type (
 		operations map[string]func(context.Context, int, func()) notificationResult
 	}
 	notificationLifecycle = struct {
-		native    NativeRuntime
-		owner     func() context.Context
-		cancel    context.CancelFunc
-		warn      func(context.Context, error)
-		resource  *resilience.Initialization[bool]
-		available *atomic.Bool
-		listeners map[uint]func()
-		next      uint
-		mu        sync.Mutex
-		stopped   bool
+		native              NativeRuntime
+		startupCleanupError error
+		owner               func() context.Context
+		cancel              context.CancelFunc
+		warn                func(context.Context, error)
+		resource            *resilience.Initialization[bool]
+		available           *atomic.Bool
+		listeners           map[uint]func()
+		next                uint
+		mu                  sync.Mutex
+		stopped             bool
 	}
 
 	notificationResult = struct {

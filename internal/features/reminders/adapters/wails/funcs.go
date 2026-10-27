@@ -111,15 +111,24 @@ func startManagedNotifications(
 	allowed, err := state.resource.Get(ctx)
 	if err != nil {
 		detach()
-		state.cancel()
-
-		err = errors.Join(err, state.resource.Close())
-		state.warn(ctx, err)
+		handleNotificationStartupFailure(ctx, state, err)
 	}
 
 	publishNotificationAvailability(state, allowed)
 
 	return notificationResult{allowed: state.available.Load(), failure: nil, unsubscribe: nil}
+}
+
+func handleNotificationStartupFailure(
+	ctx context.Context,
+	state *notificationLifecycle,
+	err error,
+) {
+	state.cancel()
+
+	err = errors.Join(err, state.resource.Close())
+	recordNotificationStartupCleanupFailure(state, err)
+	state.warn(ctx, err)
 }
 
 func publishNotificationAvailability(state *notificationLifecycle, allowed bool) {
@@ -142,7 +151,12 @@ func closeManagedNotifications(state *notificationLifecycle) error {
 	state.mu.Unlock()
 	state.cancel()
 
-	return errors.Join(state.resource.Close())
+	state.mu.Lock()
+
+	startupCleanupError := state.startupCleanupError
+	state.mu.Unlock()
+
+	return errors.Join(startupCleanupError, state.resource.Close())
 }
 
 func bindManagedNotifications(
@@ -203,7 +217,7 @@ func observeNotifications(state *notificationLifecycle, changed func()) func() {
 }
 
 func notificationTransient(err error) bool {
-	if goruntime.GOOS == "windows" || errors.Is(err, errNotificationCleanup) {
+	if goruntime.GOOS == windowsPlatform || errors.Is(err, errNotificationCleanup) {
 		return false
 	}
 
