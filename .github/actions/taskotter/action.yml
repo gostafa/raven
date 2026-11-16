@@ -62,7 +62,7 @@ runs:
   steps:
     - name: TaskOtter
       id: taskotter
-      uses: task-otter/Taskotter@5549dd6d076fb3fbff55909d8a49089bf2128f13  # v0.0.10
+      uses: task-otter/Taskotter@98f7f3ab96ec93117224ff8ed16665c93c520290  # v0.0.11
       with:
         github-token: ${{ inputs.github-token }}
         fail-on-changes: ${{ inputs.fail-on-changes }}
