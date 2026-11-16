@@ -17,57 +17,67 @@ import (
 
 // Snapshot returns unacknowledged due items and the next reminder delay.
 func Snapshot(cards []cardapi.Card, now time.Time) ([]reviewapi.DueOccurrence, time.Duration) {
-	pending := []reviewapi.DueOccurrence{}
-	delay := pollInterval
-
-	for index := range cards {
-		occurrences, next := cardSnapshot(&cards[index], now)
-
-		pending = append(pending, occurrences...)
-		delay = min(delay, next)
-	}
+	pending, delay, _ := scanSchedules(cards, now)
 
 	return pending, delay
 }
 
-func cardSnapshot(card *cardapi.Card, now time.Time) ([]reviewapi.DueOccurrence, time.Duration) {
-	pending := []reviewapi.DueOccurrence{}
-	delay := pollInterval
+func scanSchedules(
+	cards []cardapi.Card,
+	now time.Time,
+) ([]reviewapi.DueOccurrence, time.Duration, bool) {
+	pending, delay, hasDue := []reviewapi.DueOccurrence{}, pollInterval, false
+
+	for index := range cards {
+		occurrences, next, cardDue := cardSnapshot(&cards[index], now)
+
+		pending = append(pending, occurrences...)
+		delay, hasDue = min(delay, next), hasDue || cardDue
+	}
+
+	return pending, delay, hasDue
+}
+
+func cardSnapshot(
+	card *cardapi.Card,
+	now time.Time,
+) ([]reviewapi.DueOccurrence, time.Duration, bool) {
+	pending, delay, hasDue := []reviewapi.DueOccurrence{}, pollInterval, false
 	items := contentapi.Items(card.Items)
 
 	for index := range items {
-		occurrence, next := itemSnapshot(card, &items[index], now)
+		occurrence, next, itemDue := itemSnapshot(card, &items[index], now)
 
-		delay = min(delay, next)
+		delay, hasDue = min(delay, next), hasDue || itemDue
 
 		if occurrence != nil {
 			pending = append(pending, *occurrence)
 		}
 	}
 
-	return pending, delay
+	return pending, delay, hasDue
 }
 
 func itemSnapshot(
 	card *cardapi.Card,
 	item *contentapi.Item,
 	now time.Time,
-) (*reviewapi.DueOccurrence, time.Duration) {
+) (*reviewapi.DueOccurrence, time.Duration, bool) {
 	if item.Hint {
-		return nil, pollInterval
+		return nil, pollInterval, false
 	}
 
 	due := contentapi.Schedule(item.Schedule).Due
 	if due.After(now) {
-		return nil, due.Sub(now)
+		return nil, due.Sub(now), false
 	}
 
 	dueMillis := due.UnixMilli()
 	if item.LastNotifiedDue == dueMillis {
-		return nil, pollInterval
+		return nil, pollInterval, true
 	}
 
-	return dueOccurrence(card, item, dueMillis), pollInterval
+	return dueOccurrence(card, item, dueMillis), pollInterval, true
 }
 
 func dueOccurrence(
@@ -306,6 +316,8 @@ func authorize(runtime *reconciliation) {
 }
 
 func reconcile(runtime *reconciliation) time.Duration {
+	readStartedAt := time.Now()
+
 	cards, err := reconciliationCards(runtime.list)
 	if err != nil {
 		runtime.warn("Could not read review schedules", err)
@@ -313,9 +325,9 @@ func reconcile(runtime *reconciliation) time.Duration {
 		return pollInterval
 	}
 
-	pending, delay := Snapshot(cards, time.Now())
+	pending, delay, hasDue := scanSchedules(cards, time.Now())
 
-	runtime.publish()
+	runtime.publish(hasDue, readStartedAt)
 	deliverPending(runtime, pending)
 
 	return delay

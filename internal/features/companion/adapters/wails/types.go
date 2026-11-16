@@ -6,6 +6,7 @@ package wails
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -72,8 +73,13 @@ type (
 		ReviewGap int
 	}
 	// Windows dispatches the consumer-owned native window operations.
-	Windows     struct{ operations map[string]func() }
+	Windows struct {
+		operations               map[string]func()
+		updateWidgetAvailability func(bool, time.Time)
+	}
 	windowState struct {
+		widgetAvailabilityAfter time.Time
+
 		logger              *slog.Logger
 		setReviewPosition   func(int, int)
 		restoreMain         func()
@@ -95,6 +101,7 @@ type (
 		showMain            func() application.Window
 		configure           func() error
 		invoke              func(func())
+		post                func(func())
 		dispatchReview      func(*application.CustomEvent)
 		quit                func()
 		observeMainExit     func(func(*application.WindowEvent)) func()
@@ -107,6 +114,7 @@ type (
 		reviewGap           int
 		hideMainPending     bool
 		mainExitObserved    bool
+		widgetVisible       bool
 	}
 	// WindowSet contains the Wails windows controlled by this adapter.
 	WindowSet struct {

@@ -11,12 +11,13 @@ import (
 )
 
 var (
-	_ mainWindow           = (*application.WebviewWindow)(nil)
-	_ mainFullscreenWindow = (*application.WebviewWindow)(nil)
-	_ widgetSurface        = (*application.WebviewWindow)(nil)
-	_ reviewSurface        = (*application.WebviewWindow)(nil)
-	_ reviewFrame          = (*application.WebviewWindow)(nil)
-	_ companion.Windows    = (*Windows)(nil)
+	_ mainWindow                   = (*application.WebviewWindow)(nil)
+	_ mainFullscreenWindow         = (*application.WebviewWindow)(nil)
+	_ widgetSurface                = (*application.WebviewWindow)(nil)
+	_ reviewSurface                = (*application.WebviewWindow)(nil)
+	_ reviewFrame                  = (*application.WebviewWindow)(nil)
+	_ companion.Windows            = (*Windows)(nil)
+	_ companion.WidgetAvailability = (*Windows)(nil)
 
 	_ ports.WidgetConfiguration = (*Widget)(nil)
 )

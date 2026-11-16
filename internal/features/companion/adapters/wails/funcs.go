@@ -7,6 +7,7 @@ import (
 	"context"
 	"image"
 	"log/slog"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -58,7 +59,6 @@ func observeMainFullscreenExit(state *windowState) {
 		state.invoke(func() {
 			if state.hideMainPending {
 				state.hideMainPending = false
-				state.showWidget()
 				state.hideMain()
 			}
 		})
@@ -73,6 +73,7 @@ func bindWidgetWindow(state *windowState, window widgetSurface) {
 
 func bindWindowRuntime(state *windowState, deps *Dependencies) {
 	state.configure, state.invoke = deps.Configure, application.InvokeSync
+	state.post = application.InvokeAsync
 	state.primaryScreen, state.quit = deps.App.Screen.GetPrimary, deps.App.Quit
 	state.logger = deps.App.Logger
 }
@@ -85,7 +86,7 @@ func bindWindowSettings(state *windowState, settings *Settings) {
 }
 
 func newWindowOperations(state *windowState) *Windows {
-	return &Windows{operations: map[string]func(){
+	operations := map[string]func(){
 		"configure": func() { ConfigureWidget(state) }, "show": func() { ShowMain(state) },
 		"hide": func() { HideMain(state) }, "reset": func() { ResetWidget(state) },
 		"position":   func() { PositionFloatingReview(state) },
@@ -93,7 +94,14 @@ func newWindowOperations(state *windowState) *Windows {
 		"toggle":     func() { ToggleFloatingReview(state) },
 		"syncReview": func() { syncFloatingReview(state) },
 		"hideReview": func() { HideFloatingReview(state) }, "quit": func() { Quit(state) },
-	}}
+	}
+
+	return &Windows{
+		operations: operations,
+		updateWidgetAvailability: func(hasDue bool, readStartedAt time.Time) {
+			state.post(func() { applyWidgetAvailability(state, hasDue, readStartedAt) })
+		},
+	}
 }
 
 func bindReview(state *windowState, review *application.WebviewWindow) {
@@ -121,11 +129,16 @@ func (windows *Windows) ConfigureWidget() { windows.operations["configure"]() }
 // ShowMain shows, restores, and focuses the library.
 func (windows *Windows) ShowMain() { windows.operations["show"]() }
 
-// HideMain hides the library while retaining the launcher.
+// HideMain hides the library.
 func (windows *Windows) HideMain() { windows.operations["hide"]() }
 
 // ResetWidget places the launcher on the primary screen.
 func (windows *Windows) ResetWidget() { windows.operations["reset"]() }
+
+// UpdateWidgetAvailability applies a schedule result on the native event loop.
+func (windows *Windows) UpdateWidgetAvailability(hasDue bool, readStartedAt time.Time) {
+	windows.updateWidgetAvailability(hasDue, readStartedAt)
+}
 
 // PositionFloatingReview places a visible review beside the launcher.
 func (windows *Windows) PositionFloatingReview() { windows.operations["position"]() }
@@ -170,7 +183,7 @@ func ShowMain(windows *windowState) {
 	})
 }
 
-// HideMain hides the library and keeps the widget visible.
+// HideMain hides the library after leaving fullscreen if needed.
 func HideMain(windows *windowState) {
 	windows.invoke(func() {
 		if windows.hideMainPending {
@@ -186,7 +199,6 @@ func HideMain(windows *windowState) {
 			return
 		}
 
-		windows.showWidget()
 		windows.hideMain()
 	})
 }
@@ -201,8 +213,42 @@ func ResetWidget(windows *windowState) {
 		)
 	}
 
-	windows.showWidget()
 	PositionFloatingReview(windows)
+}
+
+func applyWidgetAvailability(windows *windowState, hasDue bool, readStartedAt time.Time) {
+	if !readStartedAt.After(windows.widgetAvailabilityAfter) {
+		return
+	}
+
+	reviewOpen := windows.reviewVisible != nil && windows.reviewVisible()
+	shouldShowWidget := hasDue && !reviewOpen
+
+	if shouldShowWidget {
+		showWidget(windows)
+
+		return
+	}
+
+	hideWidget(windows)
+}
+
+func showWidget(windows *windowState) {
+	if windows.widgetVisible {
+		return
+	}
+
+	windows.widgetVisible = true
+	windows.showWidget()
+}
+
+func hideWidget(windows *windowState) {
+	if !windows.widgetVisible {
+		return
+	}
+
+	windows.widgetVisible = false
+	windows.hideWidget()
 }
 
 // Quit is intentionally separate from closing the main window.
@@ -264,24 +310,38 @@ func ToggleFloatingReview(windows *windowState) {
 			return
 		}
 
-		placeFloatingReview(windows)
-		windows.hideWidget()
-		windows.showReview()
-		windows.dispatchReview(
-			&application.CustomEvent{
-				Name:   windows.openFloatingReview,
-				Data:   nil,
-				Sender: "",
-			},
-		)
-		windows.focusReview()
+		if windows.widgetVisible {
+			openFloatingReview(windows)
+		}
 	})
+}
+
+func openFloatingReview(windows *windowState) {
+	placeFloatingReview(windows)
+	hideWidget(windows)
+	windows.showReview()
+	windows.dispatchReview(
+		&application.CustomEvent{
+			Name:   windows.openFloatingReview,
+			Data:   nil,
+			Sender: "",
+		},
+	)
+	windows.focusReview()
 }
 
 // HideFloatingReview is called after the review UI has stopped media playback.
 func HideFloatingReview(windows *windowState) {
-	windows.hideReview()
-	windows.showWidget()
+	windows.invoke(func() {
+		if windows.reviewVisible == nil || !windows.reviewVisible() {
+			return
+		}
+
+		// The next scan must start after the close request so an older
+		// snapshot cannot restore the widget after the last rating.
+		windows.widgetAvailabilityAfter = time.Now()
+		windows.hideReview()
+	})
 }
 
 func syncFloatingReview(windows *windowState) {

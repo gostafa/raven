@@ -65,7 +65,7 @@ func TestBackgroundAvailabilityEnablesExistingCoordinator(t *testing.T) {
 		backing,
 		native,
 		Callbacks{
-			Publish: func() { published <- struct{}{} },
+			Publish: func(bool, time.Time) { published <- struct{}{} },
 			Warn:    func(message string, err error) { t.Errorf("%s: %v", message, err) },
 		},
 	)
@@ -129,11 +129,33 @@ func (notifier *testNotifier) Send(count int) error {
 	return notifier.sendErr
 }
 
-func TestHintsDoNotTriggerReminders(t *testing.T) {
-	item := contentapi.Item{Hint: true}
-	occurrence, delay := itemSnapshot(&cardapi.Card{}, &item, time.Now())
-	if occurrence != nil || delay != pollInterval {
-		t.Fatalf("hint produced occurrence=%v delay=%v", occurrence, delay)
+func TestScheduleAvailabilityIncludesAcknowledgedReviewsAndExcludesHints(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	due := contentapi.Item{Schedule: reviewapi.Schedule{Due: now}}
+	acknowledged := due
+	acknowledged.LastNotifiedDue = now.UnixMilli()
+	hint := due
+	hint.Hint = true
+	future := contentapi.Item{Schedule: reviewapi.Schedule{Due: now.Add(time.Second)}}
+	for _, test := range []struct {
+		name    string
+		items   []contentapi.Item
+		hasDue  bool
+		pending int
+		delay   time.Duration
+	}{
+		{"empty", nil, false, 0, pollInterval},
+		{"hint", []contentapi.Item{hint}, false, 0, pollInterval},
+		{"future", []contentapi.Item{future}, false, 0, time.Second},
+		{"due", []contentapi.Item{due}, true, 1, pollInterval},
+		{"acknowledged", []contentapi.Item{acknowledged, future}, true, 0, time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pending, delay, hasDue := scanSchedules([]cardapi.Card{{Items: test.items}}, now)
+			if hasDue != test.hasDue || len(pending) != test.pending || delay != test.delay {
+				t.Fatalf("due=%t pending=%v delay=%v", hasDue, pending, delay)
+			}
+		})
 	}
 }
 
@@ -260,7 +282,7 @@ func TestReconciliationReadFailureAndTimerSignals(t *testing.T) {
 	coordinator := reconciliationFixture{
 		source: source, stopping: make(chan struct{}), changed: make(chan struct{}, 1),
 		callbacks: Callbacks{
-			Publish: func() { publications++ },
+			Publish: func(bool, time.Time) { publications++ },
 			Warn: func(_ string, err error) {
 				warnings++
 				if !errors.Is(err, failure) {
@@ -291,21 +313,30 @@ func TestReconciliationReadFailureAndTimerSignals(t *testing.T) {
 }
 
 func TestCoordinatorRunsWithoutNativeNotifications(t *testing.T) {
-	published := make(chan struct{}, 1)
-	coordinator := Start(new(testSource), nil, Callbacks{
-		Publish: func() {
+	published := make(chan bool, 2)
+	due := time.Now().Add(500 * time.Millisecond)
+	source := &testSource{
+		cards: []cardapi.Card{{Items: []contentapi.Item{{Schedule: reviewapi.Schedule{Due: due}}}}},
+	}
+	coordinator := Start(source, nil, Callbacks{
+		Publish: func(hasDue bool, _ time.Time) {
 			select {
-			case published <- struct{}{}:
+			case published <- hasDue:
 			default:
 			}
 		},
 		Warn: func(message string, err error) { t.Errorf("%s: %v", message, err) },
 	})
 	defer coordinator.Stop()
-	select {
-	case <-published:
-	case <-time.After(time.Second):
-		t.Fatal("schedule reconciliation did not run")
+	for _, want := range []bool{false, true} {
+		select {
+		case hasDue := <-published:
+			if hasDue != want {
+				t.Fatalf("review availability = %t, want %t", hasDue, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("schedule reconciliation did not publish review availability")
+		}
 	}
 	coordinator.Stop()
 	coordinator.Stop()
@@ -327,7 +358,7 @@ func TestReadinessAndShutdownGateReconciliation(t *testing.T) {
 	for _, available := range []bool{false, true} {
 		published := make(chan struct{}, 10)
 		worker := NewWorker(source{}, notifications{available: available}, Callbacks{
-			Publish: func() { published <- struct{}{} },
+			Publish: func(bool, time.Time) { published <- struct{}{} },
 			Warn:    func(message string, err error) { t.Errorf("%s: %v", message, err) },
 		})
 		worker.Start()

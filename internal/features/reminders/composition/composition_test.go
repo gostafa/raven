@@ -6,14 +6,23 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	configuration "raven/internal/features/configuration/domain"
 	"raven/internal/shared/lifetime"
 )
 
-type eventRecorder struct{ name string }
+type eventRecorder struct {
+	name          string
+	readStartedAt time.Time
+	hasDue        bool
+}
 
 func (recorder *eventRecorder) Emit(name string) { recorder.name = name }
+
+func (recorder *eventRecorder) UpdateWidgetAvailability(hasDue bool, readStartedAt time.Time) {
+	recorder.hasDue, recorder.readStartedAt = hasDue, readStartedAt
+}
 
 func TestNativeProviderAndConfiguredCallbacks(t *testing.T) {
 	if newNative() == nil {
@@ -25,12 +34,16 @@ func TestNativeProviderAndConfiguredCallbacks(t *testing.T) {
 	defer runtime.Cancel()
 	settings := callbackSettings{}
 	callbacks := newCallbacks(callbacksParams{
-		Events: events, Runtime: runtime,
+		Events: events, Widget: events, Runtime: runtime,
 		Logger: slog.New(slog.NewTextHandler(&output, nil)),
 	}, settings)
-	callbacks.Publish()
+	readStartedAt := time.Now()
+	callbacks.Publish(true, readStartedAt)
 	if events.name != settings.SchedulesChanged() {
 		t.Fatal("wrong event")
+	}
+	if !events.hasDue || !events.readStartedAt.Equal(readStartedAt) {
+		t.Fatal("schedule was not published to the widget")
 	}
 	callbacks.Warn("read schedules", errors.New("storage unavailable"))
 	if !strings.Contains(output.String(), "operation=\"read schedules\"") ||

@@ -181,7 +181,7 @@ func TestCoordinatorShutdownDoesNotWaitForAuthorization(t *testing.T) {
 	c := reminders.Start(
 		reminderSource{},
 		notifier,
-		reminders.Callbacks{Publish: func() {}, Warn: func(string, error) {}},
+		reminders.Callbacks{Publish: func(bool, time.Time) {}, Warn: func(string, error) {}},
 	)
 	defer func() { close(notifier.release); c.Stop() }()
 	select {

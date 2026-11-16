@@ -235,6 +235,7 @@ func widgetWindowOptions(configuration *Configuration) application.WebviewWindow
 
 	options.Name = "raven-widget"
 	options.Title = "Raven widget"
+	options.Hidden = true
 	options.BackgroundType = application.BackgroundTypeTransparent
 	options.BackgroundColour = application.NewRGBA(
 		whiteChannel,

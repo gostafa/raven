@@ -244,7 +244,7 @@ func TestDesktopWindowConfigurationPreservesMonochromeBehavior(t *testing.T) {
 	widget := widgetWindowOptions(
 		nativeConfigurationFixture(),
 	)
-	if widget.Name != "raven-widget" || widget.URL != "/?view=widget" || widget.Hidden ||
+	if widget.Name != "raven-widget" || widget.URL != "/?view=widget" || !widget.Hidden ||
 		widget.Width != nativeConfigurationFixture().WidgetSize ||
 		widget.MinWidth != nativeConfigurationFixture().WidgetSize ||
 		widget.MaxWidth != nativeConfigurationFixture().WidgetSize ||

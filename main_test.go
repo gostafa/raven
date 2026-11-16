@@ -242,6 +242,9 @@ func TestFacadeWindowCommandsAndDeletionEvents(t *testing.T) {
 	service.ToggleFloatingReview()
 	service.SyncFloatingReview()
 	service.HideFloatingReview()
+	if reminders.wakes != 1 {
+		t.Fatal("closing floating review did not request a fresh schedule")
+	}
 	service.ShowReviews()
 	service.RefreshReminders()
 	if !reflect.DeepEqual(
@@ -271,7 +274,7 @@ func TestFacadeWindowCommandsAndDeletionEvents(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if reminders.wakes != 3 || len(events.names) != 3 {
+	if reminders.wakes != 4 || len(events.names) != 3 {
 		t.Fatal("deletions did not reconcile schedules")
 	}
 	selected, err := decodeFacade[[]mediaapi.Selection](service.SelectMediaFiles("image"))

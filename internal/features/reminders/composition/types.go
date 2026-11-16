@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/fx"
 
+	companion "raven/internal/features/companion/domain"
 	desktopports "raven/internal/features/desktop/ports"
 	reminderwails "raven/internal/features/reminders/adapters/wails"
 	reminders "raven/internal/features/reminders/application"
@@ -40,6 +41,7 @@ type (
 		fx.In
 
 		Events  desktopports.Events
+		Widget  companion.WidgetAvailability
 		Logger  *slog.Logger
 		Runtime *lifetime.Runtime
 	}

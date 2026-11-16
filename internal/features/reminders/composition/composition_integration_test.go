@@ -15,6 +15,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
+	companion "raven/internal/features/companion/domain"
 	configyaml "raven/internal/features/configuration/adapters/yaml"
 	configuration "raven/internal/features/configuration/domain"
 	desktopports "raven/internal/features/desktop/ports"
@@ -59,6 +60,8 @@ func (e *events) Emit(string) {
 	}
 }
 
+func (*events) UpdateWidgetAvailability(bool, time.Time) {}
+
 func modules(path string, n *native, e *events) fx.Option {
 	return fx.Options(
 		storecomposition.Module,
@@ -72,7 +75,13 @@ func modules(path string, n *native, e *events) fx.Option {
 			lifetime.New,
 			func() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) },
 		),
-		fx.Supply(fx.Annotate(e, fx.As(new(desktopports.Events)))),
+		fx.Supply(
+			fx.Annotate(
+				e,
+				fx.As(new(desktopports.Events)),
+				fx.As(new(companion.WidgetAvailability)),
+			),
+		),
 		fx.Replace(
 			storecomposition.DatabasePath(path),
 			fx.Annotate(n, fx.As(new(reminderwails.NativeRuntime))),

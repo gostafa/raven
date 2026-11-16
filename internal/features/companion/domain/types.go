@@ -4,6 +4,10 @@
 // Package domain defines floating-window geometry and window ports.
 package domain
 
+import (
+	"time"
+)
+
 type (
 	// Layout defines floating-window dimensions in logical pixels.
 	Layout struct {
@@ -35,6 +39,11 @@ type (
 	Widget interface {
 		ConfigureWidget()
 		ResetWidget()
+	}
+
+	// WidgetAvailability accepts the persisted review availability for the widget.
+	WidgetAvailability interface {
+		UpdateWidgetAvailability(hasDue bool, readStartedAt time.Time)
 	}
 
 	// FloatingReview controls the separate review window.

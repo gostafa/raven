@@ -15,5 +15,9 @@ import (
 //nolint:gochecknoglobals // Fx modules are immutable dependency registration declarations.
 var Module = fx.Module("companion", fx.Provide(
 	fx.Annotate(newConfiguration, fx.As(new(ports.WidgetConfiguration))),
-	fx.Annotate(newWindows, fx.As(new(companion.Windows))),
+	fx.Annotate(
+		newWindows,
+		fx.As(new(companion.Windows)),
+		fx.As(new(companion.WidgetAvailability)),
+	),
 ))

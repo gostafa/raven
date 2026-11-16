@@ -39,7 +39,7 @@ type (
 		claim           func() (bool, error)
 		authorize       func() (bool, error)
 		deliver         func([]byte) error
-		publish         func()
+		publish         func(hasDue bool, readStartedAt time.Time)
 		warn            func(string, error)
 		wake            func()
 		wait            func(time.Duration) bool
@@ -49,8 +49,8 @@ type (
 
 	// Callbacks publishes schedule changes and reports reminder failures.
 	Callbacks struct {
-		// Publish announces that the current schedule snapshot is available.
-		Publish func()
+		// Publish reports review availability and when the store read began.
+		Publish func(hasDue bool, readStartedAt time.Time)
 		// Warn reports an operation and its failure without stopping reconciliation.
 		Warn func(string, error)
 	}

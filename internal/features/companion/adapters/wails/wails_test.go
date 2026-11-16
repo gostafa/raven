@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -51,7 +52,7 @@ func TestClosingFullscreenMainWaitsForSpaceExit(t *testing.T) {
 	}
 	main.fullscreen = false
 	main.exitedFullscreen(nil)
-	if main.visible || !widget.visible ||
+	if main.visible || widget.visible ||
 		!reflect.DeepEqual(main.actions, []string{"exit-fullscreen", "hide"}) {
 		t.Fatalf("did not finish closing after leaving full-screen: %+v", main)
 	}
@@ -127,6 +128,7 @@ func testWindows() (*windowFixture, *testWindow, *testWindow, *testWindow) {
 	main, widget, review := new(testWindow), new(testWindow), new(testWindow)
 	state := &windowState{
 		invoke:        func(operation func()) { operation() },
+		post:          func(operation func()) { operation() },
 		primaryScreen: func() *application.Screen { return nil },
 		quit:          func() {},
 		configure:     func() error { return nil },
@@ -148,10 +150,16 @@ func TestWindowVisibilityAndReviewEvents(t *testing.T) {
 		t.Fatal(main.actions)
 	}
 	windows.HideMain()
-	if main.visible || !widget.visible {
-		t.Fatal("hiding main did not retain the widget")
+	windows.ResetWidget()
+	windows.ToggleFloatingReview()
+	if main.visible || widget.visible || review.visible {
+		t.Fatal("window action bypassed review availability")
 	}
-	windows.PositionFloatingReview()
+	windows.UpdateWidgetAvailability(true, time.Now())
+	windows.HideMain()
+	if !widget.visible {
+		t.Fatal("closing the library hid a widget with reviews due")
+	}
 	windows.ToggleFloatingReview()
 	if widget.visible || !review.visible ||
 		!reflect.DeepEqual(review.actions, []string{"show", "focus"}) ||
@@ -163,12 +171,14 @@ func TestWindowVisibilityAndReviewEvents(t *testing.T) {
 		t.Fatal("toggle did not defer close to the frontend")
 	}
 	windows.HideFloatingReview()
-	if review.visible || !widget.visible {
-		t.Fatal("review close did not restore the widget")
+	if review.visible || widget.visible {
+		t.Fatal("review close restored the widget before reconciliation")
 	}
-	windows.ResetWidget()
+	readStartedAt := time.Now()
+	windows.HideFloatingReview()
+	windows.UpdateWidgetAvailability(true, readStartedAt)
 	if !widget.visible {
-		t.Fatal("reset did not show widget")
+		t.Fatal("fresh availability did not restore the widget")
 	}
 	windows.reviewVisible = nil
 	windows.PositionFloatingReview()
@@ -181,12 +191,46 @@ func TestWindowVisibilityAndReviewEvents(t *testing.T) {
 	windows.RequestFloatingReviewClose()
 }
 
+func TestWidgetVisibilityFollowsFreshSchedules(t *testing.T) {
+	windows, _, widget, _ := testWindows()
+	windows.UpdateWidgetAvailability(false, time.Now())
+	windows.UpdateWidgetAvailability(true, time.Now())
+	windows.UpdateWidgetAvailability(true, time.Now())
+	if !widget.visible || !reflect.DeepEqual(widget.actions, []string{"show"}) {
+		t.Fatalf("expected a single native show: %v", widget.actions)
+	}
+	windows.UpdateWidgetAvailability(false, time.Now())
+	if widget.visible {
+		t.Fatal("clearing the schedule left the widget visible")
+	}
+	windows.UpdateWidgetAvailability(true, time.Now())
+	windows.ToggleFloatingReview()
+	windows.UpdateWidgetAvailability(true, time.Now())
+	if widget.visible {
+		t.Fatal("schedule reconciliation showed the widget during a review")
+	}
+	var posted func()
+	windows.post = func(operation func()) { posted = operation }
+	windows.UpdateWidgetAvailability(true, time.Now())
+	windows.HideFloatingReview()
+	posted()
+	if widget.visible {
+		t.Fatal("a queued pre-close snapshot restored the widget")
+	}
+	windows.UpdateWidgetAvailability(false, time.Now())
+	posted()
+	if widget.visible {
+		t.Fatal("closing the final review restored the widget")
+	}
+}
+
 func TestReviewSynchronizationOnlyLoadsAnOpenWindow(t *testing.T) {
 	windows, _, _, review := testWindows()
 	windows.SyncFloatingReview()
 	if len(review.events) != 0 || review.visible {
 		t.Fatal("hidden startup review received an opening event")
 	}
+	windows.UpdateWidgetAvailability(true, time.Now())
 	windows.ToggleFloatingReview()
 	review.events = nil
 	review.actions = nil
@@ -282,7 +326,8 @@ func TestConstructorBindsNativeWindowsAndRuntime(t *testing.T) {
 	}
 	state := newWindowState(deps, windowSettingsFixture())
 	if state.showMain == nil || state.showWidget == nil || state.showReview == nil ||
-		state.configure == nil || state.invoke == nil || state.primaryScreen == nil || state.quit == nil || state.logger != app.Logger {
+		state.configure == nil || state.invoke == nil || state.post == nil ||
+		state.primaryScreen == nil || state.quit == nil || state.logger != app.Logger {
 		t.Fatal("constructor did not bind window capabilities")
 	}
 	state.invoke = func(operation func()) { operation() }
@@ -327,6 +372,7 @@ func TestConfiguredEventsGeometryAndLogFieldsReachConsumers(t *testing.T) {
 	windows.reviewWidth = 300
 	windows.reviewHeight = 400
 	widget.screen = &application.Screen{WorkArea: application.Rect{Width: 1000, Height: 800}}
+	windows.UpdateWidgetAvailability(true, time.Now())
 	windows.ToggleFloatingReview()
 	windows.ToggleFloatingReview()
 	if !reflect.DeepEqual(review.events, []string{"custom:open", "custom:close"}) ||

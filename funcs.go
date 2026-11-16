@@ -228,7 +228,10 @@ func windowActions(deps serviceParams) map[string]func() {
 		"Quit":                 func() { deps.Windows.Quit() },
 		"ToggleFloatingReview": func() { deps.Windows.ToggleFloatingReview() },
 		"SyncFloatingReview":   func() { deps.Windows.SyncFloatingReview() },
-		"HideFloatingReview":   func() { deps.Windows.HideFloatingReview() },
+		"HideFloatingReview": func() {
+			deps.Windows.HideFloatingReview()
+			refreshReminders(deps)
+		},
 	}
 }
 

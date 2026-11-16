@@ -6,6 +6,7 @@ package composition
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"go.uber.org/fx"
@@ -64,7 +65,10 @@ func newWorker(params workerParams) *reminders.Worker {
 
 func newCallbacks(params callbacksParams, settings configuration.Settings) reminders.Callbacks {
 	return reminders.Callbacks{
-		Publish: func() { params.Events.Emit(settings.SchedulesChanged()) },
+		Publish: func(hasDue bool, readStartedAt time.Time) {
+			params.Events.Emit(settings.SchedulesChanged())
+			params.Widget.UpdateWidgetAvailability(hasDue, readStartedAt)
+		},
 		Warn: func(message string, err error) {
 			params.Logger.WarnContext(params.Runtime.Context(), "review reminder unavailable",
 				//nolint:sloglint // Log field names come from validated embedded configuration.
