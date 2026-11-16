@@ -15,7 +15,7 @@ Closing the main window keeps Raven running. Use **Quit Raven** in the widget or
 
 ## Development
 
-Install Go **1.27.2**, Bun **1.4.2**, Node.js **26.12.0+**, Task, and the native dependencies for your platform:
+Install Go **1.27.4**, Bun **1.4.2**, Node.js **26.12.0+**, Task, and the native dependencies for your platform:
 
 | Platform | Requirements |
 | --- | --- |
