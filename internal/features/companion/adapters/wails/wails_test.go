@@ -174,9 +174,13 @@ func TestWindowVisibilityAndReviewEvents(t *testing.T) {
 	if review.visible || widget.visible {
 		t.Fatal("review close restored the widget before reconciliation")
 	}
-	readStartedAt := time.Now()
+	closedAt := windows.widgetAvailabilityAfter
+	windows.UpdateWidgetAvailability(true, closedAt)
+	if widget.visible {
+		t.Fatal("availability from the close timestamp restored the widget")
+	}
 	windows.HideFloatingReview()
-	windows.UpdateWidgetAvailability(true, readStartedAt)
+	windows.UpdateWidgetAvailability(true, closedAt.Add(time.Nanosecond))
 	if !widget.visible {
 		t.Fatal("fresh availability did not restore the widget")
 	}
